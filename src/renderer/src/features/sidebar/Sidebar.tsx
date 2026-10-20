@@ -150,7 +150,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
             )
           }
           onToggle={() => vis.toggleGroup(names, prefix)}
-          onClick={() => toggleFolder(key)}
+          onClick={() => !f && toggleFolder(key)}
           onContextMenu={() => setMenu({ kind: "folder", name: n.name, names, prefix })}
         />,
         ...(open ? tree(n.children, depth + 1, byPrefix, leaf) : []),
