@@ -3,10 +3,12 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { AvatarProvider } from "@shared/avatars";
+import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Spinner } from "@/components/ui/spinner";
 import { api } from "@/lib/api";
-import { absoluteTime, hueOf, initials, relativeTime, shortHash } from "@/lib/format";
+import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
 import {
   useGraphInfo,
   useGraphRows,
@@ -54,6 +56,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   const { selection, revealToken } = useRepoUi(repo);
   const select = useRepoUiStore((s) => s.select);
   const columns = useColumns();
+  const avatarProviders = useAvatarProviders(repo);
 
   const changes = status
     ? status.staged.length + status.unstaged.length + status.conflicted.length
@@ -187,6 +190,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
                   selected={selection?.kind === "commit" && selection.hash === row.hash}
                   onSelect={select}
                   onContextMenu={onRowContextMenu}
+                  avatarProviders={avatarProviders}
                 />
               );
             })}
@@ -292,6 +296,7 @@ interface CommitRowProps {
   readonly selected: boolean;
   readonly onSelect: (repo: RepoId, selection: Selection) => void;
   readonly onContextMenu: (row: GraphRow) => void;
+  readonly avatarProviders: readonly AvatarProvider[];
 }
 
 const CommitRow = memo(function CommitRow(p: CommitRowProps) {
@@ -338,7 +343,7 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
         className="flex shrink-0 items-center gap-1.5 overflow-hidden px-2"
         style={{ width: columns.author }}
       >
-        <Avatar name={row.authorName} email={row.authorEmail} />
+        <Avatar name={row.authorName} email={row.authorEmail} providers={p.avatarProviders} />
         <span className="text-muted-foreground truncate text-xs">{row.authorName}</span>
       </div>
       <div
@@ -354,24 +359,6 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
     </div>
   );
 });
-
-export function Avatar({ name, email, size = 18 }: { name: string; email: string; size?: number }) {
-  const hue = hueOf(email || name);
-  return (
-    <span
-      className="flex shrink-0 items-center justify-center rounded-full text-[8px] font-bold text-white"
-      style={{
-        width: size,
-        height: size,
-        backgroundColor: `oklch(0.55 0.12 ${hue})`,
-        fontSize: size * 0.42,
-      }}
-      title={`${name} <${email}>`}
-    >
-      {initials(name)}
-    </span>
-  );
-}
 
 function WipRow(p: {
   style: React.CSSProperties;

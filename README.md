@@ -23,6 +23,10 @@ robustness as the top priorities.
 - **Live updates:** native file watching for local repositories and cheap fingerprint polling for
   remote ones.
 - **Tabs:** several repositories open at once, restored on restart.
+- **Author avatars:** taken from GitHub (including noreply emails), GitLab (gitlab.com or
+  self-hosted, detected from the remote's host) and Gravatar, and cached on disk. Commit emails
+  (or their hashes, for Gravatar) are sent to those services; GitHub and GitLab are only queried
+  for repositories hosted there.
 - **Over-the-air updates:** delivered from GitHub releases.
 
 ## Development

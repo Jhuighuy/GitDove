@@ -6,6 +6,7 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import dockIcon from "../../build/icon.png?asset";
 import windowIcon from "../../resources/icon.png?asset";
 import { activity } from "./activity";
+import { handleAvatarProtocol, registerAvatarScheme } from "./avatars";
 import { fixProcessPath } from "./exec/environment";
 import { HostsLive } from "./exec/hosts";
 import { registerIpc } from "./ipc";
@@ -17,6 +18,7 @@ import { updater } from "./updater";
 if (process.env.GITDOVE_USER_DATA) app.setPath("userData", process.env.GITDOVE_USER_DATA);
 
 log.initialize();
+registerAvatarScheme();
 log.transports.file.level = "info";
 
 const isMac = process.platform === "darwin";
@@ -179,6 +181,7 @@ const main = async () => {
   if (isMac && !app.isPackaged) app.dock?.setIcon(dockIcon);
   await Effect.runPromise(fixProcessPath);
   registerIpc(runtime);
+  handleAvatarProtocol();
   buildMenu();
   createWindow();
   updater.init((s) => broadcast("updater.status", s));

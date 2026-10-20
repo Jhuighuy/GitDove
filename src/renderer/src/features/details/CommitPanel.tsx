@@ -5,12 +5,13 @@ import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
 import { useCommitDetails, useRefs } from "@/lib/queries";
 import { useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
-import { Avatar } from "../graph/CommitGraph";
+import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import { FileList } from "./FileList";
 
 export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
   const { data, error, isPending } = useCommitDetails(repo, hash);
   const { data: refs } = useRefs(repo);
+  const avatarProviders = useAvatarProviders(repo);
   const { diff } = useRepoUi(repo);
   const openDiff = useRepoUiStore((s) => s.openDiff);
   const stash = refs?.stashes.find((s) => s.hash === hash);
@@ -73,7 +74,12 @@ export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
           </pre>
         )}
         <div className="mt-3 flex items-center gap-2">
-          <Avatar name={data.author.name} email={data.author.email} size={28} />
+          <Avatar
+            name={data.author.name}
+            email={data.author.email}
+            providers={avatarProviders}
+            size={28}
+          />
           <div className="min-w-0 text-xs">
             <div className="truncate font-medium">{data.author.name}</div>
             <div className="text-muted-foreground" title={absoluteTime(data.author.time)}>
