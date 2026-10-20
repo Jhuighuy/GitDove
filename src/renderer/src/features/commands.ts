@@ -176,9 +176,15 @@ export const commands = {
       placeholder: "v1.0.0",
       confirmLabel: "Create Tag",
       validate: validateRefName,
+      details: {
+        label: "Message (optional)",
+        placeholder: "With a message, an annotated tag is created.",
+      },
     });
     if (!r) return;
-    await runAction(repo, "Create tag", () => api("repo.createTag", repo, r.value, at, null));
+    await runAction(repo, "Create tag", () =>
+      api("repo.createTag", repo, r.value, at, r.details || null),
+    );
   },
 
   deleteTag: async (repo: RepoId, name: string) => {

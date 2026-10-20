@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 interface PromptOptions {
   readonly title: string;
@@ -23,6 +24,15 @@ interface PromptOptions {
   readonly validate?: (value: string) => string | null;
   /** Optional checkbox shown under the input. */
   readonly checkbox?: { readonly label: string; readonly defaultChecked: boolean };
+  /** Optional multi-line field shown under the input (e.g. a tag message). */
+  readonly details?: { readonly label: string; readonly placeholder?: string };
+}
+
+/** Result of {@link prompt}; `details` is the trimmed multi-line field ("" when unused). */
+export interface PromptResult {
+  readonly value: string;
+  readonly checked: boolean;
+  readonly details: string;
 }
 
 interface ConfirmOptions {
@@ -36,7 +46,7 @@ type Request =
   | {
       kind: "prompt";
       options: PromptOptions;
-      resolve: (v: { value: string; checked: boolean } | null) => void;
+      resolve: (v: PromptResult | null) => void;
     }
   | { kind: "confirm"; options: ConfirmOptions; resolve: (v: boolean) => void };
 
@@ -51,9 +61,7 @@ const show = (request: Request) => {
 
 /** Asks the user for a line of text. Resolves to `null` when cancelled. */
 export const prompt = (options: PromptOptions) =>
-  new Promise<{ value: string; checked: boolean } | null>((resolve) =>
-    show({ kind: "prompt", options, resolve }),
-  );
+  new Promise<PromptResult | null>((resolve) => show({ kind: "prompt", options, resolve }));
 
 /** Asks the user to confirm an action. */
 export const confirm = (options: ConfirmOptions) =>
@@ -124,10 +132,11 @@ function PromptBody({
   onDone,
 }: {
   options: PromptOptions;
-  onDone: (v: { value: string; checked: boolean } | null) => void;
+  onDone: (v: PromptResult | null) => void;
 }) {
   const [value, setValue] = useState(options.defaultValue ?? "");
   const [checked, setChecked] = useState(options.checkbox?.defaultChecked ?? false);
+  const [details, setDetails] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const error = value ? (options.validate?.(value) ?? null) : null;
 
@@ -137,7 +146,7 @@ function PromptBody({
 
   const submit = () => {
     if (!value.trim() || error) return;
-    onDone({ value: value.trim(), checked });
+    onDone({ value: value.trim(), checked, details: details.trim() });
   };
 
   return (
@@ -165,6 +174,28 @@ function PromptBody({
           spellCheck={false}
         />
         {error && <p className="text-destructive text-xs">{error}</p>}
+        {options.details && (
+          <>
+            <Label htmlFor="prompt-details" className="mt-1">
+              {options.details.label}
+            </Label>
+            <Textarea
+              id="prompt-details"
+              value={details}
+              placeholder={options.details.placeholder}
+              onChange={(e) => setDetails(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter adds a line here; Cmd/Ctrl+Enter submits, but not while an
+                // input method is composing text (its keystrokes report key "Process").
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              className="max-h-48 min-h-20 resize-none"
+            />
+          </>
+        )}
         {options.checkbox && (
           <Label className="flex items-center gap-2 font-normal">
             <Checkbox checked={checked} onCheckedChange={(c) => setChecked(c === true)} />

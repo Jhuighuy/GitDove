@@ -691,7 +691,8 @@ export class Repository {
     return validateRev(at).pipe(
       Effect.andThen(
         message
-          ? this.run(["tag", "-a", name, at, "-F", "-"], { stdin: message })
+          ? // Keep lines starting with "#" (the default cleanup strips them as comments).
+            this.run(["tag", "-a", "--cleanup=whitespace", name, at, "-F", "-"], { stdin: message })
           : this.run(["tag", name, at]),
       ),
     );
