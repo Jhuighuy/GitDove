@@ -306,6 +306,26 @@ it("amends with the previous message prefilled", async () => {
   expect(amend().getAttribute("aria-checked")).toBe("false");
 });
 
+it("needs a summary to amend, also when the previous message is unavailable", async () => {
+  mocks.status = status({ staged: [] });
+  mocks.api.mockImplementation(async (method: string) => {
+    if (method === "repo.status") return mocks.status;
+    if (method === "repo.info") return mocks.info;
+    if (method === "repo.lastCommitMessage") throw new Error("no commits");
+    return undefined;
+  });
+  await render();
+  await toggleAmend();
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+  expect(apiCalls("repo.lastCommitMessage")).toEqual([[repo]]);
+  expect(summary().value).toBe("");
+  expect(button("Amend Previous Commit").disabled).toBe(true);
+  await type(summary(), "Reworded");
+  expect(button("Amend Previous Commit").disabled).toBe(false);
+  await click(button("Amend Previous Commit"));
+  expect(apiCalls("repo.commit")).toEqual([[repo, "Reworded", { amend: true }]]);
+});
+
 it("keeps a typed message when switching to amend", async () => {
   await render();
   await type(summary(), "Mine");

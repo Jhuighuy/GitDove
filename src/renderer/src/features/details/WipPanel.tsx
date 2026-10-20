@@ -265,14 +265,19 @@ function CommitBox({ repo, stagedCount }: { repo: RepoId; stagedCount: number })
   // Prefill the previous message when amending.
   useEffect(() => {
     if (!draft.amend || draft.summary || draft.description) return;
-    void api("repo.lastCommitMessage", repo).then((msg) => {
-      const [summary = "", ...rest] = msg.split("\n");
-      setDraft(repo, { summary, description: rest.join("\n").replace(/^\n+/, "") });
-    });
+    api("repo.lastCommitMessage", repo).then(
+      (msg) => {
+        const [summary = "", ...rest] = msg.split("\n");
+        setDraft(repo, { summary, description: rest.join("\n").replace(/^\n+/, "") });
+      },
+      // Without a previous message (e.g. no commits yet) the user types one.
+      () => {},
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.amend]);
 
-  const canCommit = !busy && (draft.amend || (stagedCount > 0 && draft.summary.trim().length > 0));
+  // Amending may change only the message, but git rejects an empty one either way.
+  const canCommit = !busy && draft.summary.trim().length > 0 && (draft.amend || stagedCount > 0);
 
   const commit = async () => {
     if (!canCommit) return;
