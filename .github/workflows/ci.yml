@@ -49,3 +49,121 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # Pull requests package only when they touch packaging or updates; main always does.
+  changes:
+    name: Packaging changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      packaging: ${{ steps.diff.outputs.packaging }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(\.github/workflows/|build/|native/|scripts/(after-pack|release|sparkle|test-updates)|electron-builder\.yml|package(-lock)?\.json|src/main/(index|sparkle|updater)\.ts)'; then
+            echo "packaging=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  package:
+    name: Package (${{ matrix.platform }}, ${{ matrix.arch }})
+    needs: [check, changes]
+    if: >-
+      !cancelled() && needs.check.result == 'success' &&
+      (github.event_name == 'push' || needs.changes.outputs.packaging == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, platform: mac, arch: arm64 }
+          - { os: windows-latest, platform: win, arch: x64 }
+          - { os: ubuntu-latest, platform: linux, arch: x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - id: version
+        run: node scripts/release.mjs version
+      - run: npm run build
+      - name: Package
+        shell: bash
+        env:
+          # Ad-hoc signing needs no credentials; electron-builder skips signing on pull requests otherwise.
+          CSC_FOR_PULL_REQUEST: "true"
+        run: npm run package -- --${{ matrix.platform }} --${{ matrix.arch }} -c.extraMetadata.version=${{ steps.version.outputs.version }}
+      - name: Test updates
+        if: matrix.platform == 'mac'
+        run: node scripts/test-updates.mjs release/*/mac-arm64/GitDove.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            release/*/*.dmg
+            release/*/*.zip
+            release/*/*.exe
+            release/*/*.exe.blockmap
+            release/*/*.AppImage
+            release/*/*.deb
+            release/*/latest.yml
+            release/*/latest-linux.yml
+
+  # Every push to main that passes CI becomes the latest release (docs/updates.md).
+  release:
+    name: Release
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # sign_update (Sparkle's signing tool) is a macOS binary.
+    runs-on: macos-latest
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      # No `npm ci`: the release scripts use only Node built-ins, so no third-party code runs here.
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: packages-*
+          merge-multiple: true
+          path: dist
+      - id: version
+        run: node scripts/release.mjs version
+      - name: Sign the macOS update
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: node scripts/release.mjs appcast dist "https://github.com/$GITHUB_REPOSITORY/releases/download/v${{ steps.version.outputs.version }}"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          latest=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+          if [ "$latest" = "$TAG" ]; then
+            echo "$TAG is already published."
+            exit 0
+          elif [ -n "$latest" ] && [ "$(printf '%s\n' "$latest" "$TAG" | sort -V | tail -n 1)" = "$latest" ]; then
+            echo "$latest is newer than $TAG; leaving it as the latest release."
+            exit 0
+          fi
+          # A failed earlier attempt (e.g. an interrupted upload) leaves a draft behind.
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
+            gh release delete "$TAG" --yes
+          fi
+          # With assets, gh creates a draft, uploads everything, then publishes it.
+          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "GitDove ${TAG#v}" --generate-notes --latest
