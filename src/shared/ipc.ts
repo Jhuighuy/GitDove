@@ -86,6 +86,16 @@ export interface Api {
   "repo.abortOperation": (repo: RepoId) => void;
   "repo.continueOperation": (repo: RepoId) => void;
 
+  // Graph visibility
+  "repo.hiddenRefs": (repo: RepoId) => string[];
+  "repo.setHiddenRefs": (repo: RepoId, hidden: string[]) => void;
+
+  // Worktrees and submodules
+  "repo.addWorktree": (repo: RepoId, path: string, ref: string, newBranch: string | null) => void;
+  "repo.removeWorktree": (repo: RepoId, path: string, force: boolean) => void;
+  "repo.pruneWorktrees": (repo: RepoId) => void;
+  "repo.updateSubmodule": (repo: RepoId, path: string) => void;
+
   // Stash
   "repo.stash": (repo: RepoId, message: string | null, includeUntracked: boolean) => void;
   "repo.stashPop": (repo: RepoId, index: number) => void;
@@ -96,6 +106,11 @@ export interface Api {
   "repo.fetch": (repo: RepoId, remote: string | null) => void;
   "repo.pull": (repo: RepoId, mode: "ff-only" | "merge" | "rebase") => void;
   "repo.push": (repo: RepoId, opts: { force: boolean; setUpstream: boolean }) => void;
+  "repo.pushBranch": (repo: RepoId, branch: string, force: boolean) => void;
+  "repo.fastForwardBranch": (repo: RepoId, branch: string) => void;
+  "repo.pushTag": (repo: RepoId, remote: string, tag: string) => void;
+  "repo.deleteRemoteTag": (repo: RepoId, remote: string, tag: string) => void;
+  "repo.setRemoteUrl": (repo: RepoId, name: string, url: string) => void;
   "repo.addRemote": (repo: RepoId, name: string, url: string) => void;
   "repo.removeRemote": (repo: RepoId, name: string) => void;
 

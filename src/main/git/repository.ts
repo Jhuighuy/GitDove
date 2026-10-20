@@ -13,6 +13,7 @@ import type {
   WorkingStatus,
 } from "@shared/domain";
 import { repoDisplayName, repoIdOf } from "@shared/domain";
+import { isHidden, stashKey } from "@shared/visibility";
 import type { ResetMode } from "@shared/ipc";
 import { Deferred, Effect, Fiber } from "effect";
 import {
@@ -140,6 +141,7 @@ export class Repository {
   private graphLoad: Fiber.Fiber<void, GitError> | null = null;
   private graphReady: Deferred.Deferred<void, GitError> | null = null;
   private nextVersion = 1;
+  private hiddenRefs: readonly string[] = [];
 
   private constructor(
     readonly id: RepoId,
@@ -368,6 +370,15 @@ export class Repository {
   // Commit graph
   // -------------------------------------------------------------------------
 
+  /** Sets refs excluded from the graph (see `@shared/visibility`) and reloads it. */
+  setHiddenRefs(hidden: readonly string[]): void {
+    const same =
+      hidden.length === this.hiddenRefs.length && hidden.every((h) => this.hiddenRefs.includes(h));
+    if (same) return;
+    this.hiddenRefs = [...hidden];
+    this.invalidateGraph();
+  }
+
   /** Marks the graph as outdated; it is reloaded in the background if it was ever requested. */
   invalidateGraph(): void {
     this.graphDirty = true;
@@ -460,8 +471,36 @@ export class Repository {
       })).trim();
       // Stash index/untracked commits are an implementation detail: hide them
       // and draw each stash as a single node on top of its base commit.
-      const hidden = new Set(stashes.flatMap((s) => s.parents.slice(1)));
+      const internal = new Set(stashes.flatMap((s) => s.parents.slice(1)));
       const stashSet = new Set(stashes.map((s) => s.hash));
+
+      // Revisions to walk. Without hidden refs, let git enumerate them; with
+      // hidden refs, pass the visible ones explicitly. HEAD is always shown.
+      const hiddenRefs = self.hiddenRefs;
+      let revs: string[];
+      let stdinRevs: string[];
+      if (hiddenRefs.length === 0) {
+        revs = ["--branches", "--remotes", "--tags"];
+        stdinRevs = stashes.map((s) => s.hash);
+      } else {
+        const names = lines(
+          yield* self.gitText([
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads",
+            "refs/remotes",
+            "refs/tags",
+          ]),
+        );
+        revs = [];
+        stdinRevs = [
+          ...names.filter(
+            (n) => !/^refs\/remotes\/[^/]+\/HEAD$/.test(n) && !isHidden(hiddenRefs, n),
+          ),
+          ...stashes.filter((s) => !isHidden(hiddenRefs, stashKey(s.hash))).map((s) => s.hash),
+        ];
+      }
+      if (head) revs.push("HEAD");
 
       const snapshot: GraphSnapshot = {
         version: self.nextVersion++,
@@ -485,16 +524,23 @@ export class Repository {
         }
       };
       const parser = new LogParser((c) => {
-        if (hidden.has(c.hash)) return;
+        if (internal.has(c.hash)) return;
         snapshot.builder.push(stashSet.has(c.hash) ? { ...c, parents: c.parents.slice(0, 1) } : c);
         progress();
       });
 
-      const revs = ["--branches", "--remotes", "--tags", ...(head ? ["HEAD"] : [])];
+      if (revs.length === 0 && stdinRevs.length === 0) {
+        // Everything is hidden and HEAD is unborn: nothing to show.
+        snapshot.complete = true;
+        self.graph = snapshot;
+        if (!readyFired) yield* Deferred.succeed(ready, undefined);
+        self.hooks.onGraphProgress(self, self.snapshotInfo(snapshot));
+        return;
+      }
       const r = yield* self.git(
         ["log", "--date-order", `--format=${LOG_FORMAT}`, "--stdin", ...revs],
         {
-          stdin: stashes.map((s) => s.hash).join("\n") + "\n",
+          stdin: stdinRevs.join("\n") + "\n",
           onStdout: (chunk) => parser.push(chunk),
           okCodes: [0, 128],
         },
@@ -784,6 +830,86 @@ export class Repository {
       }
       yield* self.run(args);
     });
+  }
+
+  /** Pushes a (not necessarily checked out) branch, setting its upstream if it has none. */
+  pushBranch(branch: string, force: boolean) {
+    const self = this;
+    return Effect.gen(function* () {
+      yield* validateBranchName(branch);
+      const [remote = "", merge = ""] = (yield* self.gitText([
+        "for-each-ref",
+        "--format=%(upstream:remotename)%00%(upstream:remoteref)",
+        `refs/heads/${branch}`,
+      ]))
+        .trim()
+        .split("\0");
+      const lease = force ? ["--force-with-lease"] : [];
+      if (remote && merge) {
+        return yield* self.run(["push", ...lease, remote, `refs/heads/${branch}:${merge}`]);
+      }
+      const remotes = parseRemotes(yield* self.gitText(["remote", "-v"]));
+      const target = remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name;
+      if (!target)
+        return yield* Effect.fail(new InvalidInputError({ message: "No remotes configured" }));
+      yield* self.run(["push", ...lease, "-u", target, branch]);
+    });
+  }
+
+  /** Fast-forwards a branch that is not checked out to its upstream. */
+  fastForwardBranch(branch: string) {
+    const self = this;
+    return Effect.gen(function* () {
+      yield* validateBranchName(branch);
+      const [remote = "", merge = ""] = (yield* self.gitText([
+        "for-each-ref",
+        "--format=%(upstream:remotename)%00%(upstream:remoteref)",
+        `refs/heads/${branch}`,
+      ]))
+        .trim()
+        .split("\0");
+      if (!remote || !merge) {
+        return yield* Effect.fail(
+          new InvalidInputError({ message: `${branch} has no upstream branch` }),
+        );
+      }
+      yield* self.run(["fetch", remote, `${merge}:refs/heads/${branch}`]);
+    });
+  }
+
+  pushTag(remote: string, tag: string) {
+    return this.run(["push", remote, `refs/tags/${tag}`]);
+  }
+
+  deleteRemoteTag(remote: string, tag: string) {
+    return this.run(["push", remote, "--delete", `refs/tags/${tag}`]);
+  }
+
+  addWorktree(path: string, ref: string, newBranch: string | null) {
+    return Effect.all([
+      validateRev(ref),
+      newBranch ? validateBranchName(newBranch) : Effect.void,
+    ]).pipe(
+      Effect.andThen(
+        this.run(["worktree", "add", ...(newBranch ? ["-b", newBranch] : []), "--", path, ref]),
+      ),
+    );
+  }
+
+  removeWorktree(path: string, force: boolean) {
+    return this.run(["worktree", "remove", ...(force ? ["--force"] : []), "--", path]);
+  }
+
+  pruneWorktrees() {
+    return this.run(["worktree", "prune"]);
+  }
+
+  updateSubmodule(path: string) {
+    return this.run(["submodule", "update", "--init", "--recursive", "--", path]);
+  }
+
+  setRemoteUrl(name: string, url: string) {
+    return this.run(["remote", "set-url", "--", name, url]);
   }
 
   addRemote(name: string, url: string) {

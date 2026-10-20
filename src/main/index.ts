@@ -9,7 +9,8 @@ import { activity } from "./activity";
 import { fixProcessPath } from "./exec/environment";
 import { HostsLive } from "./exec/hosts";
 import { registerIpc } from "./ipc";
-import { Notifier, ReposLive } from "./services";
+import { Notifier, RepoSettings, ReposLive } from "./services";
+import { repoSettings, updateRepoSettings } from "./state";
 import { updater } from "./updater";
 
 // Allows isolated profiles (e.g. for automated UI tests).
@@ -27,7 +28,15 @@ const broadcast = <E extends EventName>(event: E, payload: Events[E]) => {
 };
 
 const NotifierLive = Layer.succeed(Notifier, { emit: broadcast });
-const MainLive = ReposLive.pipe(Layer.provideMerge(HostsLive), Layer.provide(NotifierLive));
+const RepoSettingsLive = Layer.succeed(RepoSettings, {
+  hidden: (id) => repoSettings(id).hidden,
+  setHidden: (id, hidden) => updateRepoSettings(id, { hidden }),
+});
+const MainLive = ReposLive.pipe(
+  Layer.provideMerge(HostsLive),
+  Layer.provideMerge(RepoSettingsLive),
+  Layer.provide(NotifierLive),
+);
 const runtime = ManagedRuntime.make(MainLive);
 
 const command = (c: MenuCommand) => () => broadcast("menu.command", { command: c });

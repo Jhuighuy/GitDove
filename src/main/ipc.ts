@@ -15,17 +15,17 @@ import { type AppError, InvalidInputError } from "./exec/errors";
 import { Hosts } from "./exec/hosts";
 import { shellQuote } from "./exec/shell";
 import type { Repository } from "./git/repository";
-import { Repos } from "./services";
+import { RepoSettings, Repos } from "./services";
 import { loadState, saveState } from "./state";
 import { updater } from "./updater";
 
-type Services = Repos | Hosts;
+type Services = Repos | Hosts | RepoSettings;
 
 type Handlers = {
   [M in ApiMethod]: (...args: ApiArgs<M>) => Effect.Effect<ApiResult<M>, AppError, Services>;
 };
 
-const withRepo = <A, E>(id: RepoId, f: (repo: Repository) => Effect.Effect<A, E>) =>
+const withRepo = <A, E, R = never>(id: RepoId, f: (repo: Repository) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const repos = yield* Repos;
     return yield* f(yield* repos.get(id));
@@ -193,6 +193,29 @@ export const handlers: Handlers = {
   "repo.abortOperation": (id) => withRepo(id, (r) => r.abortOperation()),
   "repo.continueOperation": (id) => withRepo(id, (r) => r.continueOperation()),
 
+  // Graph visibility ---------------------------------------------------------------
+  "repo.hiddenRefs": (id) =>
+    withRepo(id, (r) =>
+      Effect.gen(function* () {
+        return [...(yield* RepoSettings).hidden(r.id)];
+      }),
+    ),
+  "repo.setHiddenRefs": (id, hidden) =>
+    withRepo(id, (r) =>
+      Effect.gen(function* () {
+        const clean = hidden.filter((h) => typeof h === "string");
+        (yield* RepoSettings).setHidden(r.id, clean);
+        r.setHiddenRefs(clean);
+      }),
+    ),
+
+  // Worktrees and submodules -------------------------------------------------------
+  "repo.addWorktree": (id, path, ref, newBranch) =>
+    withRepo(id, (r) => r.addWorktree(path, ref, newBranch)),
+  "repo.removeWorktree": (id, path, force) => withRepo(id, (r) => r.removeWorktree(path, force)),
+  "repo.pruneWorktrees": (id) => withRepo(id, (r) => r.pruneWorktrees()),
+  "repo.updateSubmodule": (id, path) => withRepo(id, (r) => r.updateSubmodule(path)),
+
   // Stash ----------------------------------------------------------------------------
   "repo.stash": (id, message, untracked) => withRepo(id, (r) => r.stash(message, untracked)),
   "repo.stashPop": (id, index) => withRepo(id, (r) => r.stashPop(index)),
@@ -203,6 +226,11 @@ export const handlers: Handlers = {
   "repo.fetch": (id, remote) => withRepo(id, (r) => r.fetch(remote)),
   "repo.pull": (id, mode) => withRepo(id, (r) => r.pull(mode)),
   "repo.push": (id, opts) => withRepo(id, (r) => r.push(opts)),
+  "repo.pushBranch": (id, branch, force) => withRepo(id, (r) => r.pushBranch(branch, force)),
+  "repo.fastForwardBranch": (id, branch) => withRepo(id, (r) => r.fastForwardBranch(branch)),
+  "repo.pushTag": (id, remote, tag) => withRepo(id, (r) => r.pushTag(remote, tag)),
+  "repo.deleteRemoteTag": (id, remote, tag) => withRepo(id, (r) => r.deleteRemoteTag(remote, tag)),
+  "repo.setRemoteUrl": (id, name, url) => withRepo(id, (r) => r.setRemoteUrl(name, url)),
   "repo.addRemote": (id, name, url) => withRepo(id, (r) => r.addRemote(name, url)),
   "repo.removeRemote": (id, name) => withRepo(id, (r) => r.removeRemote(name)),
 

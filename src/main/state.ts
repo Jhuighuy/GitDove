@@ -32,3 +32,40 @@ export const saveState = (state: AppState): void => {
   writeFileSync(tmp, JSON.stringify(cached, null, 2));
   renameSync(tmp, file());
 };
+
+// ---------------------------------------------------------------------------
+// Per-repository settings
+// ---------------------------------------------------------------------------
+
+export interface RepoSettingsData {
+  /** Refs hidden from the graph (see `@shared/visibility`). */
+  readonly hidden: readonly string[];
+}
+
+const settingsFile = () => join(app.getPath("userData"), "repo-settings.json");
+let settings: Record<string, RepoSettingsData> | null = null;
+
+const loadSettings = (): Record<string, RepoSettingsData> => {
+  if (settings) return settings;
+  try {
+    const parsed = JSON.parse(readFileSync(settingsFile(), "utf8")) as unknown;
+    settings =
+      parsed && typeof parsed === "object" ? (parsed as Record<string, RepoSettingsData>) : {};
+  } catch {
+    settings = {};
+  }
+  return settings;
+};
+
+export const repoSettings = (id: string): RepoSettingsData => {
+  const s = loadSettings()[id];
+  return { hidden: Array.isArray(s?.hidden) ? s.hidden.filter((h) => typeof h === "string") : [] };
+};
+
+export const updateRepoSettings = (id: string, patch: Partial<RepoSettingsData>): void => {
+  const all = loadSettings();
+  all[id] = { ...repoSettings(id), ...patch };
+  const tmp = `${settingsFile()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(all, null, 2));
+  renameSync(tmp, settingsFile());
+};

@@ -13,6 +13,15 @@ export class Notifier extends Context.Service<
   { readonly emit: <E extends EventName>(event: E, payload: Events[E]) => void }
 >()("gitdove/Notifier") {}
 
+/** Persistent per-repository settings (graph visibility, …). */
+export class RepoSettings extends Context.Service<
+  RepoSettings,
+  {
+    readonly hidden: (repo: RepoId) => readonly string[];
+    readonly setHidden: (repo: RepoId, hidden: readonly string[]) => void;
+  }
+>()("gitdove/RepoSettings") {}
+
 type OpenError = GitError | NotARepositoryError;
 
 interface Entry {
@@ -37,6 +46,7 @@ export const ReposLive = Layer.effect(
   Effect.gen(function* () {
     const hosts = yield* Hosts;
     const notifier = yield* Notifier;
+    const settings = yield* RepoSettings;
     const entries = new Map<RepoId, Entry>();
     /** Requested id -> pending open. */
     const opening = new Map<RepoId, Deferred.Deferred<Repository, OpenError>>();
@@ -47,6 +57,7 @@ export const ReposLive = Layer.effect(
     const register = (repo: Repository): Repository => {
       const existing = entries.get(repo.id);
       if (existing) return existing.repo;
+      repo.setHiddenRefs(settings.hidden(repo.id));
       const dispose = watchRepository(repo, (scopes) => {
         if (scopes.has("refs") || scopes.has("head")) repo.invalidateGraph();
         notifier.emit("repo.changed", { repo: repo.id, scopes: [...scopes] });
