@@ -1,6 +1,6 @@
-import { resolve } from "node:path";
+import { dirname } from "node:path";
 import type { UpdaterStatus } from "@shared/domain";
-import { app, dialog } from "electron";
+import { app, dialog, type MenuItemConstructorOptions } from "electron";
 import log from "electron-log/main";
 import electronUpdater from "electron-updater";
 import { Sparkle } from "./sparkle";
@@ -16,7 +16,10 @@ let waiting: ((s: UpdaterStatus) => void)[] = [];
 const set = (s: UpdaterStatus) => {
   status = s;
   listener?.(s);
-  if (s.kind === "checking" || s.kind === "downloading") return;
+  if (s.kind !== "checking" && s.kind !== "downloading") settle(s);
+};
+
+const settle = (s: UpdaterStatus) => {
   for (const done of waiting) done(s);
   waiting = [];
 };
@@ -33,7 +36,8 @@ export const updater = {
     if (!app.isPackaged) return;
     if (process.platform === "darwin") {
       // Sparkle checks on startup and every 4 hours (`SUScheduledCheckInterval`).
-      sparkle = new Sparkle(resolve(app.getPath("exe"), "../../.."), {
+      // GitDove.app/Contents/MacOS/GitDove
+      sparkle = new Sparkle(dirname(dirname(dirname(app.getPath("exe")))), {
         onStatus: set,
         onLog: (message) => log.warn(`updater: ${message}`),
       });
@@ -58,13 +62,17 @@ export const updater = {
     if (status.kind === "ready" || (!sparkle && status.kind === "downloading"))
       return Promise.resolve(status);
     const outcome = new Promise<UpdaterStatus>((done) => waiting.push(done));
-    if (sparkle) sparkle.check();
-    else
-      autoUpdater
-        .checkForUpdates()
-        .catch((e: unknown) =>
-          set({ kind: "error", message: e instanceof Error ? e.message : String(e) }),
-        );
+    // Without a check under way, nothing will report back: answer with the current status.
+    if (sparkle) {
+      if (!sparkle.check()) settle(status);
+    } else {
+      autoUpdater.checkForUpdates().then(
+        (result) => {
+          if (!result) settle(status); // The updater is inactive, e.g. outside an AppImage.
+        },
+        (e: unknown) => set({ kind: "error", message: e instanceof Error ? e.message : String(e) }),
+      );
+    }
     return outcome;
   },
 
@@ -80,7 +88,13 @@ export const updater = {
   },
 };
 
-/** Help > Check for Updates: checks now and reports the outcome in a dialog. */
+/** The "Check for Updates…" menu item: checks now and reports the outcome in a dialog. */
+export const checkForUpdatesMenuItem = (): MenuItemConstructorOptions => ({
+  label: "Check for Updates…",
+  enabled: app.isPackaged,
+  click: () => void checkForUpdatesFromMenu(),
+});
+
 export async function checkForUpdatesFromMenu() {
   const s = await updater.check();
   const current = `You have GitDove ${app.getVersion()}.`;

@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { UpdaterStatus } from "@shared/domain";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 const electron = vi.hoisted(() => ({
   app: {
@@ -11,15 +11,22 @@ const electron = vi.hoisted(() => ({
   dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
 }));
 const sparkle = vi.hoisted(() => ({
-  instance: null as null | { onStatus: (s: UpdaterStatus) => void; bundle: string },
+  instance: null as null | {
+    bundle: string;
+    onStatus: (s: UpdaterStatus) => void;
+    onLog: (message: string) => void;
+  },
   check: vi.fn(),
   install: vi.fn(),
   close: vi.fn(),
 }));
-const autoUpdater = vi.hoisted(() => ({ emitter: null as unknown }));
+type AutoUpdater = EventEmitter & { checkForUpdates: Mock; quitAndInstall: Mock };
+/** The mocked electron-updater `autoUpdater` of the last loaded module. */
+const mocked = vi.hoisted(() => ({ autoUpdater: null as unknown as AutoUpdater }));
 
 vi.mock("electron", () => electron);
-vi.mock("electron-log/main", () => ({ default: { warn: vi.fn() } }));
+const log = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("electron-log/main", () => ({ default: log }));
 vi.mock("electron-updater", async () => {
   const { EventEmitter } = await import("node:events");
   const updater = Object.assign(new EventEmitter(), {
@@ -28,13 +35,16 @@ vi.mock("electron-updater", async () => {
     }),
     quitAndInstall: vi.fn(),
   });
-  autoUpdater.emitter = updater;
+  mocked.autoUpdater = updater;
   return { default: { autoUpdater: updater } };
 });
 vi.mock("./sparkle", () => ({
   Sparkle: class {
-    constructor(bundle: string, { onStatus }: { onStatus: (s: UpdaterStatus) => void }) {
-      sparkle.instance = { onStatus, bundle };
+    constructor(
+      bundle: string,
+      handlers: { onStatus: (s: UpdaterStatus) => void; onLog: (message: string) => void },
+    ) {
+      sparkle.instance = { bundle, ...handlers };
     }
     check = sparkle.check;
     install = sparkle.install;
@@ -55,7 +65,10 @@ async function load(on: string) {
   return { ...module, statuses };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  sparkle.check.mockReturnValue(true);
+});
 afterEach(() => setPlatform(platform));
 
 describe("updater on macOS", () => {
@@ -89,6 +102,22 @@ describe("updater on macOS", () => {
     expect(sparkle.close).toHaveBeenCalled();
   });
 
+  it("logs the helper's messages", async () => {
+    await load("darwin");
+    sparkle.instance?.onLog("hello");
+    expect(log.warn).toHaveBeenCalledWith("updater: hello");
+  });
+
+  it("answers a check at once when the helper is gone", async () => {
+    const { updater } = await load("darwin");
+    sparkle.instance?.onStatus({ kind: "error", message: "Updater stopped unexpectedly (1)" });
+    sparkle.check.mockReturnValue(false);
+    await expect(updater.check()).resolves.toEqual({
+      kind: "error",
+      message: "Updater stopped unexpectedly (1)",
+    });
+  });
+
   it("offers to restart from the menu", async () => {
     const { checkForUpdatesFromMenu } = await load("darwin");
     const done = checkForUpdatesFromMenu();
@@ -109,19 +138,43 @@ describe("updater on macOS", () => {
       expect.objectContaining({ type: "error", detail: "offline" }),
     );
   });
+
+  it("reports a download from the menu", async () => {
+    const { checkForUpdatesMenuItem } = await load("darwin");
+    const item = checkForUpdatesMenuItem();
+    expect(item).toMatchObject({ label: "Check for Updates…", enabled: true });
+    (item.click as () => void)();
+    sparkle.instance?.onStatus({ kind: "available", version: "0.1.6" });
+    await expect
+      .poll(() => electron.dialog.showMessageBox.mock.calls.at(0)?.at(0))
+      .toMatchObject({ message: "Downloading GitDove 0.1.6" });
+  });
 });
 
 describe("updater elsewhere", () => {
   it("checks through electron-updater", async () => {
     const { updater, checkForUpdatesFromMenu, statuses } = await load("linux");
-    const emitter = autoUpdater.emitter as EventEmitter;
     await expect(updater.check()).resolves.toEqual({ kind: "idle" });
     expect(statuses.at(-1)).toEqual({ kind: "idle" });
     await checkForUpdatesFromMenu();
     expect(electron.dialog.showMessageBox).toHaveBeenCalledWith(
       expect.objectContaining({ message: "GitDove is up to date" }),
     );
-    emitter.emit("update-downloaded", { version: "0.1.6" });
+    mocked.autoUpdater.emit("update-downloaded", { version: "0.1.6" });
     expect(updater.status()).toEqual({ kind: "ready", version: "0.1.6" });
+    updater.install();
+    expect(mocked.autoUpdater.quitAndInstall).toHaveBeenCalled();
+  });
+
+  it("answers a check at once when electron-updater is inactive", async () => {
+    const { updater } = await load("linux");
+    mocked.autoUpdater.checkForUpdates.mockResolvedValueOnce(null);
+    await expect(updater.check()).resolves.toEqual({ kind: "idle" });
+  });
+
+  it("reports a failed check", async () => {
+    const { updater } = await load("linux");
+    mocked.autoUpdater.checkForUpdates.mockRejectedValueOnce(new Error("offline"));
+    await expect(updater.check()).resolves.toEqual({ kind: "error", message: "offline" });
   });
 });

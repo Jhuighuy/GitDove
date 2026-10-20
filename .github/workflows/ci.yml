@@ -121,7 +121,10 @@ jobs:
   release:
     name: Release
     needs: package
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Explicit status check: `changes` is skipped on pushes, which would fail the implicit success().
+    if: >-
+      !cancelled() && needs.package.result == 'success' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
     # sign_update (Sparkle's signing tool) is a macOS binary.
     runs-on: macos-latest
     concurrency:

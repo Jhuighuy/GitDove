@@ -12,7 +12,7 @@ import { HostsLive } from "./exec/hosts";
 import { registerIpc } from "./ipc";
 import { Notifier, RepoSettings, ReposLive } from "./services";
 import { repoSettings, updateRepoSettings } from "./state";
-import { checkForUpdatesFromMenu, updater } from "./updater";
+import { checkForUpdatesMenuItem, updater } from "./updater";
 
 // Allows isolated profiles (e.g. for automated UI tests).
 if (process.env.GITDOVE_USER_DATA) app.setPath("userData", process.env.GITDOVE_USER_DATA);
@@ -43,12 +43,6 @@ const runtime = ManagedRuntime.make(MainLive);
 
 const command = (c: MenuCommand) => () => broadcast("menu.command", { command: c });
 
-const checkForUpdates: MenuItemConstructorOptions = {
-  label: "Check for Updates…",
-  enabled: app.isPackaged,
-  click: () => void checkForUpdatesFromMenu(),
-};
-
 const buildMenu = () => {
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
@@ -57,7 +51,7 @@ const buildMenu = () => {
             role: "appMenu" as const,
             submenu: [
               { role: "about" as const },
-              checkForUpdates,
+              checkForUpdatesMenuItem(),
               { type: "separator" as const },
               { role: "services" as const },
               { type: "separator" as const },
@@ -126,7 +120,7 @@ const buildMenu = () => {
     {
       role: "help",
       submenu: [
-        ...(isMac ? [] : [checkForUpdates, { type: "separator" as const }]),
+        ...(isMac ? [] : [checkForUpdatesMenuItem(), { type: "separator" as const }]),
         {
           label: "GitDove on GitHub",
           click: () => void shell.openExternal("https://github.com/Jhuighuy/GitDove"),

@@ -47,7 +47,7 @@ export class Sparkle {
 
   /** Checks for updates now; answers with `idle`, `available`, `ready` or `error`. */
   check() {
-    this.send("check");
+    return this.send("check");
   }
 
   /** Installs the downloaded update: Sparkle quits GitDove, then relaunches it. */
@@ -62,8 +62,11 @@ export class Sparkle {
     this.helper.stdin.end();
   }
 
+  /** Returns false if the helper is gone and will not answer. */
   private send(command: string) {
-    if (!this.closed) this.helper.stdin.write(`${command}\n`);
+    if (this.closed) return false;
+    this.helper.stdin.write(`${command}\n`);
+    return true;
   }
 }
 
