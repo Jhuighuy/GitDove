@@ -11,6 +11,8 @@ import { spawn, type SpawnOptions, type SpawnResult } from "./spawn";
 
 export type ExecOptions = Omit<SpawnOptions, "cwd" | "env" | "display"> & {
   readonly cwd?: string;
+  /** The command only reads, so it may run again after a dropped SSH connection. */
+  readonly idempotent?: boolean;
 };
 
 /** A machine that can run commands: the local one, or one reachable via SSH. */
@@ -135,6 +137,7 @@ const acquireMaster = (host: string) =>
               message: `Could not connect to ${host}: ${stderr.trim().split("\n").at(-1) ?? "connection failed"}`,
               host,
               stderr: stderr.trim(),
+              mayHaveRun: false,
             }),
         ),
         Effect.onError(() => Effect.sync(() => child.kill())),
@@ -207,6 +210,15 @@ const remoteScript = (script: string, cwd: string | undefined) => {
   return `cd -- "$HOME" && exec /bin/sh -c ${shellQuote(inner)}`;
 };
 
+/**
+ * Retries after a lost connection only when that cannot repeat the command's effects:
+ * it never reached the host, or it only reads.
+ */
+const retryable =
+  (options: ExecOptions) =>
+  (e: { readonly _tag: string; readonly mayHaveRun?: boolean }): boolean =>
+    e._tag === "SshError" && (!e.mayHaveRun || options.idempotent === true);
+
 /** How long to use plain sessions after the runner failed to start. */
 const RUNNER_RETRY_MS = 60_000;
 
@@ -240,7 +252,12 @@ const makeSshHost = (
         ).pipe(
           Effect.mapError((e) =>
             e.exitCode === 255 && !master.isAlive()
-              ? new SshError({ message: `Lost connection to ${host}`, host, stderr: e.stderr })
+              ? new SshError({
+                  message: `Lost connection to ${host}`,
+                  host,
+                  stderr: e.stderr,
+                  mayHaveRun: true,
+                })
               : e,
           ),
         );
@@ -249,7 +266,7 @@ const makeSshHost = (
     ).pipe(
       sessions.withPermits(1),
       // A dropped connection gets one transparent retry over a fresh master.
-      Effect.retry({ while: (e) => e._tag === "SshError", times: 1 }),
+      Effect.retry({ while: retryable(options), times: 1 }),
     );
 
   /** Runs a command on the host's runner, starting it if needed. */
@@ -265,8 +282,8 @@ const makeSshHost = (
       }),
     ).pipe(
       runnerSlots.withPermits(1),
-      // The runner died with the command in flight (e.g. a dropped connection).
-      Effect.retry({ while: (e) => e._tag === "SshError", times: 1 }),
+      // The runner died, before or with the command in flight (e.g. a dropped connection).
+      Effect.retry({ while: retryable(options), times: 1 }),
       Effect.catchTag("RunnerUnavailable", (e) =>
         Effect.gen(function* () {
           runnerRetryAt = Date.now() + RUNNER_RETRY_MS;

@@ -106,7 +106,7 @@ export const handlers: Handlers = {
       const host = hosts.get(hostId);
       yield* hosts.connect(hostId);
       const cd = path ? `cd -- ${shellQuote(path)}` : "cd";
-      const r = yield* host.sh(`${cd} && pwd && ${LIST_DIR_SCRIPT}`);
+      const r = yield* host.sh(`${cd} && pwd && ${LIST_DIR_SCRIPT}`, { idempotent: true });
       const [cwd, ...rest] = r.stdout.toString("utf8").split("\n");
       const entries: DirEntry[] = rest
         .filter((l) => l.length > 1)

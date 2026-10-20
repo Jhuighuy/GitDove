@@ -116,7 +116,7 @@ printf 'W:'; git status --porcelain=v2 -z --untracked-files=all 2>/dev/null | ck
     W: "worktree",
   };
 
-  const poll = repo.host.sh(script, { cwd: repo.workTree }).pipe(
+  const poll = repo.host.sh(script, { cwd: repo.workTree, idempotent: true }).pipe(
     Effect.map((r) => {
       const current = new Map<string, string>();
       for (const line of r.stdout.toString("utf8").split("\n")) {

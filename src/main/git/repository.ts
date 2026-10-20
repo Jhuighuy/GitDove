@@ -96,7 +96,7 @@ interface Probe {
 }
 
 const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARepositoryError> =>
-  host.sh(PROBE_SCRIPT, { cwd: path }).pipe(
+  host.sh(PROBE_SCRIPT, { cwd: path, idempotent: true }).pipe(
     Effect.catchTag(
       "CommandError",
       (e): Effect.Effect<never, CommandError | NotARepositoryError> =>
@@ -288,8 +288,9 @@ export class Repository {
     return this.host.exec("git", [...GIT_CONFIG, ...args], { cwd: this.workTree, ...options });
   }
 
+  /** Runs a read-only git command and returns its output. */
   gitText(args: readonly string[], options: ExecOptions = {}): Effect.Effect<string, GitError> {
-    return this.git(args, options).pipe(Effect.map(text));
+    return this.git(args, { idempotent: true, ...options }).pipe(Effect.map(text));
   }
 
   private run(args: readonly string[], options: ExecOptions = {}): Effect.Effect<void, GitError> {
@@ -434,7 +435,7 @@ export class Repository {
           break;
         }
       }
-      const r = yield* this.git(args, { maxBytes: MAX_DIFF_BYTES, okCodes });
+      const r = yield* this.git(args, { maxBytes: MAX_DIFF_BYTES, okCodes, idempotent: true });
       return parseDiff(
         text(r),
         target.path,
@@ -454,7 +455,11 @@ export class Repository {
       target.kind === "commit" ? validateRev(target.hash) : Effect.void,
     ]).pipe(
       Effect.andThen(
-        this.host.sh(script, { cwd: this.workTree, maxBytes: 2 * MAX_FILE_BYTES + 1024 }),
+        this.host.sh(script, {
+          cwd: this.workTree,
+          maxBytes: 2 * MAX_FILE_BYTES + 1024,
+          idempotent: true,
+        }),
       ),
       Effect.flatMap((r) =>
         Effect.try({

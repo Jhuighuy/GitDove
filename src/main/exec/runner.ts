@@ -332,9 +332,13 @@ export const runOnRunner = (
 ): Effect.Effect<SpawnResult, CommandError | SshError> =>
   Effect.callback<SpawnResult, CommandError | SshError>((resume) => {
     const limit = options.maxBytes ?? 0;
+    let sent = false;
     const id = runner.run(command, options.stdin, limit, (r) => {
       if (r instanceof Error) {
-        resume(Effect.fail(new SshError({ message: r.message, host, stderr: "" })));
+        // A runner that was already dead never received the command.
+        resume(
+          Effect.fail(new SshError({ message: r.message, host, stderr: "", mayHaveRun: sent })),
+        );
         return;
       }
       const truncated = limit > 0 && r.stdout.length > limit;
@@ -351,5 +355,7 @@ export const runOnRunner = (
         ),
       );
     });
+    // `run` reports a dead runner synchronously; otherwise the request is on its way.
+    sent = true;
     return Effect.sync(() => runner.cancel(id));
   });
