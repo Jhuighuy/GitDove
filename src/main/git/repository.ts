@@ -582,6 +582,9 @@ export class Repository {
     if (first) this.graphReady = ready;
     const fiber = Effect.runFork(
       this.loadGraph(first, ready).pipe(
+        // The log streams into a parser, so a lost connection restarts the whole load (with a
+        // new snapshot) rather than rerunning the command into the same one.
+        Effect.retry({ while: (e) => e._tag === "SshError", times: 1 }),
         Effect.onError((cause) => {
           this.graphDirty = true;
           return Deferred.failCause(ready, cause);

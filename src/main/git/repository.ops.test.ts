@@ -6,6 +6,7 @@
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { RepoLocation } from "@shared/domain";
+import { SshError } from "../exec/errors";
 import { type Host, Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
 import { Repository } from "./repository";
 
@@ -491,5 +492,62 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     await sh("git config protocol.file.allow always");
     await run(repo.updateSubmodule("sub"));
     expect(await sh("cat sub/f.txt")).toBe("a\nb\nc\nd");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("Repository graph over a dropped connection", () => {
+  it("reloads the whole graph instead of streaming it twice", async () => {
+    const runtime = ManagedRuntime.make(Layer.mergeAll(HostsLive));
+    const local = await runtime.runPromise(Effect.map(Hosts, (h) => h.get(LOCAL_HOST)));
+    const dir = (await runtime.runPromise(local.sh("mktemp -d /tmp/gitdove-drop.XXXXXX"))).stdout
+      .toString()
+      .trim();
+    try {
+      await runtime.runPromise(
+        local.sh(
+          `git init -q -b main . && ${IDENTITY} && ` +
+            "for i in 1 2 3 4 5; do git commit -q --allow-empty -m c$i; done",
+          { cwd: dir },
+        ),
+      );
+      // Streams half of the log's output, then loses the connection once.
+      let streams = 0;
+      const host: Host = {
+        ...local,
+        exec: (program, args, options = {}) => {
+          const { onStdout } = options;
+          if (!onStdout || streams++ > 0) return local.exec(program, args, options);
+          return local.exec(program, args, { ...options, onStdout: undefined }).pipe(
+            Effect.flatMap((r) => {
+              onStdout(r.stdout.subarray(0, r.stdout.length >> 1));
+              return Effect.fail(
+                new SshError({
+                  message: "Lost connection",
+                  host: "x",
+                  stderr: "",
+                  mayHaveRun: true,
+                }),
+              );
+            }),
+          );
+        },
+      };
+      const repo = await runtime.runPromise(
+        Repository.open(host, { kind: "local", path: dir }, { onGraphProgress: () => {} }),
+      );
+      let g = await runtime.runPromise(repo.graphInfo());
+      while (!g.complete) g = await runtime.runPromise(repo.graphInfo());
+      expect(streams).toBe(2);
+      const rows = await runtime.runPromise(repo.graphRows(g.version, 0, 10));
+      expect(rows.map((r) => r.hash)).toEqual(
+        (await runtime.runPromise(local.sh("git rev-list HEAD", { cwd: dir }))).stdout
+          .toString()
+          .trim()
+          .split("\n"),
+      );
+    } finally {
+      await runtime.runPromise(local.sh(`rm -rf -- '${dir}'`));
+      await runtime.dispose();
+    }
   });
 });
