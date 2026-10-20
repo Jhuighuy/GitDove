@@ -34,7 +34,10 @@ export class Sparkle {
     });
     createInterface({ input: helper.stderr }).on("line", onLog);
     helper.stdin.on("error", (e) => onLog(`Updater input failed: ${e.message}`));
-    helper.on("error", (e) => onStatus({ kind: "error", message: `Updater failed: ${e.message}` }));
+    helper.on("error", (e) => {
+      this.closed = true;
+      onStatus({ kind: "error", message: `Updater failed: ${e.message}` });
+    });
     helper.on("exit", (code, signal) => {
       if (this.closed) return;
       this.closed = true;
