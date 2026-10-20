@@ -48,8 +48,8 @@ function fixture() {
       ["zip", "dmg"].map((extension) => `GitDove-${version}-mac-${arch}.${extension}`),
     ),
     `GitDove-${version}-win-x64.exe`,
-    `GitDove-${version}-linux-x64.AppImage`,
-    `GitDove-${version}-linux-x64.deb`,
+    `GitDove-${version}-linux-x86_64.AppImage`,
+    `GitDove-${version}-linux-amd64.deb`,
   ];
   for (const name of names) writeFileSync(join(root, name), name);
   for (const [name, asset] of [
@@ -256,7 +256,7 @@ describe("atomic publication", () => {
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(response(null, 404))
-      .mockResolvedValueOnce(response({ draft: true }))
+      .mockResolvedValueOnce(response([{ tag_name: `v${version}`, draft: true }]))
       .mockResolvedValueOnce(response({ sha }));
     vi.stubGlobal("fetch", fetch);
     await publishRelease(root, version, sha);
@@ -264,9 +264,65 @@ describe("atomic publication", () => {
     execFileSync.mockClear();
     fetch
       .mockResolvedValueOnce(response(null, 404))
-      .mockResolvedValueOnce(response({ draft: false }))
+      .mockResolvedValueOnce(response([{ tag_name: `v${version}`, draft: false }]))
       .mockResolvedValueOnce(response({ sha }));
     await publishRelease(root, version, sha);
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+  it("resumes a draft whose tag has not been created yet", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(response(null, 404))
+      .mockResolvedValueOnce(
+        response([{ tag_name: `v${version}`, draft: true, target_commitish: sha }]),
+      )
+      .mockResolvedValueOnce(response({ message: `No commit found for SHA: v${version}` }, 422));
+    vi.stubGlobal("fetch", request);
+    await publishRelease(root, version, sha);
+    expect(request.mock.calls[1][0]).toContain("releases?per_page=100&page=1");
+    expect(execFileSync.mock.calls.map(([, args]) => args[1])).toEqual(["upload", "edit"]);
+  });
+  it("creates a release when the commits endpoint reports a missing ref with 422", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(response(null, 404))
+        .mockResolvedValueOnce(response([]))
+        .mockResolvedValueOnce(response({ message: `No commit found for SHA: v${version}` }, 422)),
+    );
+    await publishRelease(root, version, sha);
+    expect(execFileSync.mock.calls[0][1]).toContain("create");
+  });
+  it("searches all release pages and refuses ambiguous drafts", async () => {
+    const target = { tag_name: `v${version}`, draft: true, target_commitish: sha };
+    const fullPage = Array.from({ length: 100 }, (_, index) => ({ tag_name: `other-${index}` }));
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(response(null, 404))
+      .mockResolvedValueOnce(response(fullPage))
+      .mockResolvedValueOnce(response([target]))
+      .mockResolvedValueOnce(response({ sha }));
+    vi.stubGlobal("fetch", request);
+    await publishRelease(root, version, sha);
+    expect(request.mock.calls[2][0]).toContain("page=2");
+    execFileSync.mockClear();
+    request
+      .mockResolvedValueOnce(response(null, 404))
+      .mockResolvedValueOnce(response([target, target]));
+    await expect(publishRelease(root, version, sha)).rejects.toThrow("Multiple releases exist");
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+  it("does not hide unrelated 422 API failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(response(null, 404))
+        .mockResolvedValueOnce(response([]))
+        .mockResolvedValueOnce(response({ message: "Validation Failed" }, 422)),
+    );
+    await expect(publishRelease(root, version, sha)).rejects.toThrow("HTTP 422");
     expect(execFileSync).not.toHaveBeenCalled();
   });
   it("rejects different commits and API failures", async () => {
@@ -280,7 +336,7 @@ describe("atomic publication", () => {
       vi
         .fn()
         .mockResolvedValueOnce(response(null, 404))
-        .mockResolvedValueOnce(response({ draft: false }))
+        .mockResolvedValueOnce(response([{ tag_name: `v${version}`, draft: false }]))
         .mockResolvedValueOnce(response({ sha: "b".repeat(40) })),
     );
     await expect(publishRelease(root, version, sha)).rejects.toThrow("different commit");

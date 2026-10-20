@@ -86,8 +86,8 @@ export function validateReleaseFiles(files, version) {
       ["zip", "dmg"].map((extension) => `GitDove-${version}-mac-${arch}.${extension}`),
     ),
     `GitDove-${version}-win-x64.exe`,
-    `GitDove-${version}-linux-x64.AppImage`,
-    `GitDove-${version}-linux-x64.deb`,
+    `GitDove-${version}-linux-x86_64.AppImage`,
+    `GitDove-${version}-linux-amd64.deb`,
     "latest.yml",
     "latest-linux.yml",
   ];
@@ -195,6 +195,17 @@ export async function stageRelease(input, output, version, seed) {
   );
 }
 
+async function findRelease(api, tag) {
+  const matches = [];
+  for (let page = 1; ; page++) {
+    const releases = (await api(`releases?per_page=100&page=${page}`)) ?? [];
+    matches.push(...releases.filter((release) => release.tag_name === tag));
+    if (releases.length < 100) break;
+  }
+  if (matches.length > 1) throw new Error(`Multiple releases exist for ${tag}`);
+  return matches[0] ?? null;
+}
+
 export async function publishRelease(directory, version, sha) {
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("Invalid release commit");
   const repository = "Jhuighuy/GitDove";
@@ -208,6 +219,10 @@ export async function publishRelease(directory, version, sha) {
       },
     });
     if (response.status === 404) return null;
+    if (response.status === 422 && path.startsWith("commits/")) {
+      const error = await response.json().catch(() => ({}));
+      if (String(error.message ?? "").startsWith("No commit found for SHA: ")) return null;
+    }
     if (!response.ok) throw new Error(`GitHub API failed: HTTP ${response.status}`);
     return response.json();
   };
@@ -217,7 +232,7 @@ export async function publishRelease(directory, version, sha) {
     return;
   }
   const tag = `v${version}`;
-  const existing = await api(`releases/tags/${tag}`);
+  const existing = await findRelease(api, tag);
   if (existing) {
     const commit = await api(`commits/${tag}`);
     if (commit ? commit.sha !== sha : !existing.draft || existing.target_commitish !== sha)
