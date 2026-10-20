@@ -1,3 +1,4 @@
+import { hunkPatch } from "@shared/diff/patch";
 import type { DiffHunk, DiffTarget, FileDiff, RepoId } from "@shared/domain";
 import { IconX } from "@tabler/icons-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -36,29 +37,6 @@ const flatten = (diff: FileDiff): { items: Item[]; width: number } => {
   return { items, width };
 };
 
-/** Builds a patch containing a single hunk, for `git apply`. */
-const hunkPatch = (diff: FileDiff, hunk: DiffHunk) => {
-  const old = diff.oldPath ?? diff.path;
-  const lines = [
-    `diff --git a/${old} b/${diff.path}`,
-    `--- a/${old}`,
-    `+++ b/${diff.path}`,
-    hunk.header,
-  ];
-  for (const l of hunk.lines) {
-    lines.push(
-      l.kind === "add"
-        ? `+${l.text}`
-        : l.kind === "del"
-          ? `-${l.text}`
-          : l.kind === "meta"
-            ? `\\ ${l.text}`
-            : ` ${l.text}`,
-    );
-  }
-  return lines.join("\n") + "\n";
-};
-
 export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget }) {
   const { data, error, isPending, isPlaceholderData } = useDiff(repo, target);
   const close = () => useRepoUiStore.getState().openDiff(repo, null);
@@ -89,7 +67,10 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   const applyHunk = (hunk: DiffHunk, a: (typeof hunkActions)[number]) => {
     if (!data) return;
     void runAction(repo, a.label, () =>
-      api("repo.applyPatch", repo, hunkPatch(data, hunk), { cached: a.cached, reverse: a.reverse }),
+      api("repo.applyPatch", repo, hunkPatch(data, data.hunks.indexOf(hunk), a.reverse), {
+        cached: a.cached,
+        reverse: a.reverse,
+      }),
     );
   };
 
