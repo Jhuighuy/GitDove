@@ -68,7 +68,8 @@ jobs:
         id: version
         run: node scripts/release.mjs version
       - name: Package distributions
-        run: npm run package -- --${{ matrix.platform }} --${{ matrix.arch }} -c.extraMetadata.version=${{ steps.version.outputs.version }}
+        shell: bash
+        run: npm run package -- --${{ matrix.platform }} --${{ matrix.arch }} "-c.extraMetadata.version=${{ steps.version.outputs.version }}"
       - name: Prove packaged GitDove restart and update
         if: runner.os == 'macOS'
         run: npm run test:updates:electron -- release/${{ steps.version.outputs.version }}
