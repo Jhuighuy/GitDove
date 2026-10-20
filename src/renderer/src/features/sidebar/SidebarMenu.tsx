@@ -46,7 +46,7 @@ function Menu({ children }: { children: ReactNode }) {
 }
 
 /** Hide/show and solo entries shared by every graph-visible item. */
-function VisibilityItems({ name, vis }: { name: string; vis: Props["vis"] }) {
+function VisibilityItems({ name, vis }: { readonly name: string; readonly vis: Props["vis"] }) {
   const hidden = vis.isHidden(name);
   return (
     <>
@@ -76,6 +76,56 @@ function ResetItems({ repo, hash, head }: { repo: RepoId; hash: string; head: st
         </Item>
       </ContextMenuSubContent>
     </ContextMenuSub>
+  );
+}
+
+function RemoteMenu({
+  repo,
+  remote: r,
+  vis,
+}: {
+  readonly repo: RepoId;
+  readonly remote: Remote;
+  readonly vis: Props["vis"];
+}) {
+  const { data: refs } = useRefs(repo);
+  const prefix = `refs/remotes/${r.name}/`;
+  const members = (refs?.refs ?? []).filter((x) => x.name.startsWith(prefix)).map((x) => x.name);
+  const allHidden = members.length > 0 && members.every((m) => vis.isHidden(m));
+  return (
+    <Menu>
+      <Item onClick={() => void commands.fetchRemote(repo, r.name)}>Fetch {r.name}</Item>
+      <Sep />
+      <Item onClick={() => void commands.editRemoteUrl(repo, r.name, r.fetchUrl)}>Edit URL…</Item>
+      <Item onClick={() => commands.copy(r.fetchUrl, "Remote URL copied")}>Copy URL</Item>
+      <Sep />
+      <Item onClick={() => vis.toggleGroup(members, prefix)}>
+        {allHidden ? `Show ${r.name} branches` : `Hide ${r.name} branches`}
+      </Item>
+      <Sep />
+      <Item variant="destructive" onClick={() => void commands.removeRemote(repo, r.name)}>
+        Remove {r.name}
+      </Item>
+    </Menu>
+  );
+}
+
+function FolderMenu({
+  target: { name, names, prefix },
+  vis,
+}: {
+  readonly target: Extract<SidebarTarget, { kind: "folder" }>;
+  readonly vis: Props["vis"];
+}) {
+  const allHidden = names.length > 0 && names.every((n) => vis.isHidden(n));
+  return (
+    <Menu>
+      <Item onClick={() => vis.toggleGroup(names, prefix)}>
+        {allHidden ? `Show ${name} in graph` : `Hide ${name} from graph`}
+      </Item>
+      <Item onClick={() => vis.solo(names)}>Solo {name} (hide everything else)</Item>
+      {vis.anyHidden && <Item onClick={vis.showAll}>Show all</Item>}
+    </Menu>
   );
 }
 
@@ -170,46 +220,11 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       );
     }
 
-    case "remote": {
-      const r = target.remote;
-      const prefix = `refs/remotes/${r.name}/`;
-      const members = (refs?.refs ?? [])
-        .filter((x) => x.name.startsWith(prefix))
-        .map((x) => x.name);
-      const allHidden = members.length > 0 && members.every((m) => vis.isHidden(m));
-      return (
-        <Menu>
-          <Item onClick={() => void commands.fetchRemote(repo, r.name)}>Fetch {r.name}</Item>
-          <Sep />
-          <Item onClick={() => void commands.editRemoteUrl(repo, r.name, r.fetchUrl)}>
-            Edit URL…
-          </Item>
-          <Item onClick={() => commands.copy(r.fetchUrl, "Remote URL copied")}>Copy URL</Item>
-          <Sep />
-          <Item onClick={() => vis.toggleGroup(members, prefix)}>
-            {allHidden ? `Show ${r.name} branches` : `Hide ${r.name} branches`}
-          </Item>
-          <Sep />
-          <Item variant="destructive" onClick={() => void commands.removeRemote(repo, r.name)}>
-            Remove {r.name}
-          </Item>
-        </Menu>
-      );
-    }
+    case "remote":
+      return <RemoteMenu repo={repo} remote={target.remote} vis={vis} />;
 
-    case "folder": {
-      const { name, names, prefix } = target;
-      const allHidden = names.length > 0 && names.every((n) => vis.isHidden(n));
-      return (
-        <Menu>
-          <Item onClick={() => vis.toggleGroup(names, prefix)}>
-            {allHidden ? `Show ${name} in graph` : `Hide ${name} from graph`}
-          </Item>
-          <Item onClick={() => vis.solo(names)}>Solo {name} (hide everything else)</Item>
-          {vis.anyHidden && <Item onClick={vis.showAll}>Show all</Item>}
-        </Menu>
-      );
-    }
+    case "folder":
+      return <FolderMenu target={target} vis={vis} />;
 
     case "tag": {
       const r = target.ref;
