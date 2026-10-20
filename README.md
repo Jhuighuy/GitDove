@@ -49,6 +49,13 @@ npm run format
 npm run dist       # package installers into release/ (macOS: arm64 only)
 ```
 
+The repository tests create throwaway repositories under `/tmp`. Set `GITDOVE_INT_SSH_HOST` to also
+run them on a remote host over SSH (CI uses an SSH server on localhost):
+
+```bash
+GITDOVE_INT_SSH_HOST=myhost npm test
+```
+
 Run the integration smoke test against real repositories:
 
 ```bash

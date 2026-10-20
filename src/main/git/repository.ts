@@ -913,21 +913,26 @@ export class Repository {
   }
 
   stashPop(index: number) {
-    return validateStashIndex(index).pipe(
-      Effect.andThen(this.run(["stash", "pop", "--index", `stash@{${index}}`])),
-    );
+    return this.stashRun("pop", "--index", index);
   }
 
   stashApply(index: number) {
-    return validateStashIndex(index).pipe(
-      Effect.andThen(this.run(["stash", "apply", "--index", `stash@{${index}}`])),
-    );
+    return this.stashRun("apply", "--index", index);
   }
 
   stashDrop(index: number) {
-    return validateStashIndex(index).pipe(
-      Effect.andThen(this.run(["stash", "drop", `stash@{${index}}`])),
-    );
+    return this.stashRun("drop", null, index);
+  }
+
+  /** Runs `git stash <command>` on `stash@{index}`, rejecting invalid indices up front. */
+  private stashRun(
+    command: string,
+    flag: string | null,
+    index: number,
+  ): Effect.Effect<void, GitError | InvalidInputError> {
+    return Number.isSafeInteger(index) && index >= 0
+      ? this.run(["stash", command, ...(flag ? [flag] : []), `stash@{${index}}`])
+      : Effect.fail(new InvalidInputError({ message: `Invalid stash index: ${index}` }));
   }
 
   // -------------------------------------------------------------------------
@@ -1075,11 +1080,6 @@ const trimTrailingNewlines = (s: string): string => {
   while (end > 0 && s[end - 1] === "\n") end--;
   return s.slice(0, end);
 };
-
-const validateStashIndex = (index: number) =>
-  Number.isSafeInteger(index) && index >= 0
-    ? Effect.void
-    : Effect.fail(new InvalidInputError({ message: `Invalid stash index: ${index}` }));
 
 const validateRev = (rev: string) =>
   rev && !rev.startsWith("-") && !/[\0\n]/.test(rev)

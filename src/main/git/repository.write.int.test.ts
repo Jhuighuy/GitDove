@@ -21,7 +21,8 @@ const waitGraph = (repo: Repository, after = 0) =>
     }
   });
 
-describe.skipIf(!process.env.GITDOVE_INT_WRITE)("Repository write ops (integration)", () => {
+// The local host runs scripts with /bin/sh.
+describe.skipIf(process.platform === "win32")("Repository write ops (integration)", () => {
   const runtime = ManagedRuntime.make(Layer.mergeAll(HostsLive));
 
   for (const [name, hostId] of targets) {
