@@ -15,7 +15,17 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text-summary", "lcov"],
       include: ["src/**/*.{ts,tsx}", "scripts/**/*.mjs"],
-      exclude: ["**/*.d.ts", "**/*.test.mjs", "scripts/test-updates.mjs"],
+      exclude: [
+        "**/*.d.ts",
+        "**/*.test.mjs",
+        "scripts/test-updates.mjs",
+        // Entry points that only wire things together inside Electron.
+        "src/main/index.ts",
+        "src/preload/index.ts",
+        "src/renderer/src/main.tsx",
+        // Generated shadcn components.
+        "src/renderer/src/components/ui/**",
+      ],
     },
   },
 });
