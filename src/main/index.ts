@@ -3,6 +3,8 @@ import { type EventName, type Events, IPC_EVENT, type MenuCommand } from "@share
 import { app, BrowserWindow, Menu, type MenuItemConstructorOptions, shell } from "electron";
 import log from "electron-log/main";
 import { Effect, Layer, ManagedRuntime } from "effect";
+import dockIcon from "../../build/icon.png?asset";
+import windowIcon from "../../resources/icon.png?asset";
 import { activity } from "./activity";
 import { fixProcessPath } from "./exec/environment";
 import { HostsLive } from "./exec/hosts";
@@ -112,6 +114,8 @@ const createWindow = () => {
     show: false,
     backgroundColor: "#18181b",
     title: "GitDove",
+    // macOS takes the icon from the app bundle; elsewhere set it explicitly.
+    ...(isMac ? {} : { icon: windowIcon }),
     ...(isMac
       ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 13 } }
       : {
@@ -162,6 +166,8 @@ const main = async () => {
   });
 
   await app.whenReady();
+  // Packaged builds use the bundle icon; in development show ours instead of Electron's.
+  if (isMac && !app.isPackaged) app.dock?.setIcon(dockIcon);
   await Effect.runPromise(fixProcessPath);
   registerIpc(runtime);
   buildMenu();

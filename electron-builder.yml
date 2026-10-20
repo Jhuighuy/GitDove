@@ -6,8 +6,11 @@ directories:
   buildResources: build
 files:
   - out/**
+  - resources/**
   - package.json
 asarUnpack:
+  # Runtime assets referenced by path (window icon).
+  - resources/**
   # Native file watcher binaries cannot be loaded from inside the asar archive.
   - node_modules/@parcel/watcher*/**
 publish:
@@ -16,6 +19,7 @@ publish:
   repo: GitDove
   releaseType: release
 mac:
+  icon: build/icon.icns
   category: public.app-category.developer-tools
   target:
     - target: dmg
@@ -28,10 +32,12 @@ mac:
   # and APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID in CI to sign and notarize.
   notarize: false
 linux:
+  icon: build/icons
   category: Development
   target: [AppImage, deb]
   maintainer: Oleg Butakov <butakovoleg@gmail.com>
 win:
+  icon: build/icon.ico
   target: [nsis]
 nsis:
   oneClick: true

@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
+import logo from "@/assets/icon.svg";
 import { api, ApiError, modKey, useEvent } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useTabs } from "@/stores/tabs";
@@ -74,9 +75,7 @@ export function OpenRepoPage({ tabKey }: { tabKey: string }) {
     <div className="flex h-full items-start justify-center overflow-y-auto p-10">
       <div className="flex w-full max-w-2xl flex-col gap-8">
         <div className="flex items-center gap-3">
-          <div className="bg-primary/20 text-primary flex size-12 items-center justify-center rounded-2xl">
-            <IconGitBranch className="size-7" />
-          </div>
+          <img src={logo} alt="" className="size-12" draggable={false} />
           <div>
             <h1 className="text-xl font-semibold">GitDove</h1>
             <p className="text-muted-foreground text-sm">Open a repository to get started.</p>
@@ -137,7 +136,7 @@ function ActionCard({
       onClick={onClick}
       className="bg-card hover:bg-muted flex items-center gap-3 rounded-2xl border p-4 text-left transition-colors [&_svg]:size-6"
     >
-      <span className="text-primary">{icon}</span>
+      <span className="text-sidebar-primary">{icon}</span>
       <span className="flex-1 text-sm font-medium">{title}</span>
       <span className="text-muted-foreground text-xs">{hint}</span>
     </button>
