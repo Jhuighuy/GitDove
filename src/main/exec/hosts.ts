@@ -2,9 +2,10 @@ import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { Context, Effect, Layer, RcMap, Schedule, Semaphore } from "effect";
+import { Context, Data, Effect, Layer, RcMap, Schedule, Semaphore } from "effect";
 import { gitEnv, remoteGitEnv } from "./environment";
 import { CommandError, SshError } from "./errors";
+import { MAX_RUNNER_STDIN, Runner, RUNNER_SCRIPT, runOnRunner } from "./runner";
 import { shellJoin, shellQuote } from "./shell";
 import { spawn, type SpawnOptions, type SpawnResult } from "./spawn";
 
@@ -155,28 +156,77 @@ const acquireMaster = (host: string) =>
       }),
   ).pipe(Effect.map(({ master }) => master));
 
+/** Returns the host's master connection, reconnecting if it died. */
+const liveMaster = (masters: RcMap.RcMap<string, SshMaster, SshError>, host: string) =>
+  Effect.gen(function* () {
+    const master = yield* RcMap.get(masters, host);
+    if (master.isAlive()) return master;
+    yield* RcMap.invalidate(masters, host);
+    return yield* RcMap.get(masters, host);
+  });
+
+/** The remote runner could not be started; commands fall back to plain sessions. */
+class RunnerUnavailable extends Data.TaggedError("RunnerUnavailable")<{
+  readonly message: string;
+}> {}
+
+/** Starts a persistent command runner (see `runner.ts`) over the host's master connection. */
+const acquireRunner = (host: string, masters: RcMap.RcMap<string, SshMaster, SshError>) =>
+  Effect.acquireRelease(
+    Effect.gen(function* () {
+      const master = yield* liveMaster(masters, host);
+      const runner = yield* Runner.start("ssh", [
+        ...baseSshOptions,
+        ...muxOptions(master.controlPath),
+        "-T",
+        host,
+        "--",
+        `exec /bin/sh -c ${shellQuote(RUNNER_SCRIPT)}`,
+      ]).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.mapError(
+          (e) =>
+            new RunnerUnavailable({ message: `Could not start runner on ${host}: ${e.message}` }),
+        ),
+      );
+      yield* Effect.logInfo(`ssh runner started: ${host}`);
+      return runner;
+    }),
+    (runner) => Effect.sync(() => runner.close()),
+  );
+
 const remoteCommand = (program: string, args: readonly string[], cwd: string | undefined) => {
   const env = Object.entries(remoteGitEnv).map(([k, v]) => `${k}=${shellQuote(v)}`);
   const cmd = `exec env ${env.join(" ")} ${shellJoin([program, ...args])}`;
-  return cwd ? `cd -- ${shellQuote(cwd)} && ${cmd}` : cmd;
+  // Without a cwd, run in the home directory as a fresh SSH session would.
+  return `cd -- ${cwd ? shellQuote(cwd) : '"$HOME"'} && ${cmd}`;
 };
 
 const remoteScript = (script: string, cwd: string | undefined) => {
   const inner = cwd ? `cd -- ${shellQuote(cwd)} && ${script}` : script;
-  return `exec /bin/sh -c ${shellQuote(inner)}`;
+  return `cd -- "$HOME" && exec /bin/sh -c ${shellQuote(inner)}`;
 };
 
-const makeSshHost = (host: string, masters: RcMap.RcMap<string, SshMaster, SshError>): Host => {
-  // sshd allows 10 multiplexed sessions per connection by default (MaxSessions).
-  const sessions = Semaphore.makeUnsafe(8);
-  const run = (remote: string, display: string, options: ExecOptions) =>
+/** How long to use plain sessions after the runner failed to start. */
+const RUNNER_RETRY_MS = 60_000;
+
+const makeSshHost = (
+  host: string,
+  masters: RcMap.RcMap<string, SshMaster, SshError>,
+  runners: RcMap.RcMap<string, Runner, SshError | RunnerUnavailable>,
+): Host => {
+  // sshd allows 10 multiplexed sessions per connection by default (MaxSessions);
+  // the runner holds one of them.
+  const sessions = Semaphore.makeUnsafe(7);
+  // Commands running concurrently on the runner.
+  const runnerSlots = Semaphore.makeUnsafe(32);
+  let runnerRetryAt = 0;
+
+  /** Runs a command in its own SSH session. */
+  const viaSession = (remote: string, display: string, options: ExecOptions) =>
     Effect.scoped(
       Effect.gen(function* () {
-        let master = yield* RcMap.get(masters, host);
-        if (!master.isAlive()) {
-          yield* RcMap.invalidate(masters, host);
-          master = yield* RcMap.get(masters, host);
-        }
+        const master = yield* liveMaster(masters, host);
         const result = yield* spawn(
           "ssh",
           [...baseSshOptions, ...muxOptions(master.controlPath), "-T", host, "--", remote],
@@ -201,6 +251,39 @@ const makeSshHost = (host: string, masters: RcMap.RcMap<string, SshMaster, SshEr
       // A dropped connection gets one transparent retry over a fresh master.
       Effect.retry({ while: (e) => e._tag === "SshError", times: 1 }),
     );
+
+  /** Runs a command on the host's runner, starting it if needed. */
+  const viaRunner = (remote: string, display: string, options: ExecOptions) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let runner = yield* RcMap.get(runners, host);
+        if (!runner.alive) {
+          yield* RcMap.invalidate(runners, host);
+          runner = yield* RcMap.get(runners, host);
+        }
+        return yield* runOnRunner(runner, host, remote, { ...options, display });
+      }),
+    ).pipe(
+      runnerSlots.withPermits(1),
+      // The runner died with the command in flight (e.g. a dropped connection).
+      Effect.retry({ while: (e) => e._tag === "SshError", times: 1 }),
+      Effect.catchTag("RunnerUnavailable", (e) =>
+        Effect.gen(function* () {
+          runnerRetryAt = Date.now() + RUNNER_RETRY_MS;
+          yield* Effect.logWarning(e.message);
+          return yield* viaSession(remote, display, options);
+        }),
+      ),
+    );
+
+  const run = (remote: string, display: string, options: ExecOptions) => {
+    // Streaming output and large stdin payloads need a session of their own.
+    const useRunner =
+      options.onStdout === undefined &&
+      (options.stdin === undefined || Buffer.byteLength(options.stdin) <= MAX_RUNNER_STDIN) &&
+      Date.now() >= runnerRetryAt;
+    return useRunner ? viaRunner(remote, display, options) : viaSession(remote, display, options);
+  };
 
   return {
     id: host,
@@ -246,13 +329,17 @@ export const HostsLive = Layer.effect(
       lookup: (host: string) => acquireMaster(host),
       idleTimeToLive: "10 minutes",
     });
+    const runners = yield* RcMap.make({
+      lookup: (host: string) => acquireRunner(host, masters),
+      idleTimeToLive: "10 minutes",
+    });
     const cache = new Map<string, Host>();
     return {
       get: (id) => {
         if (id === LOCAL_HOST) return localHost;
         let h = cache.get(id);
         if (!h) {
-          h = makeSshHost(id, masters);
+          h = makeSshHost(id, masters, runners);
           cache.set(id, h);
         }
         return h;
@@ -265,7 +352,13 @@ export const HostsLive = Layer.effect(
         }
       }),
       connect: (id) =>
-        id === LOCAL_HOST ? Effect.void : Effect.scoped(RcMap.get(masters, id)).pipe(Effect.asVoid),
+        id === LOCAL_HOST
+          ? Effect.void
+          : Effect.scoped(RcMap.get(runners, id)).pipe(
+              Effect.asVoid,
+              // Commands will fall back to plain sessions.
+              Effect.catchTag("RunnerUnavailable", () => Effect.void),
+            ),
     };
   }),
 );

@@ -22,8 +22,9 @@ first-class SSH remotes.
   (`handlers`). Keep payloads structured-clone friendly.
 - Git commands go through `Repository.git()`, which adds safe `-c` options. Validate revisions and
   names (`validateRev`) and pass paths after `--` or through `--pathspec-from-file`.
-- Anything that runs remotely must stay POSIX `sh` compatible and minimize round trips (one SSH
-  session per command; sshd allows about 10 concurrent sessions per connection).
+- Anything that runs remotely must stay POSIX `sh` compatible and minimize round trips. SSH commands
+  go through a persistent remote runner (`exec/runner.ts`, one session per host); streaming output
+  (`onStdout`) and large stdin use one SSH session per command (sshd allows about 10 per connection).
 - Renderer: TanStack Query for repository data (keys in `lib/queries.ts`; staleness is driven by
   events), zustand for UI state, shadcn components in `components/ui` (generated, do not hand-edit
   heavily). User-facing operations go through `features/commands.ts`, which shows toasts on error.
