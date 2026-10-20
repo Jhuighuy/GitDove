@@ -101,8 +101,8 @@ async function render(hidden: string[] = [], snap = base) {
     ),
   );
   // Wait for both the refs and the hidden-refs queries to land.
-  const total = snapshot.refs.length;
-  const viewing = `Viewing ${total - snapshot.refs.filter((r) => isHidden(hidden, r.name)).length}/${total}`;
+  const names = snapshot.refs.filter((r) => !r.short.endsWith("/HEAD")).map((r) => r.name);
+  const viewing = `Viewing ${names.filter((n) => !isHidden(hidden, n)).length}/${names.length}`;
   await act(() =>
     vi.waitFor(() => {
       if (!document.body.textContent?.includes(viewing)) throw new Error(`Not ${viewing}`);
@@ -260,4 +260,15 @@ it("keeps the checked-out branch when soloing its folder", async () => {
   // The eye toggle still leaves it alone.
   await eye("release/");
   expect(mocks.setHidden.at(-1)).not.toContain("refs/heads/release/main");
+});
+
+it("offers to show a remote whose branches are all hidden one by one", async () => {
+  const origin = base.refs.filter((r) => r.remote === "origin").map((r) => r.name);
+  await render(origin, {
+    ...base,
+    refs: [...base.refs, ref("refs/remotes/origin/HEAD"), ref("refs/remotes/upstream/main")],
+    remotes: [...base.remotes, { name: "upstream", fetchUrl: "upstream-url", pushUrl: "" }],
+  });
+  await menu("git@example.com:repo", "Show origin branches");
+  expect(mocks.setHidden.at(-1)).toEqual([]);
 });

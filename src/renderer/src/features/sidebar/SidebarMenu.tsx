@@ -92,7 +92,9 @@ function RemoteMenu({
 }) {
   const { data: refs } = useRefs(repo);
   const prefix = `refs/remotes/${r.name}/`;
-  const members = (refs?.refs ?? []).filter((x) => x.name.startsWith(prefix)).map((x) => x.name);
+  const members = (refs?.refs ?? [])
+    .filter((x) => x.name.startsWith(prefix) && !x.short.endsWith("/HEAD"))
+    .map((x) => x.name);
   const allHidden = members.length > 0 && members.every((m) => vis.isHidden(m));
   return (
     <Menu>
