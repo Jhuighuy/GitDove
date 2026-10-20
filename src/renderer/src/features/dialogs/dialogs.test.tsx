@@ -1,15 +1,23 @@
 // @vitest-environment happy-dom
 import { act } from "react";
-import { createRoot } from "react-dom/client";
-import { beforeEach, expect, it } from "vitest";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { DialogHost, prompt } from "./dialogs";
+
+let root: Root;
 
 beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => root.render(<DialogHost />));
+});
+
+// Unmount, so a previous test's host can't render dialogs alongside the next one.
+afterEach(async () => {
+  await act(async () => root.unmount());
   document.body.innerHTML = "";
-  const root = document.createElement("div");
-  document.body.append(root);
-  await act(async () => createRoot(root).render(<DialogHost />));
 });
 
 /** Sets a controlled input's value the way typing does. */
@@ -42,6 +50,7 @@ it("returns the optional multi-line details, trimmed", async () => {
     }).then((r) => (result = r));
   });
   expect(document.body.textContent).toContain("Message (optional)");
+  expect(document.querySelectorAll("#prompt-input")).toHaveLength(1);
 
   await act(async () => {
     type(byId<HTMLInputElement>("prompt-input"), "v1.0.0");
