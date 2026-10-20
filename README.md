@@ -11,8 +11,9 @@ robustness as the top priorities.
 - **Commit graph:** virtualized, streams in incrementally, and handles 30k+ commit histories
   smoothly. Lanes are colored per branch; stashes show as single nodes.
 - **Remote repositories over SSH:** git runs on the remote host over one multiplexed SSH
-  connection (`ControlMaster`), using your `~/.ssh/config` and agent. The repository browser marks
-  git repositories as you navigate.
+  connection (`ControlMaster`), using your `~/.ssh/config` and agent. A persistent POSIX `sh`
+  runner on the remote pipelines commands, so most git calls cost a fork instead of an SSH session.
+  Nothing is installed on the remote. The repository browser marks git repositories as you navigate.
 - **Staging:** stage and unstage files or individual hunks, discard changes, and commit (with
   amend).
 - **Branches, tags and stashes:** checkout, create, rename, delete, merge, rebase, cherry-pick,
