@@ -27,7 +27,8 @@ robustness as the top priorities.
   self-hosted, detected from the remote's host) and Gravatar, and cached on disk. Commit emails
   (or their hashes, for Gravatar) are sent to those services; GitHub and GitLab are only queried
   for repositories hosted there.
-- **Over-the-air updates:** delivered from GitHub releases.
+- **Over-the-air updates:** every push to `main` becomes a GitHub release that installed apps
+  download in the background ([docs/updates.md](docs/updates.md)).
 
 ## Development
 
@@ -41,7 +42,7 @@ npm run test:coverage # unit tests with LCOV coverage in coverage/lcov.info
 npm run typecheck
 npm run lint
 npm run format
-npm run dist       # package installers into release/
+npm run dist       # package installers into release/ (macOS: arm64 only)
 ```
 
 Run the integration smoke test against real repositories:
@@ -74,9 +75,10 @@ All git work happens in the main process by spawning `git`, either locally or vi
 The renderer never touches the file system. Query results are cached with TanStack Query and
 invalidated by `repo.changed` events from the watchers, so the UI never polls.
 
-Releases: bump `version` in `package.json`, then push a `vX.Y.Z` tag. The release workflow builds
-for macOS, Windows and Linux and publishes a GitHub release that installed apps update from. Signed
-macOS builds are required for auto-update on macOS (see `electron-builder.yml`).
+Releases: every push to `main` that passes CI is packaged for macOS (Apple silicon), Windows and
+Linux and published as the latest GitHub release. Installed apps update from it (Sparkle on macOS,
+electron-updater elsewhere). See [docs/updates.md](docs/updates.md) for the pipeline, the signing
+key and how to test updates.
 
 ## License
 

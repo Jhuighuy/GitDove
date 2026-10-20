@@ -12,7 +12,7 @@ import { HostsLive } from "./exec/hosts";
 import { registerIpc } from "./ipc";
 import { Notifier, RepoSettings, ReposLive } from "./services";
 import { repoSettings, updateRepoSettings } from "./state";
-import { updater } from "./updater";
+import { checkForUpdatesMenuItem, updater } from "./updater";
 
 // Allows isolated profiles (e.g. for automated UI tests).
 if (process.env.GITDOVE_USER_DATA) app.setPath("userData", process.env.GITDOVE_USER_DATA);
@@ -45,7 +45,25 @@ const command = (c: MenuCommand) => () => broadcast("menu.command", { command: c
 
 const buildMenu = () => {
   const template: MenuItemConstructorOptions[] = [
-    ...(isMac ? [{ role: "appMenu" as const }] : []),
+    ...(isMac
+      ? [
+          {
+            role: "appMenu" as const,
+            submenu: [
+              { role: "about" as const },
+              checkForUpdatesMenuItem(),
+              { type: "separator" as const },
+              { role: "services" as const },
+              { type: "separator" as const },
+              { role: "hide" as const },
+              { role: "hideOthers" as const },
+              { role: "unhide" as const },
+              { type: "separator" as const },
+              { role: "quit" as const },
+            ],
+          },
+        ]
+      : []),
     {
       label: "File",
       submenu: [
@@ -102,6 +120,7 @@ const buildMenu = () => {
     {
       role: "help",
       submenu: [
+        ...(isMac ? [] : [checkForUpdatesMenuItem(), { type: "separator" as const }]),
         {
           label: "GitDove on GitHub",
           click: () => void shell.openExternal("https://github.com/Jhuighuy/GitDove"),
@@ -200,6 +219,7 @@ app.on("will-quit", (e) => {
   if (disposing) return;
   disposing = true;
   e.preventDefault();
+  updater.dispose();
   // Close SSH masters and file watchers before exiting.
   void runtime
     .dispose()
