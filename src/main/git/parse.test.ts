@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseDiff, parseNameStatus, parseNumstat, parseRefs, parseStatus } from "./parse";
+import {
+  parseDiff,
+  parseFileVersions,
+  parseNameStatus,
+  parseNumstat,
+  parseRefs,
+  parseStatus,
+} from "./parse";
 
 describe("parseStatus", () => {
   it("splits staged, unstaged, untracked and renamed entries", () => {
@@ -82,5 +89,36 @@ describe("parseDiff", () => {
     ]);
     expect(d.hunks[1]).toMatchObject({ oldStart: 10, oldLines: 1, newStart: 11, newLines: 1 });
     expect(d.hunks[1]!.lines[1]!.kind).toBe("meta");
+  });
+});
+
+describe("parseFileVersions", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const dec = (c: { kind: string; bytes?: Uint8Array }) =>
+    c.bytes ? new TextDecoder().decode(c.bytes) : c.kind;
+
+  it("splits framed blobs and the trailing working tree file", () => {
+    const v = parseFileVersions(enc("blob 4\nab\ncfile\nrest\nof it"), false);
+    expect([dec(v.old), dec(v.new)]).toEqual(["ab\nc", "rest\nof it"]);
+  });
+
+  it("reads missing and large sides", () => {
+    expect(parseFileVersions(enc("missing\nlarge 123\n"), false)).toEqual({
+      old: { kind: "missing" },
+      new: { kind: "large", size: 123 },
+    });
+  });
+
+  it("treats a truncated working tree file as large", () => {
+    expect(parseFileVersions(enc("missing\nfile\nxyz"), true).new).toEqual({
+      kind: "large",
+      size: 3,
+    });
+  });
+
+  it("rejects malformed output", () => {
+    expect(() => parseFileVersions(enc("blob 10\nab"), false)).toThrow(/Malformed/);
+    expect(() => parseFileVersions(enc("what\n"), false)).toThrow(/Malformed/);
+    expect(() => parseFileVersions(enc("missing"), false)).toThrow(/Malformed/);
   });
 });

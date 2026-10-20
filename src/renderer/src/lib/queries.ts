@@ -35,6 +35,9 @@ export const keys = {
     ["repo", repo, "graph", "page", version, page] as const,
   commit: (repo: RepoId, hash: string) => ["repo", repo, "commit", hash] as const,
   diff: (repo: RepoId, target: DiffTarget) => ["repo", repo, "diff", target] as const,
+  // Under "diff" so that it goes stale together with diffs.
+  fileVersions: (repo: RepoId, target: DiffTarget) =>
+    ["repo", repo, "diff", target, "versions"] as const,
   search: (repo: RepoId, q: string) => ["repo", repo, "search", q] as const,
 };
 
@@ -78,6 +81,14 @@ export const useDiff = (repo: RepoId, target: DiffTarget | null) =>
     enabled: target !== null,
     placeholderData: keepPreviousData,
     gcTime: 30 * 1000,
+  });
+
+export const useFileVersions = (repo: RepoId, target: DiffTarget) =>
+  useQuery({
+    queryKey: keys.fileVersions(repo, target),
+    queryFn: () => api("repo.fileVersions", repo, target),
+    // Whole files can be large: drop them as soon as no view shows them.
+    gcTime: 0,
   });
 
 export const GRAPH_PAGE = 256;

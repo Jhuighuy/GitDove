@@ -6,7 +6,9 @@ import type {
   DiffHunk,
   DiffLine,
   FileChange,
+  FileContent,
   FileDiff,
+  FileVersions,
   Ref,
   Remote,
   Stash,
@@ -345,4 +347,47 @@ export const parseDiff = (
   }
   flush();
   return { path, oldPath, binary, hunks, truncated };
+};
+
+// ---------------------------------------------------------------------------
+// File versions
+// ---------------------------------------------------------------------------
+
+/**
+ * Parses the output of `FILE_VERSIONS_SCRIPT`: for each side a header line
+ * (`missing`, `large <size>`, `blob <size>` followed by that many bytes, or
+ * `file` followed by the rest of the output), old side first.
+ */
+export const parseFileVersions = (out: Uint8Array, truncated: boolean): FileVersions => {
+  // Sides are copied out so that they do not keep the whole output alive.
+  let pos = 0;
+  const side = (): FileContent => {
+    const nl = out.indexOf(10, pos);
+    if (nl < 0) throw new Error("Malformed file versions output");
+    const [kind, size] = new TextDecoder().decode(out.subarray(pos, nl)).split(" ");
+    pos = nl + 1;
+    switch (kind) {
+      case "missing":
+        return { kind: "missing" };
+      case "large":
+        return { kind: "large", size: Number(size) };
+      case "blob": {
+        const end = pos + Number(size);
+        if (end > out.length) throw new Error("Malformed file versions output");
+        const bytes = new Uint8Array(out.subarray(pos, end));
+        pos = end;
+        return { kind: "blob", bytes };
+      }
+      case "file": {
+        // The working tree file is always last; it was cut short if it grew past the limit.
+        const bytes = new Uint8Array(out.subarray(pos));
+        pos = out.length;
+        return truncated ? { kind: "large", size: bytes.length } : { kind: "blob", bytes };
+      }
+      default:
+        throw new Error(`Malformed file versions output: ${kind}`);
+    }
+  };
+  const old = side();
+  return { old, new: side() };
 };

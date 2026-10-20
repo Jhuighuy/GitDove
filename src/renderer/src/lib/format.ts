@@ -44,3 +44,17 @@ export const dirname = (path: string): string => {
   const i = path.lastIndexOf("/");
   return i < 0 ? "" : path.slice(0, i);
 };
+
+const BYTE_UNITS = ["KB", "MB", "GB"];
+
+/** Formats a byte count, e.g. `512 B`, `4.2 KB`, `13 MB`. */
+export const formatBytes = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  let n = bytes / 1024;
+  let unit = 0;
+  while (n >= 1024 && unit < BYTE_UNITS.length - 1) {
+    n /= 1024;
+    unit++;
+  }
+  return `${n < 10 ? n.toFixed(1) : Math.round(n)} ${BYTE_UNITS[unit]}`;
+};

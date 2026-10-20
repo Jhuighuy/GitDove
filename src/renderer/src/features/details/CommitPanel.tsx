@@ -1,4 +1,4 @@
-import type { RepoId } from "@shared/domain";
+import { type RepoId, renameSource } from "@shared/domain";
 import { IconCopy } from "@tabler/icons-react";
 import { Spinner } from "@/components/ui/spinner";
 import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
@@ -107,7 +107,7 @@ export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
         <FileList
           files={data.files}
           selectedPath={diff?.kind === "commit" && diff.hash === hash ? diff.path : null}
-          onOpen={(f) => openDiff(repo, { kind: "commit", hash, path: f.path })}
+          onOpen={(f) => openDiff(repo, { kind: "commit", hash, path: f.path, ...renameSource(f) })}
         />
       </div>
     </div>

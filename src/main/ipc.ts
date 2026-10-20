@@ -160,6 +160,7 @@ export const handlers: Handlers = {
   "repo.status": (id) => withRepo(id, (r) => r.status()),
   "repo.commitDetails": (id, hash) => withRepo(id, (r) => r.commitDetails(hash)),
   "repo.diff": (id, target) => withRepo(id, (r) => r.diff(target)),
+  "repo.fileVersions": (id, target) => withRepo(id, (r) => r.fileVersions(target)),
 
   // Working tree -------------------------------------------------------------------
   "repo.stage": (id, paths) => withRepo(id, (r) => r.stage(paths)),

@@ -182,6 +182,10 @@ export interface FileChange {
   readonly binary: boolean;
 }
 
+/** Where a renamed file came from, for a `DiffTarget`. Copies diff as added files. */
+export const renameSource = (f: FileChange): { readonly oldPath?: string } =>
+  f.kind === "renamed" && f.oldPath ? { oldPath: f.oldPath } : {};
+
 export interface WorkingStatus {
   readonly staged: readonly FileChange[];
   readonly unstaged: readonly FileChange[];
@@ -210,11 +214,16 @@ export interface CommitDetails {
 // Diffs
 // ---------------------------------------------------------------------------
 
-/** What a diff is computed against. */
+/** What a diff is computed against. `oldPath` is where a renamed or copied file came from. */
 export type DiffTarget =
   | { readonly kind: "unstaged"; readonly path: string; readonly untracked?: boolean }
-  | { readonly kind: "staged"; readonly path: string }
-  | { readonly kind: "commit"; readonly hash: string; readonly path: string };
+  | { readonly kind: "staged"; readonly path: string; readonly oldPath?: string }
+  | {
+      readonly kind: "commit";
+      readonly hash: string;
+      readonly path: string;
+      readonly oldPath?: string;
+    };
 
 export type DiffLineKind = "context" | "add" | "del" | "meta";
 
@@ -241,6 +250,19 @@ export interface FileDiff {
   readonly hunks: readonly DiffHunk[];
   /** True when the diff was too large and got truncated. */
   readonly truncated: boolean;
+}
+
+/** One side of a file change, as raw bytes. */
+export type FileContent =
+  | { readonly kind: "missing" }
+  /** Larger than we transfer; `size` is in bytes. */
+  | { readonly kind: "large"; readonly size: number }
+  | { readonly kind: "blob"; readonly bytes: Uint8Array };
+
+/** Both sides of a diff target, for rendered (non-textual) views. */
+export interface FileVersions {
+  readonly old: FileContent;
+  readonly new: FileContent;
 }
 
 // ---------------------------------------------------------------------------

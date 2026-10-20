@@ -11,6 +11,7 @@ import type {
   DiffTarget,
   DirListing,
   FileDiff,
+  FileVersions,
   GraphInfo,
   GraphRow,
   RefsSnapshot,
@@ -53,6 +54,7 @@ export interface Api {
   "repo.status": (repo: RepoId) => WorkingStatus;
   "repo.commitDetails": (repo: RepoId, hash: string) => CommitDetails;
   "repo.diff": (repo: RepoId, target: DiffTarget) => FileDiff;
+  "repo.fileVersions": (repo: RepoId, target: DiffTarget) => FileVersions;
 
   // Working tree
   "repo.stage": (repo: RepoId, paths: string[]) => void;

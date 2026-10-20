@@ -1,7 +1,7 @@
 import { buildPatch, hunkPatch } from "@shared/diff/patch";
 import { type Range, wordDiff, type WordDiff } from "@shared/diff/words";
 import type { DiffTarget, RepoId } from "@shared/domain";
-import { IconLayoutColumns, IconLayoutRows, IconX } from "@tabler/icons-react";
+import { IconCode, IconLayoutColumns, IconLayoutRows, IconPhoto, IconX } from "@tabler/icons-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTheme } from "next-themes";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -15,7 +15,9 @@ import { cn } from "@/lib/utils";
 import { type DiffMode, useLayout, useRepoUiStore } from "@/stores/repo-ui";
 import type { ThemeKind } from "./highlight-protocol";
 import { type DocHighlighter, tokenStyle, useHighlighter } from "./highlight";
+import { ImageDiff } from "./ImageDiff";
 import { buildModel, type DiffModel, isChange, type Line } from "./model";
+import { type DiffViewId, fileKind, viewFor } from "./views";
 
 const LINE_HEIGHT = 20;
 const HUNK_HEIGHT = 28;
@@ -27,8 +29,13 @@ interface PatchAction {
   readonly destructive: boolean;
 }
 
-const actionsFor = (target: DiffTarget, what: "Hunk" | "Lines"): PatchAction[] =>
-  target.kind === "unstaged" && !target.untracked
+/**
+ * Hunk and line actions. A rename has none: its patch moves the file between
+ * paths, so applying part of it in reverse would undo the whole rename.
+ */
+const actionsFor = (target: DiffTarget, what: "Hunk" | "Lines"): PatchAction[] => {
+  if (target.kind !== "unstaged" && target.oldPath) return [];
+  return target.kind === "unstaged" && !target.untracked
     ? [
         { label: `Discard ${what}`, reverse: true, cached: false, destructive: true },
         { label: `Stage ${what}`, reverse: false, cached: true, destructive: false },
@@ -36,28 +43,34 @@ const actionsFor = (target: DiffTarget, what: "Hunk" | "Lines"): PatchAction[] =
     : target.kind === "staged"
       ? [{ label: `Unstage ${what}`, reverse: true, cached: true, destructive: false }]
       : [];
+};
 
 const EMPTY_SELECTION: ReadonlySet<number> = new Set();
 
+/** Whether Escape belongs to a field being typed in (a slider does not count). */
+const isTextEntry = (el: EventTarget | null) =>
+  el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && el.type !== "range");
+
 export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget }) {
-  const { data, error, isPending, isPlaceholderData } = useDiff(repo, target);
+  const kind = useMemo(() => fileKind(target.path), [target.path]);
+  const view = useLayout((s) => viewFor(kind, s.diffViews));
+  const setView = useLayout((s) => s.setDiffView);
+  const textual = view === "diff";
+  const { data, error, isPending, isPlaceholderData } = useDiff(repo, textual ? target : null);
   const model = useMemo(() => (data ? buildModel(data) : null), [data]);
   const mode = useLayout((s) => s.diffMode);
   const setMode = useLayout((s) => s.setDiffMode);
   const close = () => useRepoUiStore.getState().openDiff(repo, null);
 
-  // Selected line ids, for line-level staging. A new diff starts afresh.
+  // Selected line ids, for line-level staging. A new diff, or another view, starts afresh.
   const [selection, setSelection] = useState(EMPTY_SELECTION);
-  useEffect(() => setSelection(EMPTY_SELECTION), [model]);
+  useEffect(() => setSelection(EMPTY_SELECTION), [model, textual]);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (
-        e.key === "Escape" &&
-        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
-      ) {
+      if (e.key === "Escape" && !isTextEntry(e.target)) {
         if (selectionRef.current.size > 0) setSelection(EMPTY_SELECTION);
         else close();
       }
@@ -106,74 +119,154 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
         <span className="text-muted-foreground bg-muted shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase">
           {target.kind === "commit" ? shortHash(target.hash) : target.kind}
         </span>
-        {(isPending || isPlaceholderData) && <Spinner className="size-3.5" />}
+        {textual && (isPending || isPlaceholderData) && <Spinner className="size-3.5" />}
         <span className="ml-auto flex shrink-0 items-center gap-1">
-          {selection.size > 0 && (
-            <>
-              <span className="text-muted-foreground mr-1 text-[11px]">
-                {selection.size} {selection.size === 1 ? "line" : "lines"} selected
-              </span>
-              {lineActions.map((a) => (
-                <Button
-                  key={a.label}
-                  size="xs"
-                  variant={a.destructive ? "destructive" : "secondary"}
-                  className="h-6 rounded-md px-2 text-[11px]"
-                  onClick={() => applyLines(a)}
-                >
-                  {a.label}
-                </Button>
-              ))}
-              <span className="bg-border mx-1 h-4 w-px" />
-            </>
+          {textual && selection.size > 0 && (
+            <SelectionBar count={selection.size} actions={lineActions} onAction={applyLines} />
           )}
-          <ModeToggle mode={mode} setMode={setMode} />
+          {kind.views.length > 1 && (
+            <ViewToggle views={kind.views} view={view} setView={(v) => setView(kind.id, v)} />
+          )}
+          <ModeToggle mode={mode} setMode={setMode} textual={textual} />
           <Button variant="ghost" size="icon-xs" onClick={close} title="Close (Esc)">
             <IconX />
           </Button>
         </span>
       </div>
-      {error ? (
-        <div className="text-destructive p-4 text-sm">{error.message}</div>
-      ) : model ? (
-        model.diff.binary ? (
-          <div className="text-muted-foreground p-6 text-sm">Binary file — no textual diff.</div>
-        ) : model.diff.hunks.length === 0 ? (
-          <div className="text-muted-foreground p-6 text-sm">No changes.</div>
-        ) : (
-          <DiffBody
-            model={model}
-            mode={mode}
-            actions={hunkActions}
-            onAction={applyHunk}
-            selectable={lineActions.length > 0}
-            selection={selection}
-            setSelection={setSelection}
-          />
-        )
-      ) : null}
+      {textual ? (
+        <TextDiff
+          error={error}
+          model={model}
+          mode={mode}
+          actions={hunkActions}
+          onAction={applyHunk}
+          selectable={lineActions.length > 0}
+          selection={selection}
+          setSelection={setSelection}
+        />
+      ) : (
+        <ImageDiff repo={repo} target={target} mime={kind.mime!} mode={mode} />
+      )}
     </div>
   );
 }
 
-function ModeToggle({ mode, setMode }: { mode: DiffMode; setMode: (m: DiffMode) => void }) {
-  const item = (m: DiffMode, title: string, icon: React.ReactNode) => (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      title={title}
-      aria-pressed={mode === m}
-      className={cn("rounded-sm", mode === m && "bg-muted text-foreground")}
-      onClick={() => setMode(m)}
-    >
-      {icon}
-    </Button>
+function SelectionBar({
+  count,
+  actions,
+  onAction,
+}: Readonly<{ count: number; actions: PatchAction[]; onAction: (a: PatchAction) => void }>) {
+  return (
+    <>
+      <span className="text-muted-foreground mr-1 text-[11px]">
+        {count} {count === 1 ? "line" : "lines"} selected
+      </span>
+      {actions.map((a) => (
+        <Button
+          key={a.label}
+          size="xs"
+          variant={a.destructive ? "destructive" : "secondary"}
+          className="h-6 rounded-md px-2 text-[11px]"
+          onClick={() => onAction(a)}
+        >
+          {a.label}
+        </Button>
+      ))}
+      <span className="bg-border mx-1 h-4 w-px" />
+    </>
   );
+}
+
+type DiffBodyProps = Parameters<typeof DiffBody>[0];
+
+function TextDiff({
+  error,
+  model,
+  ...body
+}: Readonly<Omit<DiffBodyProps, "model"> & { error: Error | null; model: DiffModel | null }>) {
+  if (error) return <div className="text-destructive p-4 text-sm">{error.message}</div>;
+  if (!model) return null;
+  if (model.diff.binary)
+    return <div className="text-muted-foreground p-6 text-sm">Binary file — no textual diff.</div>;
+  if (model.diff.hunks.length === 0)
+    return <div className="text-muted-foreground p-6 text-sm">No changes.</div>;
+  return <DiffBody model={model} {...body} />;
+}
+
+const VIEWS: Record<DiffViewId, { title: string; icon: React.ReactNode }> = {
+  diff: { title: "Text diff", icon: <IconCode /> },
+  image: { title: "Image", icon: <IconPhoto /> },
+};
+
+function Segmented<T extends string>({
+  items,
+  value,
+  onChange,
+}: Readonly<{
+  items: readonly { value: T; title: string; icon: React.ReactNode }[];
+  value: T;
+  onChange: (value: T) => void;
+}>) {
   return (
     <span className="flex items-center rounded-md border p-px">
-      {item("unified", "Unified view", <IconLayoutRows />)}
-      {item("split", "Split view", <IconLayoutColumns />)}
+      {items.map((item) => (
+        <Button
+          key={item.value}
+          variant="ghost"
+          size="icon-xs"
+          title={item.title}
+          aria-label={item.title}
+          aria-pressed={value === item.value}
+          className={cn("rounded-sm", value === item.value && "bg-muted text-foreground")}
+          onClick={() => onChange(item.value)}
+        >
+          {item.icon}
+        </Button>
+      ))}
     </span>
+  );
+}
+
+function ViewToggle({
+  views,
+  view,
+  setView,
+}: Readonly<{
+  views: readonly DiffViewId[];
+  view: DiffViewId;
+  setView: (v: DiffViewId) => void;
+}>) {
+  return (
+    <Segmented
+      items={views.map((v) => ({ value: v, ...VIEWS[v] }))}
+      value={view}
+      onChange={setView}
+    />
+  );
+}
+
+function ModeToggle({
+  mode,
+  setMode,
+  textual,
+}: Readonly<{
+  mode: DiffMode;
+  setMode: (m: DiffMode) => void;
+  textual: boolean;
+}>) {
+  return (
+    <Segmented
+      items={[
+        { value: "unified", title: textual ? "Unified view" : "Swipe", icon: <IconLayoutRows /> },
+        {
+          value: "split",
+          title: textual ? "Split view" : "Side by side",
+          icon: <IconLayoutColumns />,
+        },
+      ]}
+      value={mode}
+      onChange={setMode}
+    />
   );
 }
 
