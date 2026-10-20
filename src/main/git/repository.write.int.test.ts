@@ -101,6 +101,19 @@ describe.skipIf(!process.env.GITDOVE_INT_WRITE)("Repository write ops (integrati
             repo.setHiddenRefs(["refs/heads/"]); // HEAD stays visible
             expect((yield* waitGraph(repo, after.version)).count).toBeGreaterThan(0);
 
+            // Tags: a message makes an annotated tag, none a lightweight one.
+            yield* repo.createTag("v1-annotated", "HEAD", "Release notes\n\nDetails.");
+            yield* repo.createTag("v1-light", "HEAD", null);
+            const tagType = (name: string) =>
+              repo
+                .gitText(["cat-file", "-t", `refs/tags/${name}`])
+                .pipe(Effect.map((t) => t.trim()));
+            expect(yield* tagType("v1-annotated")).toBe("tag");
+            expect(yield* tagType("v1-light")).toBe("commit");
+            expect(
+              (yield* repo.gitText(["tag", "-l", "--format=%(contents)", "v1-annotated"])).trim(),
+            ).toBe("Release notes\n\nDetails.");
+
             // Worktrees.
             yield* repo.addWorktree(`${dir}-wt`, "side", null);
             expect((yield* repo.refs()).worktrees.map((w) => w.branch)).toContain("side");
