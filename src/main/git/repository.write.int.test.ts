@@ -102,7 +102,11 @@ describe.skipIf(!process.env.GITDOVE_INT_WRITE)("Repository write ops (integrati
             expect((yield* waitGraph(repo, after.version)).count).toBeGreaterThan(0);
 
             // Tags: a message makes an annotated tag, none a lightweight one.
-            yield* repo.createTag("v1-annotated", "HEAD", "Release notes\n\nDetails.");
+            yield* repo.createTag(
+              "v1-annotated",
+              "HEAD",
+              "Release notes\n\n# Highlights\nDetails.",
+            );
             yield* repo.createTag("v1-light", "HEAD", null);
             const tagType = (name: string) =>
               repo
@@ -112,7 +116,7 @@ describe.skipIf(!process.env.GITDOVE_INT_WRITE)("Repository write ops (integrati
             expect(yield* tagType("v1-light")).toBe("commit");
             expect(
               (yield* repo.gitText(["tag", "-l", "--format=%(contents)", "v1-annotated"])).trim(),
-            ).toBe("Release notes\n\nDetails.");
+            ).toBe("Release notes\n\n# Highlights\nDetails.");
 
             // Worktrees.
             yield* repo.addWorktree(`${dir}-wt`, "side", null);

@@ -63,6 +63,18 @@ it("returns the optional multi-line details, trimmed", async () => {
     );
   });
   expect(result).toBeUndefined();
+  // Nor does Cmd+Enter while an input method is still composing.
+  await act(async () => {
+    byId("prompt-details").dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        metaKey: true,
+        isComposing: true,
+        bubbles: true,
+      }),
+    );
+  });
+  expect(result).toBeUndefined();
   await act(async () => {
     byId("prompt-details").dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
