@@ -167,3 +167,32 @@
     background: transparent;
   }
 }
+
+/* Transparent areas of images show as a checkerboard. */
+@utility bg-checker {
+  background-color: var(--background);
+  background-image: conic-gradient(
+    var(--muted) 25%,
+    transparent 0 50%,
+    var(--muted) 0 75%,
+    transparent 0
+  );
+  background-size: 16px 16px;
+}
+
+/* A transparent range input over a before/after swipe; the thumb is 1px so clicks map exactly. */
+@utility swipe-range {
+  appearance: none;
+  background: transparent;
+  cursor: ew-resize;
+  &::-webkit-slider-runnable-track {
+    height: 100%;
+    background: transparent;
+  }
+  &::-webkit-slider-thumb {
+    appearance: none;
+    width: 1px;
+    height: 100%;
+    background: transparent;
+  }
+}

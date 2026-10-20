@@ -1,0 +1,106 @@
+// @vitest-environment happy-dom
+import type { DiffTarget, FileDiff } from "@shared/domain";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useLayout, useRepoUiStore } from "@/stores/repo-ui";
+import { DiffView } from "./DiffView";
+
+const mocks = vi.hoisted(() => ({ calls: [] as string[] }));
+
+vi.mock("@/lib/api", () => ({
+  ApiError: class extends Error {},
+  api: async (method: string, _repo: string, target: DiffTarget): Promise<FileDiff> => {
+    mocks.calls.push(`${method} ${target.path}`);
+    return { path: target.path, oldPath: null, binary: false, hunks: [], truncated: false };
+  },
+}));
+vi.mock("./ImageDiff", () => ({
+  ImageDiff: ({ mime, mode }: { mime: string; mode: string }) => (
+    <div data-testid="image">
+      {mime} {mode}
+    </div>
+  ),
+}));
+
+let root: Root;
+let container: HTMLElement;
+
+beforeEach(() => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  mocks.calls = [];
+  useLayout.setState({ diffMode: "unified", diffViews: {} });
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
+
+async function render(path: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <DiffView repo="local:/repo" target={{ kind: "unstaged", path }} />
+      </QueryClientProvider>,
+    ),
+  );
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+}
+
+const button = (name: string) =>
+  container.querySelector<HTMLButtonElement>(`[aria-label="${name}"]`);
+const click = (name: string) => act(() => button(name)!.click());
+
+it("shows text files as a diff without a view toggle", async () => {
+  await render("a.ts");
+  expect(button("Image")).toBeNull();
+  expect(button("Unified view")).not.toBeNull();
+  expect(container.textContent).toContain("No changes.");
+  expect(mocks.calls).toEqual(["repo.diff a.ts"]);
+});
+
+it("shows raster images rendered, without fetching a text diff", async () => {
+  await render("a.png");
+  expect(container.querySelector("[data-testid=image]")?.textContent).toBe("image/png unified");
+  expect(button("Text diff")).toBeNull();
+  // The layout toggle switches between swipe and side by side.
+  await click("Side by side");
+  expect(container.querySelector("[data-testid=image]")?.textContent).toBe("image/png split");
+  expect(mocks.calls).toEqual([]);
+});
+
+it("switches SVGs between text and image, and remembers the choice", async () => {
+  await render("a.svg");
+  expect(button("Text diff")?.getAttribute("aria-pressed")).toBe("true");
+  expect(container.querySelector("[data-testid=image]")).toBeNull();
+  await click("Image");
+  expect(container.querySelector("[data-testid=image]")?.textContent).toBe("image/svg+xml unified");
+  expect(useLayout.getState().diffViews).toEqual({ svg: "image" });
+  await render("b.svg");
+  expect(button("Image")?.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("closes on Escape, also from the swipe slider but not from text fields", async () => {
+  useRepoUiStore.getState().openDiff("local:/repo", { kind: "unstaged", path: "a.png" });
+  await render("a.png");
+  const press = (target: HTMLElement) =>
+    act(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  const diff = () => useRepoUiStore.getState().byRepo["local:/repo"]?.diff ?? null;
+
+  const text = document.createElement("input");
+  container.append(text);
+  press(text);
+  expect(diff()).not.toBeNull();
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  container.append(slider);
+  press(slider);
+  expect(diff()).toBeNull();
+});

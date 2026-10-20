@@ -419,10 +419,10 @@ export class Repository {
         try: () => parseFileVersions(r.stdout, r.truncated),
         catch: (e) =>
           new CommandError({
-            message: String(e),
+            message: e instanceof Error ? e.message : String(e),
             command: "file versions",
-            exitCode: 0,
-            stderr: "",
+            exitCode: r.exitCode,
+            stderr: r.stderr,
           }),
       });
     });

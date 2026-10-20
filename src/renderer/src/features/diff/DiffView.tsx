@@ -1,7 +1,7 @@
 import { buildPatch, hunkPatch } from "@shared/diff/patch";
 import { type Range, wordDiff, type WordDiff } from "@shared/diff/words";
 import type { DiffTarget, RepoId } from "@shared/domain";
-import { IconLayoutColumns, IconLayoutRows, IconX } from "@tabler/icons-react";
+import { IconCode, IconLayoutColumns, IconLayoutRows, IconPhoto, IconX } from "@tabler/icons-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTheme } from "next-themes";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
@@ -15,7 +15,9 @@ import { cn } from "@/lib/utils";
 import { type DiffMode, useLayout, useRepoUiStore } from "@/stores/repo-ui";
 import type { ThemeKind } from "./highlight-protocol";
 import { type DocHighlighter, tokenStyle, useHighlighter } from "./highlight";
+import { ImageDiff } from "./ImageDiff";
 import { buildModel, type DiffModel, isChange, type Line } from "./model";
+import { type DiffViewId, fileKind, viewFor } from "./views";
 
 const LINE_HEIGHT = 20;
 const HUNK_HEIGHT = 28;
@@ -39,8 +41,16 @@ const actionsFor = (target: DiffTarget, what: "Hunk" | "Lines"): PatchAction[] =
 
 const EMPTY_SELECTION: ReadonlySet<number> = new Set();
 
+/** Whether Escape belongs to a field being typed in (a slider does not count). */
+const isTextEntry = (el: EventTarget | null) =>
+  el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && el.type !== "range");
+
 export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget }) {
-  const { data, error, isPending, isPlaceholderData } = useDiff(repo, target);
+  const kind = useMemo(() => fileKind(target.path), [target.path]);
+  const view = useLayout((s) => viewFor(kind, s.diffViews));
+  const setView = useLayout((s) => s.setDiffView);
+  const textual = view === "diff";
+  const { data, error, isPending, isPlaceholderData } = useDiff(repo, textual ? target : null);
   const model = useMemo(() => (data ? buildModel(data) : null), [data]);
   const mode = useLayout((s) => s.diffMode);
   const setMode = useLayout((s) => s.setDiffMode);
@@ -54,10 +64,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (
-        e.key === "Escape" &&
-        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
-      ) {
+      if (e.key === "Escape" && !isTextEntry(e.target)) {
         if (selectionRef.current.size > 0) setSelection(EMPTY_SELECTION);
         else close();
       }
@@ -106,7 +113,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
         <span className="text-muted-foreground bg-muted shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase">
           {target.kind === "commit" ? shortHash(target.hash) : target.kind}
         </span>
-        {(isPending || isPlaceholderData) && <Spinner className="size-3.5" />}
+        {textual && (isPending || isPlaceholderData) && <Spinner className="size-3.5" />}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {selection.size > 0 && (
             <>
@@ -127,13 +134,18 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
               <span className="bg-border mx-1 h-4 w-px" />
             </>
           )}
-          <ModeToggle mode={mode} setMode={setMode} />
+          {kind.views.length > 1 && (
+            <ViewToggle views={kind.views} view={view} setView={(v) => setView(kind.id, v)} />
+          )}
+          <ModeToggle mode={mode} setMode={setMode} textual={textual} />
           <Button variant="ghost" size="icon-xs" onClick={close} title="Close (Esc)">
             <IconX />
           </Button>
         </span>
       </div>
-      {error ? (
+      {!textual ? (
+        <ImageDiff repo={repo} target={target} mime={kind.mime!} mode={mode} />
+      ) : error ? (
         <div className="text-destructive p-4 text-sm">{error.message}</div>
       ) : model ? (
         model.diff.binary ? (
@@ -156,24 +168,80 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   );
 }
 
-function ModeToggle({ mode, setMode }: { mode: DiffMode; setMode: (m: DiffMode) => void }) {
-  const item = (m: DiffMode, title: string, icon: React.ReactNode) => (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      title={title}
-      aria-pressed={mode === m}
-      className={cn("rounded-sm", mode === m && "bg-muted text-foreground")}
-      onClick={() => setMode(m)}
-    >
-      {icon}
-    </Button>
-  );
+const VIEWS: Record<DiffViewId, { title: string; icon: React.ReactNode }> = {
+  diff: { title: "Text diff", icon: <IconCode /> },
+  image: { title: "Image", icon: <IconPhoto /> },
+};
+
+function Segmented<T extends string>({
+  items,
+  value,
+  onChange,
+}: {
+  items: readonly { value: T; title: string; icon: React.ReactNode }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
   return (
     <span className="flex items-center rounded-md border p-px">
-      {item("unified", "Unified view", <IconLayoutRows />)}
-      {item("split", "Split view", <IconLayoutColumns />)}
+      {items.map((item) => (
+        <Button
+          key={item.value}
+          variant="ghost"
+          size="icon-xs"
+          title={item.title}
+          aria-label={item.title}
+          aria-pressed={value === item.value}
+          className={cn("rounded-sm", value === item.value && "bg-muted text-foreground")}
+          onClick={() => onChange(item.value)}
+        >
+          {item.icon}
+        </Button>
+      ))}
     </span>
+  );
+}
+
+function ViewToggle({
+  views,
+  view,
+  setView,
+}: {
+  views: readonly DiffViewId[];
+  view: DiffViewId;
+  setView: (v: DiffViewId) => void;
+}) {
+  return (
+    <Segmented
+      items={views.map((v) => ({ value: v, ...VIEWS[v] }))}
+      value={view}
+      onChange={setView}
+    />
+  );
+}
+
+function ModeToggle({
+  mode,
+  setMode,
+  textual,
+}: {
+  mode: DiffMode;
+  setMode: (m: DiffMode) => void;
+  textual: boolean;
+}) {
+  return (
+    <Segmented
+      items={[
+        { value: "unified", title: textual ? "Unified view" : "Swipe", icon: <IconLayoutRows /> },
+        {
+          value: "split",
+          title: textual ? "Split view" : "Side by side",
+          icon: <IconLayoutColumns />,
+        },
+      ]}
+      value={mode}
+      onChange={setMode}
+    />
   );
 }
 
