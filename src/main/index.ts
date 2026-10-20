@@ -10,6 +10,9 @@ import { registerIpc } from "./ipc";
 import { Notifier, ReposLive } from "./services";
 import { updater } from "./updater";
 
+// Allows isolated profiles (e.g. for automated UI tests).
+if (process.env.GITDOVE_USER_DATA) app.setPath("userData", process.env.GITDOVE_USER_DATA);
+
 log.initialize();
 log.transports.file.level = "info";
 
