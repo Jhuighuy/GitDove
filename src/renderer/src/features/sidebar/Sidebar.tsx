@@ -1,43 +1,47 @@
-import type { Ref, RepoId, Stash, Submodule, Worktree } from "@shared/domain";
+import type { Ref, Remote, RepoId, Stash, Submodule, Worktree } from "@shared/domain";
+import { stashKey } from "@shared/visibility";
 import {
   IconArchive,
   IconBox,
-  IconChevronDown,
+  IconBrandBitbucket,
+  IconBrandGithub,
+  IconBrandGitlab,
   IconCloud,
   IconDeviceLaptop,
+  IconEye,
+  IconEyeOff,
   IconFolders,
   IconGitBranch,
   IconSearch,
+  IconSquareCheckFilled,
   IconTag,
 } from "@tabler/icons-react";
-import { useMemo, useState } from "react";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { type ReactNode, useMemo, useState } from "react";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { useRefs, useRepoInfo } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { commands } from "../commands";
+import { SectionStack } from "./SectionStack";
+import { SidebarMenu, type SidebarTarget } from "./SidebarMenu";
+import { allVisibilityNames, useVisibility } from "./visibility";
 
-type MenuTarget = { kind: "ref"; ref: Ref } | { kind: "stash"; stash: Stash } | null;
+type Visibility = "visible" | "hidden" | "partial" | "head" | "none";
 
 export function Sidebar({ repo }: { repo: RepoId }) {
   const { data } = useRefs(repo);
   const { data: info } = useRepoInfo(repo);
+  const vis = useVisibility(repo);
   const [filter, setFilter] = useState("");
-  const [menu, setMenu] = useState<MenuTarget>(null);
+  const [menu, setMenu] = useState<SidebarTarget | null>(null);
 
   const f = filter.trim().toLowerCase();
   const match = (s: string) => !f || s.toLowerCase().includes(f);
 
-  const { locals, remotes, tags } = useMemo(() => {
+  const { locals, remotes, tags, all } = useMemo(() => {
     const refs = data?.refs ?? [];
     const byRemote = new Map<string, Ref[]>();
+    for (const r of data?.remotes ?? []) byRemote.set(r.name, []);
     for (const r of refs) {
       if (r.kind !== "remote" || r.short.endsWith("/HEAD")) continue;
       const list = byRemote.get(r.remote ?? "") ?? [];
@@ -48,15 +52,207 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       locals: refs.filter((r) => r.kind === "branch"),
       remotes: byRemote,
       tags: refs.filter((r) => r.kind === "tag").toReversed(),
+      all: allVisibilityNames(data),
     };
   }, [data]);
 
+  const stashes = data?.stashes ?? [];
+  const worktrees = data?.worktrees ?? [];
+  const submodules = data?.submodules ?? [];
+  const remoteList = data?.remotes ?? [];
   const reveal = (hash: string) => commands.selectCommit(repo, hash);
-  const headName = info?.head.branch ?? "HEAD";
+
+  const refVisibility = (r: Ref): Visibility =>
+    r.isHead ? "head" : vis.isHidden(r.name) ? "hidden" : "visible";
+  const count = (names: readonly string[]) => {
+    const shown = names.filter((n) => !vis.isHidden(n)).length;
+    return shown === names.length ? (
+      <span>{names.length}</span>
+    ) : (
+      <span className="font-medium text-sky-500">
+        {shown}/{names.length}
+      </span>
+    );
+  };
+  const visibleTotal = all.filter((n) => !vis.isHidden(n)).length;
+  const groupVisibility = (names: readonly string[]): Visibility => {
+    const hiddenCount = names.filter((n) => vis.isHidden(n)).length;
+    if (names.length === 0 || hiddenCount === 0) return "visible";
+    return hiddenCount === names.length ? "hidden" : "partial";
+  };
+  const toggleGroup = (prefix: string, names: readonly string[]) => {
+    if (groupVisibility(names) === "hidden") vis.show([prefix, ...names]);
+    else vis.hide([prefix]);
+  };
+
+  const sections = [
+    {
+      id: "local",
+      title: "Local",
+      icon: <IconDeviceLaptop />,
+      count: count(locals.map((r) => r.name)),
+      onHeaderContextMenu: () => setMenu({ kind: "section", section: "local" }),
+      children: locals
+        .filter((r) => match(r.short))
+        .map((r) => (
+          <RefItem
+            key={r.name}
+            refItem={r}
+            icon={<IconGitBranch />}
+            visibility={refVisibility(r)}
+            onToggle={() => vis.toggle(r.name)}
+            onClick={() => reveal(r.hash)}
+            onDoubleClick={() => void commands.checkoutRef(repo, r)}
+            onContextMenu={() => setMenu({ kind: "branch", ref: r })}
+          />
+        )),
+    },
+    {
+      id: "remote",
+      title: "Remote",
+      icon: <IconCloud />,
+      count: count([...remotes.values()].flat().map((r) => r.name)),
+      onHeaderContextMenu: () => setMenu({ kind: "section", section: "remote" }),
+      children: [...remotes].map(([name, refs]) => {
+        const remote = remoteList.find((r) => r.name === name);
+        const names = refs.map((r) => r.name);
+        return (
+          <div key={name}>
+            <Item
+              icon={<RemoteIcon remote={remote} />}
+              label={name}
+              title={remote?.fetchUrl ?? name}
+              visibility={groupVisibility(names)}
+              onToggle={() => toggleGroup(`refs/remotes/${name}/`, names)}
+              onContextMenu={() => remote && setMenu({ kind: "remote", remote })}
+            />
+            {refs
+              .filter((r) => match(r.short))
+              .map((r) => (
+                <RefItem
+                  key={r.name}
+                  depth={1}
+                  refItem={r}
+                  label={r.short.slice(name.length + 1)}
+                  icon={<IconGitBranch />}
+                  visibility={refVisibility(r)}
+                  onToggle={() => vis.toggle(r.name, names)}
+                  onClick={() => reveal(r.hash)}
+                  onDoubleClick={() => void commands.checkoutRef(repo, r)}
+                  onContextMenu={() => setMenu({ kind: "remote-branch", ref: r })}
+                />
+              ))}
+          </div>
+        );
+      }),
+    },
+    {
+      id: "worktrees",
+      title: "Worktrees",
+      icon: <IconFolders />,
+      count: <span>{worktrees.length}</span>,
+      defaultOpen: false,
+      onHeaderContextMenu: () => setMenu({ kind: "section", section: "worktrees" }),
+      children: worktrees
+        .filter((w) => match(w.path))
+        .map((w) => (
+          <WorktreeItem
+            key={w.path}
+            worktree={w}
+            current={w.path === info?.workTree}
+            onDoubleClick={() => {
+              if (w.path !== info?.workTree) commands.openSibling(repo, w.path);
+            }}
+            onContextMenu={() => setMenu({ kind: "worktree", worktree: w })}
+          />
+        )),
+    },
+    {
+      id: "stashes",
+      title: "Stashes",
+      icon: <IconArchive />,
+      count: count(stashes.map((s) => stashKey(s.hash))),
+      children: stashes
+        .filter((s) => match(s.message))
+        .map((s) => (
+          <StashItem
+            key={s.hash}
+            stash={s}
+            visibility={vis.isHidden(stashKey(s.hash)) ? "hidden" : "visible"}
+            onToggle={() => vis.toggle(stashKey(s.hash))}
+            onClick={() => reveal(s.hash)}
+            onDoubleClick={() => void commands.applyStash(repo, s.index)}
+            onContextMenu={() => setMenu({ kind: "stash", stash: s })}
+          />
+        )),
+    },
+    {
+      id: "tags",
+      title: "Tags",
+      icon: <IconTag />,
+      count: count(tags.map((t) => t.name)),
+      defaultOpen: false,
+      onHeaderContextMenu: () => setMenu({ kind: "section", section: "tags" }),
+      children: tags
+        .filter((r) => match(r.short))
+        .slice(0, 1000)
+        .map((r) => (
+          <RefItem
+            key={r.name}
+            refItem={r}
+            icon={<IconTag />}
+            visibility={refVisibility(r)}
+            onToggle={() =>
+              vis.toggle(
+                r.name,
+                tags.map((t) => t.name),
+              )
+            }
+            onClick={() => reveal(r.hash)}
+            onDoubleClick={() => void commands.checkout(repo, r.short)}
+            onContextMenu={() => setMenu({ kind: "tag", ref: r })}
+          />
+        )),
+    },
+    ...(submodules.length > 0
+      ? [
+          {
+            id: "submodules",
+            title: "Submodules",
+            icon: <IconBox />,
+            count: <span>{submodules.length}</span>,
+            defaultOpen: false,
+            children: submodules
+              .filter((s) => match(s.path))
+              .map((s) => (
+                <SubmoduleItem
+                  key={s.path}
+                  submodule={s}
+                  onDoubleClick={() => commands.openSibling(repo, s.path)}
+                  onContextMenu={() => setMenu({ kind: "submodule", submodule: s })}
+                />
+              )),
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="bg-sidebar flex h-full min-h-0 flex-col">
-      <div className="p-2">
+      <div className="flex flex-col gap-1.5 p-2 pb-1.5">
+        <div className="flex h-5 items-center justify-between px-1 text-[11px]">
+          <span className="text-muted-foreground">
+            Viewing{" "}
+            <span className={cn("tabular-nums", vis.anyHidden && "font-medium text-sky-500")}>
+              {visibleTotal}/{all.length}
+            </span>
+          </span>
+          {vis.anyHidden && (
+            <button type="button" className="text-sky-500 hover:underline" onClick={vis.showAll}>
+              Show all
+            </button>
+          )}
+        </div>
         <div className="relative">
           <IconSearch className="text-muted-foreground absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
           <Input
@@ -68,315 +264,177 @@ export function Sidebar({ repo }: { repo: RepoId }) {
         </div>
       </div>
       <ContextMenu>
-        <ContextMenuTrigger render={<div className="min-h-0 flex-1 overflow-y-auto pb-4" />}>
-          <Section title="Local" icon={<IconDeviceLaptop />} count={locals.length}>
-            {locals
-              .filter((r) => match(r.short))
-              .map((r) => (
-                <RefItem
-                  key={r.name}
-                  refItem={r}
-                  icon={<IconGitBranch />}
-                  onClick={() => reveal(r.hash)}
-                  onDoubleClick={() => void commands.checkoutRef(repo, r)}
-                  onContextMenu={() => setMenu({ kind: "ref", ref: r })}
-                />
-              ))}
-          </Section>
-          <Section title="Remote" icon={<IconCloud />} count={remotes.size}>
-            {[...remotes].map(([remote, refs]) => (
-              <Section key={remote} title={remote} nested count={refs.length}>
-                {refs
-                  .filter((r) => match(r.short))
-                  .map((r) => (
-                    <RefItem
-                      key={r.name}
-                      refItem={r}
-                      label={r.short.slice(remote.length + 1)}
-                      icon={<IconGitBranch />}
-                      onClick={() => reveal(r.hash)}
-                      onDoubleClick={() => void commands.checkoutRef(repo, r)}
-                      onContextMenu={() => setMenu({ kind: "ref", ref: r })}
-                    />
-                  ))}
-              </Section>
-            ))}
-          </Section>
-          <Section title="Tags" icon={<IconTag />} count={tags.length} defaultOpen={false}>
-            {tags
-              .filter((r) => match(r.short))
-              .slice(0, 500)
-              .map((r) => (
-                <RefItem
-                  key={r.name}
-                  refItem={r}
-                  icon={<IconTag />}
-                  onClick={() => reveal(r.hash)}
-                  onContextMenu={() => setMenu({ kind: "ref", ref: r })}
-                />
-              ))}
-          </Section>
-          <Section title="Stashes" icon={<IconArchive />} count={data?.stashes.length ?? 0}>
-            {data?.stashes
-              .filter((s) => match(s.message))
-              .map((s) => (
-                <Item
-                  key={s.hash}
-                  icon={<IconArchive />}
-                  label={s.message}
-                  onClick={() => reveal(s.hash)}
-                  onDoubleClick={() => void commands.applyStash(repo, s.index)}
-                  onContextMenu={() => setMenu({ kind: "stash", stash: s })}
-                />
-              ))}
-          </Section>
-          {(data?.worktrees.length ?? 0) > 1 && (
-            <Section
-              title="Worktrees"
-              icon={<IconFolders />}
-              count={data!.worktrees.length}
-              defaultOpen={false}
-            >
-              {data!.worktrees.map((w) => (
-                <WorktreeItem key={w.path} worktree={w} />
-              ))}
-            </Section>
-          )}
-          {(data?.submodules.length ?? 0) > 0 && (
-            <Section
-              title="Submodules"
-              icon={<IconBox />}
-              count={data!.submodules.length}
-              defaultOpen={false}
-            >
-              {data!.submodules.map((s) => (
-                <SubmoduleItem key={s.path} submodule={s} />
-              ))}
-            </Section>
-          )}
+        <ContextMenuTrigger render={<div className="flex min-h-0 flex-1 flex-col border-t" />}>
+          <SectionStack sections={sections} />
         </ContextMenuTrigger>
-        <SidebarMenu repo={repo} target={menu} headName={headName} />
+        <SidebarMenu repo={repo} target={menu} all={all} vis={vis} />
       </ContextMenu>
     </div>
   );
 }
 
-function SidebarMenu({
-  repo,
-  target,
-  headName,
-}: {
-  repo: RepoId;
-  target: MenuTarget;
-  headName: string;
-}) {
-  if (!target) return <ContextMenuContent className="hidden" />;
-  if (target.kind === "stash") {
-    const s = target.stash;
-    return (
-      <ContextMenuContent className="min-w-52">
-        <ContextMenuItem onClick={() => void commands.applyStash(repo, s.index)}>
-          Apply stash
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => void commands.pop(repo, s.index)}>
-          Pop stash
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          variant="destructive"
-          onClick={() => void commands.dropStash(repo, s.index)}
-        >
-          Delete stash
-        </ContextMenuItem>
-      </ContextMenuContent>
-    );
-  }
-  const r = target.ref;
-  if (r.kind === "tag") {
-    return (
-      <ContextMenuContent className="min-w-52">
-        <ContextMenuItem onClick={() => void commands.checkout(repo, r.short)}>
-          Checkout {r.short}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => commands.copy(r.short, "Tag name copied")}>
-          Copy tag name
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          variant="destructive"
-          onClick={() => void commands.deleteTag(repo, r.short)}
-        >
-          Delete {r.short}
-        </ContextMenuItem>
-      </ContextMenuContent>
-    );
-  }
-  return (
-    <ContextMenuContent className="min-w-60">
-      {!r.isHead && (
-        <ContextMenuItem onClick={() => void commands.checkoutRef(repo, r)}>
-          Checkout {r.short}
-        </ContextMenuItem>
-      )}
-      {r.isHead && (
-        <ContextMenuItem onClick={() => void commands.pull(repo)}>
-          Pull (fast-forward if possible)
-        </ContextMenuItem>
-      )}
-      {r.isHead && <ContextMenuItem onClick={() => void commands.push(repo)}>Push</ContextMenuItem>}
-      {!r.isHead && (
-        <ContextMenuItem onClick={() => void commands.merge(repo, r.short)}>
-          Merge {r.short} into {headName}
-        </ContextMenuItem>
-      )}
-      {!r.isHead && (
-        <ContextMenuItem onClick={() => void commands.rebase(repo, r.short)}>
-          Rebase {headName} onto {r.short}
-        </ContextMenuItem>
-      )}
-      <ContextMenuItem onClick={() => void commands.createBranch(repo, r.hash, r.short)}>
-        Create branch here…
-      </ContextMenuItem>
-      {r.kind === "branch" && (
-        <ContextMenuItem onClick={() => void commands.renameBranch(repo, r.short)}>
-          Rename {r.short}…
-        </ContextMenuItem>
-      )}
-      <ContextMenuItem onClick={() => commands.copy(r.short, "Branch name copied")}>
-        Copy branch name
-      </ContextMenuItem>
-      {!r.isHead && (
-        <>
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            variant="destructive"
-            onClick={() => void commands.deleteBranch(repo, r)}
-          >
-            Delete {r.short}
-          </ContextMenuItem>
-        </>
-      )}
-    </ContextMenuContent>
-  );
+function RemoteIcon({ remote }: { remote: Remote | undefined }) {
+  const url = remote?.fetchUrl ?? "";
+  if (url.includes("github")) return <IconBrandGithub />;
+  if (url.includes("gitlab")) return <IconBrandGitlab />;
+  if (url.includes("bitbucket")) return <IconBrandBitbucket />;
+  return <IconCloud />;
 }
 
-function Section({
-  title,
-  icon,
-  count,
-  nested,
-  defaultOpen = true,
-  children,
-}: {
-  title: string;
-  icon?: React.ReactNode;
-  count: number;
-  nested?: boolean;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <Collapsible defaultOpen={defaultOpen}>
-      <CollapsibleTrigger
-        className={cn(
-          "hover:bg-sidebar-accent text-muted-foreground flex h-7 w-full items-center gap-1.5 text-[11px] font-semibold select-none [&_svg]:size-3.5 [&[data-panel-open]>svg:first-child]:rotate-0",
-          nested ? "pl-5 normal-case" : "px-2 tracking-wider uppercase",
-        )}
-      >
-        <IconChevronDown className="-rotate-90 transition-transform" />
-        {icon}
-        <span className="truncate">{title}</span>
-        <span className="ml-auto pr-2 font-normal tabular-nums">{count}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>{children}</CollapsibleContent>
-    </Collapsible>
-  );
+// ---------------------------------------------------------------------------
+// Items
+// ---------------------------------------------------------------------------
+
+interface ItemProps {
+  readonly icon: ReactNode;
+  readonly label: string;
+  readonly depth?: number;
+  readonly visibility?: Visibility;
+  readonly active?: boolean;
+  readonly trailing?: ReactNode;
+  readonly title?: string;
+  readonly onToggle?: () => void;
+  readonly onClick?: () => void;
+  readonly onDoubleClick?: () => void;
+  readonly onContextMenu?: () => void;
 }
 
 function Item({
   icon,
   label,
+  depth = 0,
+  visibility = "none",
   active,
   trailing,
+  title,
+  onToggle,
   onClick,
   onDoubleClick,
   onContextMenu,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  active?: boolean;
-  trailing?: React.ReactNode;
-  onClick?: () => void;
-  onDoubleClick?: () => void;
-  onContextMenu?: () => void;
-}) {
+}: ItemProps) {
+  const dim = visibility === "hidden";
   return (
     <div
       className={cn(
-        "hover:bg-sidebar-accent flex h-6 cursor-default items-center gap-1.5 pr-2 pl-7 text-[12px] select-none [&_svg]:size-3.5 [&_svg]:shrink-0",
-        active && "bg-primary/20 font-semibold",
+        "group hover:bg-sidebar-accent flex h-6 cursor-default items-center gap-1.5 pr-2 pl-1 text-[12px] select-none [&_svg]:size-3.5 [&_svg]:shrink-0",
+        active && "bg-primary/20 hover:bg-primary/25 font-semibold",
       )}
-      title={label}
+      title={title ?? label}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
     >
-      <span className="text-muted-foreground flex">{icon}</span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <VisibilityToggle visibility={visibility} onToggle={onToggle} />
+      <span
+        className={cn("text-muted-foreground flex", dim && "opacity-50")}
+        style={{ marginLeft: depth * 14 }}
+      >
+        {icon}
+      </span>
+      <span className={cn("min-w-0 flex-1 truncate", dim && "text-muted-foreground opacity-70")}>
+        {label}
+      </span>
       {trailing}
     </div>
+  );
+}
+
+function VisibilityToggle({
+  visibility,
+  onToggle,
+}: {
+  visibility: Visibility;
+  onToggle?: (() => void) | undefined;
+}) {
+  if (visibility === "none") return <span className="w-5 shrink-0" />;
+  if (visibility === "head") {
+    return (
+      <span
+        className="flex w-5 shrink-0 justify-center text-emerald-500"
+        title="Checked out (always shown)"
+      >
+        <IconSquareCheckFilled />
+      </span>
+    );
+  }
+  const off = visibility === "hidden" || visibility === "partial";
+  return (
+    <button
+      type="button"
+      title={visibility === "hidden" ? "Show in graph" : "Hide from graph"}
+      className={cn(
+        "text-muted-foreground hover:text-foreground flex w-5 shrink-0 justify-center",
+        !off && "opacity-0 group-hover:opacity-100",
+      )}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle?.();
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      {off ? <IconEyeOff /> : <IconEye />}
+    </button>
   );
 }
 
 function RefItem({
   refItem: r,
   label,
-  icon,
-  onClick,
-  onDoubleClick,
-  onContextMenu,
-}: {
-  refItem: Ref;
-  label?: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-  onDoubleClick?: () => void;
-  onContextMenu: () => void;
-}) {
+  ...rest
+}: Omit<ItemProps, "label" | "active" | "trailing"> & { refItem: Ref; label?: string }) {
+  const track = r.upstreamGone
+    ? "gone"
+    : `${r.ahead ? `${r.ahead}↑` : ""} ${r.behind ? `${r.behind}↓` : ""}`.trim();
   return (
     <Item
-      icon={icon}
+      {...rest}
       label={label ?? r.short}
       active={r.isHead}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
-      onContextMenu={onContextMenu}
       trailing={
-        (r.ahead > 0 || r.behind > 0 || r.upstreamGone) && (
-          <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
-            {r.upstreamGone
-              ? "gone"
-              : `${r.ahead ? `${r.ahead}↑` : ""} ${r.behind ? `${r.behind}↓` : ""}`.trim()}
-          </span>
+        track && (
+          <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">{track}</span>
         )
       }
     />
   );
 }
 
-function WorktreeItem({ worktree: w }: { worktree: Worktree }) {
+function StashItem({ stash, ...rest }: Omit<ItemProps, "label" | "icon"> & { stash: Stash }) {
   return (
     <Item
-      icon={<IconFolders />}
-      label={`${w.path.split("/").at(-1)}${w.branch ? ` (${w.branch})` : ""}`}
-      active={w.isMain}
+      {...rest}
+      icon={<IconArchive />}
+      label={stash.message}
+      title={`${stash.name}: ${stash.message}`}
     />
   );
 }
 
-function SubmoduleItem({ submodule: s }: { submodule: Submodule }) {
+function WorktreeItem({
+  worktree: w,
+  current,
+  ...rest
+}: Omit<ItemProps, "label" | "icon"> & { worktree: Worktree; current: boolean }) {
+  const name = w.path.split(/[\\/]/).at(-1) ?? w.path;
   return (
     <Item
+      {...rest}
+      icon={<IconFolders />}
+      label={w.branch ? `${name} (${w.branch})` : `${name} (detached)`}
+      title={w.path}
+      active={current}
+      trailing={w.isMain && <span className="text-muted-foreground text-[10px]">main</span>}
+    />
+  );
+}
+
+function SubmoduleItem({
+  submodule: s,
+  ...rest
+}: Omit<ItemProps, "label" | "icon"> & { submodule: Submodule }) {
+  return (
+    <Item
+      {...rest}
       icon={<IconBox />}
       label={s.path}
       trailing={

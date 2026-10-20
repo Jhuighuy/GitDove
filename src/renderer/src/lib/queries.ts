@@ -8,6 +8,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { isHidden } from "@shared/visibility";
 import { api, ApiError, useEvent } from "./api";
 
 export const queryClient = new QueryClient({
@@ -131,18 +132,24 @@ const previousPage = (client: QueryClient, repo: RepoId, version: number, page: 
   return undefined;
 };
 
-/** Index of refs by commit hash. */
+/** Index of refs by commit hash, without refs hidden from the graph. */
 export const useRefsByHash = (repo: RepoId) => {
   const { data } = useRefs(repo);
+  const { data: hidden } = useQuery({
+    queryKey: [...keys.repo(repo), "hidden"],
+    queryFn: () => api("repo.hiddenRefs", repo),
+  });
   return useMemo(() => {
     const map = new Map<string, Ref[]>();
+    const hiddenSet = new Set(hidden ?? []);
     for (const ref of data?.refs ?? []) {
+      if (hiddenSet.size > 0 && isHidden(hiddenSet, ref.name)) continue;
       let list = map.get(ref.hash);
       if (!list) map.set(ref.hash, (list = []));
       list.push(ref);
     }
     return map;
-  }, [data]);
+  }, [data, hidden]);
 };
 
 /** Keeps all repository queries in sync with change events from the main process. */

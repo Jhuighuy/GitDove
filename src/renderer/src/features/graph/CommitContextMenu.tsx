@@ -10,6 +10,7 @@ import {
 import { shortHash } from "@/lib/format";
 import { useRepoInfo } from "@/lib/queries";
 import { commands } from "../commands";
+import { useVisibility } from "../sidebar/visibility";
 import { api } from "@/lib/api";
 import { runAction } from "@/lib/actions";
 
@@ -32,6 +33,7 @@ export function CommitContextMenu({
   stashes: readonly Stash[];
 }) {
   const { data: info } = useRepoInfo(repo);
+  const vis = useVisibility(repo);
   if (!target) return <ContextMenuContent className="hidden" />;
 
   if (target.kind === "wip") {
@@ -106,6 +108,11 @@ export function CommitContextMenu({
               Copy branch name
             </ContextMenuItem>
             {!ref.isHead && (
+              <ContextMenuItem onClick={() => vis.hide([ref.name])}>
+                Hide from graph
+              </ContextMenuItem>
+            )}
+            {!ref.isHead && (
               <>
                 <ContextMenuSeparator />
                 <ContextMenuItem
@@ -126,6 +133,7 @@ export function CommitContextMenu({
             <ContextMenuItem onClick={() => commands.copy(tag.short, "Tag name copied")}>
               Copy tag name
             </ContextMenuItem>
+            <ContextMenuItem onClick={() => vis.hide([tag.name])}>Hide from graph</ContextMenuItem>
             <ContextMenuItem
               variant="destructive"
               onClick={() => void commands.deleteTag(repo, tag.short)}

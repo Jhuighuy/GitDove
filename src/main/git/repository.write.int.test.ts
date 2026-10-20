@@ -11,6 +11,16 @@ import { Repository } from "./repository";
 const targets: [string, string][] = [["local", LOCAL_HOST]];
 if (process.env.GITDOVE_INT_SSH_HOST) targets.push(["ssh", process.env.GITDOVE_INT_SSH_HOST]);
 
+/** Waits for a completed graph newer than `after`. */
+const waitGraph = (repo: Repository, after = 0) =>
+  Effect.gen(function* () {
+    for (;;) {
+      const g = yield* repo.graphInfo();
+      if (g.complete && g.version > after) return g;
+      yield* Effect.sleep("30 millis");
+    }
+  });
+
 describe.skipIf(!process.env.GITDOVE_INT_WRITE)("Repository write ops (integration)", () => {
   const runtime = ManagedRuntime.make(Layer.mergeAll(HostsLive));
 
@@ -56,7 +66,7 @@ describe.skipIf(!process.env.GITDOVE_INT_WRITE)("Repository write ops (integrati
             const details = yield* repo.commitDetails(info.head.hash!);
             expect(details.subject).toBe("Second");
             expect(details.body).toBe("Body");
-            expect(details.files.map((f) => f.path).sort()).toEqual(["f.txt", "sp ace.txt"]);
+            expect(details.files.map((f) => f.path).toSorted()).toEqual(["f.txt", "sp ace.txt"]);
 
             // Branching, stash and graph.
             yield* repo.createBranch("feature/x", "HEAD~1", true);
@@ -75,8 +85,29 @@ describe.skipIf(!process.env.GITDOVE_INT_WRITE)("Repository write ops (integrati
             expect((yield* repo.info()).head.hash).toBe(
               (yield* repo.refs()).refs.find((r) => r.short === "feature/x")?.hash,
             );
+
+            // Graph visibility: hiding feature/x drops its commit from the graph.
+            yield* repo.createBranch("side", "HEAD", false);
+            yield* repo.checkout("side");
+            yield* host.sh("echo s > s.txt && git add s.txt && git commit -qm side", { cwd: dir });
+            yield* repo.checkout("main");
+            // No watcher here, so refresh the graph explicitly.
+            const stale = yield* repo.graphInfo();
+            repo.invalidateGraph();
+            const before = yield* waitGraph(repo, stale.version);
+            repo.setHiddenRefs(["refs/heads/side"]);
+            const after = yield* waitGraph(repo, before.version);
+            expect(after.count).toBe(before.count - 1);
+            repo.setHiddenRefs(["refs/heads/"]); // HEAD stays visible
+            expect((yield* waitGraph(repo, after.version)).count).toBeGreaterThan(0);
+
+            // Worktrees.
+            yield* repo.addWorktree(`${dir}-wt`, "side", null);
+            expect((yield* repo.refs()).worktrees.map((w) => w.branch)).toContain("side");
+            yield* repo.removeWorktree(`${dir}-wt`, false);
+            expect((yield* repo.refs()).worktrees).toHaveLength(1);
           } finally {
-            yield* host.sh(`rm -rf -- '${dir}'`).pipe(Effect.ignore);
+            yield* host.sh(`rm -rf -- '${dir}' '${dir}-wt'`).pipe(Effect.ignore);
           }
         }),
       );

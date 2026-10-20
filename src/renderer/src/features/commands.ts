@@ -1,7 +1,8 @@
 /**
  * User-facing repository commands, shared by the toolbar, menus and context menus.
  */
-import type { Ref, RefsSnapshot, RepoId } from "@shared/domain";
+import type { Ref, RefsSnapshot, RepoId, RepoInfo, RepoLocation } from "@shared/domain";
+import { repoLocationOf } from "@shared/domain";
 import type { ResetMode } from "@shared/ipc";
 import { toast } from "sonner";
 import { runAction } from "@/lib/actions";
@@ -10,9 +11,27 @@ import { shortHash } from "@/lib/format";
 import { keys, queryClient } from "@/lib/queries";
 import { useRepoUiStore } from "@/stores/repo-ui";
 import { confirm, prompt, validateRefName } from "./dialogs/dialogs";
+import { openLocation } from "./open/OpenRepo";
 
 const refs = (repo: RepoId) => queryClient.getQueryData<RefsSnapshot>(keys.refs(repo));
 const headBranch = (repo: RepoId) => refs(repo)?.refs.find((r) => r.kind === "branch" && r.isHead);
+const info = (repo: RepoId) => queryClient.getQueryData<RepoInfo>(keys.info(repo));
+const defaultRemote = (repo: RepoId) => {
+  const remotes = refs(repo)?.remotes ?? [];
+  return remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name ?? null;
+};
+
+/** A location on the same host as `repo` (worktrees, submodules). */
+const sibling = (repo: RepoId, path: string): RepoLocation => {
+  const loc = repoLocationOf(repo);
+  const abs =
+    path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)
+      ? path
+      : `${info(repo)?.workTree ?? loc.path}/${path}`;
+  return loc.kind === "ssh"
+    ? { kind: "ssh", host: loc.host, path: abs }
+    : { kind: "local", path: abs };
+};
 
 export const commands = {
   fetch: (repo: RepoId) =>
@@ -237,6 +256,169 @@ export const commands = {
       destructive: true,
     });
     if (ok) await runAction(repo, "Discard", () => api("repo.discard", repo, paths, untracked));
+  },
+
+  pushBranch: (repo: RepoId, ref: Ref) =>
+    ref.isHead
+      ? commands.push(repo)
+      : runAction(repo, "Push", () => api("repo.pushBranch", repo, ref.short, false), {
+          progress: `Pushing ${ref.short}…`,
+          success: `Pushed ${ref.short}`,
+        }),
+
+  /** Pull for the current branch; fast-forward from upstream for any other branch. */
+  pullBranch: (repo: RepoId, ref: Ref) =>
+    ref.isHead
+      ? commands.pull(repo)
+      : runAction(repo, "Fast-forward", () => api("repo.fastForwardBranch", repo, ref.short), {
+          progress: `Updating ${ref.short}…`,
+          success: `Updated ${ref.short}`,
+        }),
+
+  setUpstream: async (repo: RepoId, ref: Ref) => {
+    const remote = defaultRemote(repo);
+    const r = await prompt({
+      title: `Set upstream for ${ref.short}`,
+      description: "Remote branch to track. Leave the remote's name in front, e.g. origin/main.",
+      label: "Upstream branch",
+      defaultValue:
+        ref.upstream?.replace(/^refs\/remotes\//, "") ?? (remote ? `${remote}/${ref.short}` : ""),
+      confirmLabel: "Set Upstream",
+    });
+    if (!r) return;
+    await runAction(repo, "Set upstream", () => api("repo.setUpstream", repo, ref.short, r.value));
+  },
+
+  createWorktree: async (repo: RepoId, ref: string, label: string) => {
+    const workTree = info(repo)?.workTree ?? repoLocationOf(repo).path;
+    const parent = workTree.replace(/[\\/][^\\/]+[\\/]?$/, "");
+    const base = workTree.slice(parent.length + 1);
+    const r = await prompt({
+      title: `Create worktree from ${label}`,
+      description: "A worktree is a second checkout of this repository in another folder.",
+      label: "Folder",
+      defaultValue: `${parent}/${base}-${label.replace(/[^\w.-]+/g, "-")}`,
+      confirmLabel: "Create Worktree",
+    });
+    if (!r) return;
+    await runAction(
+      repo,
+      "Create worktree",
+      () => api("repo.addWorktree", repo, r.value, ref, null),
+      {
+        success: "Worktree created",
+      },
+    );
+  },
+
+  removeWorktree: async (repo: RepoId, path: string) => {
+    const ok = await confirm({
+      title: "Remove worktree?",
+      description: `Deletes the folder ${path}.`,
+      confirmLabel: "Remove",
+      destructive: true,
+    });
+    if (!ok) return;
+    const done = await runAction(repo, "Remove worktree", async () => {
+      await api("repo.removeWorktree", repo, path, false);
+      return true;
+    });
+    if (done) return;
+    const force = await confirm({
+      title: "Force remove worktree?",
+      description:
+        "The worktree has uncommitted changes or is locked. Removing it anyway discards them.",
+      confirmLabel: "Force Remove",
+      destructive: true,
+    });
+    if (force)
+      await runAction(repo, "Remove worktree", () => api("repo.removeWorktree", repo, path, true));
+  },
+
+  pruneWorktrees: (repo: RepoId) =>
+    runAction(repo, "Prune worktrees", () => api("repo.pruneWorktrees", repo), {
+      success: "Stale worktrees pruned",
+    }),
+
+  openSibling: (repo: RepoId, path: string) => void openLocation(sibling(repo, path)),
+
+  reveal: (repo: RepoId, path?: string) => void api("shell.revealInFinder", repo, path),
+
+  updateSubmodule: (repo: RepoId, path: string) =>
+    runAction(repo, "Update submodule", () => api("repo.updateSubmodule", repo, path), {
+      progress: `Updating ${path}…`,
+      success: `Updated ${path}`,
+    }),
+
+  pushTag: (repo: RepoId, tag: string) => {
+    const remote = defaultRemote(repo);
+    if (!remote) return void toast.error("No remotes configured");
+    return runAction(repo, "Push tag", () => api("repo.pushTag", repo, remote, tag), {
+      progress: `Pushing ${tag}…`,
+      success: `Pushed ${tag} to ${remote}`,
+    });
+  },
+
+  deleteRemoteTag: async (repo: RepoId, tag: string) => {
+    const remote = defaultRemote(repo);
+    if (!remote) return;
+    const ok = await confirm({
+      title: `Delete ${tag} from ${remote}?`,
+      description: "The tag is deleted on the remote; your local tag is kept.",
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (ok)
+      await runAction(repo, "Delete remote tag", () =>
+        api("repo.deleteRemoteTag", repo, remote, tag),
+      );
+  },
+
+  fetchRemote: (repo: RepoId, remote: string) =>
+    runAction(repo, "Fetch", () => api("repo.fetch", repo, remote), {
+      progress: `Fetching ${remote}…`,
+    }),
+
+  addRemote: async (repo: RepoId) => {
+    const name = await prompt({
+      title: "Add remote",
+      label: "Name",
+      defaultValue: (refs(repo)?.remotes.length ?? 0) === 0 ? "origin" : "",
+      placeholder: "upstream",
+      confirmLabel: "Next",
+      validate: validateRefName,
+    });
+    if (!name) return;
+    const url = await prompt({
+      title: `Add remote ${name.value}`,
+      label: "URL",
+      placeholder: "git@github.com:owner/repo.git",
+      confirmLabel: "Add Remote",
+    });
+    if (!url) return;
+    await runAction(repo, "Add remote", () => api("repo.addRemote", repo, name.value, url.value));
+    void commands.fetchRemote(repo, name.value);
+  },
+
+  editRemoteUrl: async (repo: RepoId, name: string, current: string) => {
+    const r = await prompt({
+      title: `Edit ${name} URL`,
+      label: "URL",
+      defaultValue: current,
+      confirmLabel: "Save",
+    });
+    if (!r || r.value === current) return;
+    await runAction(repo, "Edit remote", () => api("repo.setRemoteUrl", repo, name, r.value));
+  },
+
+  removeRemote: async (repo: RepoId, name: string) => {
+    const ok = await confirm({
+      title: `Remove remote ${name}?`,
+      description: "Its remote-tracking branches are removed too. Nothing changes on the server.",
+      confirmLabel: "Remove",
+      destructive: true,
+    });
+    if (ok) await runAction(repo, "Remove remote", () => api("repo.removeRemote", repo, name));
   },
 
   copy: (text: string, what = "Copied") => {
