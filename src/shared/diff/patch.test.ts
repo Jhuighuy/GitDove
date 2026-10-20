@@ -187,6 +187,8 @@ describe("buildPatch with git apply", () => {
     git(["init", "-q"]);
     git(["config", "user.name", "T"]);
     git(["config", "user.email", "t@x"]);
+    // Keep line endings as written regardless of the machine's global config.
+    git(["config", "core.autocrlf", "false"]);
     const base = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
     writeFileSync(join(dir, "f"), base.join("\n") + "\n");
     git(["add", "f"]);
