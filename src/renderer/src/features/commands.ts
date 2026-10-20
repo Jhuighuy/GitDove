@@ -6,7 +6,7 @@ import { repoLocationOf } from "@shared/domain";
 import type { ResetMode } from "@shared/ipc";
 import { toast } from "sonner";
 import { runAction } from "@/lib/actions";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { shortHash } from "@/lib/format";
 import { keys, queryClient } from "@/lib/queries";
 import { useRepoUiStore } from "@/stores/repo-ui";
@@ -325,11 +325,19 @@ export const commands = {
       destructive: true,
     });
     if (!ok) return;
-    const done = await runAction(repo, "Remove worktree", async () => {
-      await api("repo.removeWorktree", repo, path, false);
-      return true;
+    const result = await runAction(repo, "Remove worktree", async () => {
+      try {
+        await api("repo.removeWorktree", repo, path, false);
+        return "removed";
+      } catch (e) {
+        // Git suggests forcing for a dirty or locked worktree; other failures are reported.
+        if (e instanceof ApiError && /--force|-f -f/.test(`${e.message}\n${e.detail ?? ""}`)) {
+          return "needs-force";
+        }
+        throw e;
+      }
     });
-    if (done) return;
+    if (result !== "needs-force") return;
     const force = await confirm({
       title: "Force remove worktree?",
       description:
@@ -367,7 +375,7 @@ export const commands = {
 
   deleteRemoteTag: async (repo: RepoId, tag: string) => {
     const remote = defaultRemote(repo);
-    if (!remote) return;
+    if (!remote) return void toast.error("No remotes configured");
     const ok = await confirm({
       title: `Delete ${tag} from ${remote}?`,
       description: "The tag is deleted on the remote; your local tag is kept.",

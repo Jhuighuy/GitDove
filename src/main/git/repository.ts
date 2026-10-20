@@ -1041,7 +1041,8 @@ export class Repository {
   }
 
   removeWorktree(path: string, force: boolean) {
-    return this.run(["worktree", "remove", ...(force ? ["--force"] : []), "--", path]);
+    // Forcing twice also removes a locked worktree.
+    return this.run(["worktree", "remove", ...(force ? ["--force", "--force"] : []), "--", path]);
   }
 
   pruneWorktrees() {

@@ -434,7 +434,11 @@ it("creates worktrees next to the main checkout", async () => {
   expect(mocks.toast.success).toHaveBeenCalledWith("Worktree created", { id: undefined });
 });
 
-it("removes worktrees, offering to force when that fails", async () => {
+/** A failure the way the main process reports git's stderr. */
+const gitError = (message: string, detail = message) =>
+  Object.assign(new Error(message), { detail });
+
+it("removes worktrees, offering to force only when git suggests it", async () => {
   mocks.confirm.mockResolvedValueOnce(false);
   await commands.removeWorktree(repo, "/work/wt");
   expect(methods()).toEqual([]);
@@ -443,26 +447,45 @@ it("removes worktrees, offering to force when that fails", async () => {
   expect(apiCalls("repo.removeWorktree")).toEqual([[repo, "/work/wt", false]]);
   expect(mocks.confirm).toHaveBeenCalledTimes(2);
 
+  // Dirty: one prompt to force, no error toast; declining stops there.
   mocks.api.mockClear();
-  mocks.api.mockRejectedValueOnce(new Error("contains modified files"));
+  mocks.api.mockRejectedValueOnce(
+    gitError("'/work/wt' contains modified or untracked files, use --force to delete it"),
+  );
   mocks.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
   await commands.removeWorktree(repo, "/work/wt");
-  expect(mocks.toast.error).toHaveBeenCalledWith(
-    "Remove worktree failed",
-    expect.objectContaining({ description: "contains modified files" }),
-  );
+  expect(mocks.toast.error).not.toHaveBeenCalled();
   expect(mocks.confirm).toHaveBeenLastCalledWith(
     expect.objectContaining({ title: "Force remove worktree?" }),
   );
   expect(apiCalls("repo.removeWorktree")).toEqual([[repo, "/work/wt", false]]);
 
+  // Locked: git's hint is on the second stderr line.
   mocks.api.mockClear();
-  mocks.api.mockRejectedValueOnce(new Error("locked"));
+  mocks.api.mockRejectedValueOnce(
+    gitError(
+      "cannot remove a locked working tree;",
+      "fatal: cannot remove a locked working tree;\nuse 'remove -f -f' to override or unlock first",
+    ),
+  );
   await commands.removeWorktree(repo, "/work/wt");
   expect(apiCalls("repo.removeWorktree")).toEqual([
     [repo, "/work/wt", false],
     [repo, "/work/wt", true],
   ]);
+  expect(mocks.toast.error).not.toHaveBeenCalled();
+});
+
+it("reports other worktree removal failures without offering to force", async () => {
+  mocks.api.mockRejectedValueOnce(gitError("Lost connection to box", ""));
+  await commands.removeWorktree(repo, "/work/wt");
+  expect(mocks.toast.error).toHaveBeenCalledTimes(1);
+  expect(mocks.toast.error).toHaveBeenCalledWith(
+    "Remove worktree failed",
+    expect.objectContaining({ description: "Lost connection to box" }),
+  );
+  expect(mocks.confirm).toHaveBeenCalledTimes(1);
+  expect(apiCalls("repo.removeWorktree")).toEqual([[repo, "/work/wt", false]]);
 });
 
 it("opens sibling repositories on the same host", () => {
@@ -512,6 +535,10 @@ it("does not push or delete remote tags without remotes", async () => {
   await commands.pushTag(repo, "v1");
   expect(mocks.toast.error).toHaveBeenCalledWith("No remotes configured");
   await commands.deleteRemoteTag(repo, "v1");
+  expect(mocks.toast.error.mock.calls).toEqual([
+    ["No remotes configured"],
+    ["No remotes configured"],
+  ]);
   expect(mocks.confirm).not.toHaveBeenCalled();
   expect(methods()).toEqual([]);
 });
