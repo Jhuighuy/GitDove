@@ -60,7 +60,12 @@ describe("pinned Sparkle distribution", () => {
   it("verifies the downloaded checksum before extraction", async () => {
     const directory = await prepareSparkle();
     expect(mocks.files.get(archive)).toEqual(data);
-    expect(mocks.execFileSync).toHaveBeenCalledWith("tar", ["-xf", archive, "-C", directory]);
+    expect(mocks.execFileSync).toHaveBeenCalledWith("/usr/bin/tar", [
+      "-xf",
+      archive,
+      "-C",
+      directory,
+    ]);
   });
   it("reuses a verified cached framework", async () => {
     mocks.existsSync.mockReturnValue(true);
@@ -93,7 +98,7 @@ describe("macOS package integration", () => {
       const executable = createSparkleHelper("/app/Updater.app", "/cache/Sparkle", arch);
       expect(executable).toBe(join("/app/Updater.app", "Contents/MacOS/GitDoveUpdater"));
       expect(mocks.execFileSync).toHaveBeenCalledWith(
-        "xcrun",
+        "/usr/bin/xcrun",
         expect.arrayContaining([
           "-arch",
           arch === "x64" ? "x86_64" : "arm64",

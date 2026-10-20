@@ -37,7 +37,7 @@ export async function prepareSparkle() {
     throw new Error("Cached Sparkle download checksum mismatch; retry to download it again");
   }
   if (!existsSync(join(directory, "Sparkle.framework"))) {
-    execFileSync("tar", ["-xf", archive, "-C", directory]);
+    execFileSync("/usr/bin/tar", ["-xf", archive, "-C", directory]);
   }
   return directory;
 }
@@ -62,7 +62,7 @@ export function createSparkleHelper(destination, sparkle, arch = process.arch) {
     join(sparkle, "Sparkle.framework"),
     join(destination, "Contents/Frameworks/Sparkle.framework"),
   ]);
-  execFileSync("xcrun", [
+  execFileSync("/usr/bin/xcrun", [
     "clang",
     "-fobjc-arc",
     "-Werror",

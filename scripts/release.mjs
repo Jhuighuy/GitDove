@@ -98,20 +98,24 @@ export function validateReleaseFiles(files, version) {
     if (name.startsWith("GitDove-") && !name.startsWith(`GitDove-${version}-`))
       throw new Error(`Unexpected release version: ${name}`);
     if (!name.endsWith(".yml")) continue;
-    const manifest = parse(readFileSync(file, "utf8"));
-    if (manifest.version !== version || !Array.isArray(manifest.files) || !manifest.files.length)
-      throw new Error(`Invalid update manifest: ${name}`);
-    for (const entry of manifest.files) {
-      const asset = decodeURIComponent(entry.url);
-      if (asset !== basename(asset) || !files.has(asset))
-        throw new Error(`Update manifest references missing asset: ${asset}`);
-      const data = readFileSync(files.get(asset));
-      if (
-        entry.size !== data.length ||
-        entry.sha512 !== createHash("sha512").update(data).digest("base64")
-      )
-        throw new Error(`Update checksum mismatch: ${asset}`);
-    }
+    validateUpdateManifest(name, file, files, version);
+  }
+}
+
+function validateUpdateManifest(name, file, files, version) {
+  const manifest = parse(readFileSync(file, "utf8"));
+  if (manifest.version !== version || !Array.isArray(manifest.files) || !manifest.files.length)
+    throw new Error(`Invalid update manifest: ${name}`);
+  for (const entry of manifest.files) {
+    const asset = decodeURIComponent(entry.url);
+    if (asset !== basename(asset) || !files.has(asset))
+      throw new Error(`Update manifest references missing asset: ${asset}`);
+    const data = readFileSync(files.get(asset));
+    if (
+      entry.size !== data.length ||
+      entry.sha512 !== createHash("sha512").update(data).digest("base64")
+    )
+      throw new Error(`Update checksum mismatch: ${asset}`);
   }
 }
 
@@ -194,6 +198,8 @@ export async function stageRelease(input, output, version, seed) {
 export async function publishRelease(directory, version, sha) {
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("Invalid release commit");
   const repository = "Jhuighuy/GitDove";
+  // Release publication runs on macOS with the runner's Homebrew GitHub CLI.
+  const githubCLI = process.arch === "arm64" ? "/opt/homebrew/bin/gh" : "/usr/local/bin/gh";
   const api = async (path) => {
     const response = await fetch(`https://api.github.com/repos/${repository}/${path}`, {
       headers: {
@@ -224,7 +230,7 @@ export async function publishRelease(directory, version, sha) {
     const commit = await api(`commits/${tag}`);
     if (commit && commit.sha !== sha) throw new Error("Release tag points to a different commit");
     execFileSync(
-      "gh",
+      githubCLI,
       [
         "release",
         "create",
@@ -245,12 +251,20 @@ export async function publishRelease(directory, version, sha) {
   const assets = readdirSync(directory)
     .filter((name) => name !== "notes.md")
     .map((name) => join(directory, name));
-  execFileSync("gh", ["release", "upload", tag, "--repo", repository, "--clobber", ...assets], {
-    stdio: "inherit",
-  });
-  execFileSync("gh", ["release", "edit", tag, "--repo", repository, "--draft=false", "--latest"], {
-    stdio: "inherit",
-  });
+  execFileSync(
+    githubCLI,
+    ["release", "upload", tag, "--repo", repository, "--clobber", ...assets],
+    {
+      stdio: "inherit",
+    },
+  );
+  execFileSync(
+    githubCLI,
+    ["release", "edit", tag, "--repo", repository, "--draft=false", "--latest"],
+    {
+      stdio: "inherit",
+    },
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -274,5 +288,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   else if (command === "publish")
     await publishRelease(input, version, process.env.GITDOVE_RELEASE_SHA ?? "");
   else
-    throw new Error("Usage: release.mjs version | stage <artifacts> <output> | publish <output>");
+    throw new Error(
+      "Usage: release.mjs version | validate <artifacts> | stage <artifacts> <output> | publish <output>",
+    );
 }

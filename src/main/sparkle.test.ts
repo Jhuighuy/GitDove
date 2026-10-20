@@ -39,7 +39,7 @@ describe("Sparkle bridge", () => {
     void updater.check();
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(spawn).toHaveBeenCalledWith(
-      expect.stringContaining("GitDoveUpdater.app/Contents/MacOS/GitDoveUpdater"),
+      expect.stringContaining(join("GitDoveUpdater.app", "Contents/MacOS/GitDoveUpdater")),
       [bundle],
       { stdio: "pipe" },
     );
