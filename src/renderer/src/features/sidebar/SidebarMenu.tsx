@@ -311,15 +311,47 @@ export function SidebarMenu({ repo, target, all, vis }: Props) {
               {groupItems("refs/heads/")}
             </Menu>
           );
-        case "remote":
+        case "remote": {
+          // A single remote is shown without its own row, so offer its actions here.
+          const only = refs?.remotes.length === 1 ? refs.remotes[0] : undefined;
           return (
             <Menu>
-              <Item onClick={() => void commands.addRemote(repo)}>Add remote…</Item>
-              <Item onClick={() => void commands.fetch(repo)}>Fetch all</Item>
+              {only ? (
+                <>
+                  <Item onClick={() => void commands.fetchRemote(repo, only.name)}>
+                    Fetch {only.name}
+                  </Item>
+                  <Item onClick={() => void commands.editRemoteUrl(repo, only.name, only.fetchUrl)}>
+                    Edit {only.name} URL…
+                  </Item>
+                  <Item onClick={() => commands.copy(only.fetchUrl, "Remote URL copied")}>
+                    Copy {only.name} URL
+                  </Item>
+                  <Sep />
+                  <Item onClick={() => void commands.addRemote(repo)}>Add remote…</Item>
+                </>
+              ) : (
+                <>
+                  <Item onClick={() => void commands.addRemote(repo)}>Add remote…</Item>
+                  <Item onClick={() => void commands.fetch(repo)}>Fetch all</Item>
+                </>
+              )}
               <Sep />
               {groupItems("refs/remotes/")}
+              {only && (
+                <>
+                  <Sep />
+                  <Item
+                    variant="destructive"
+                    onClick={() => void commands.removeRemote(repo, only.name)}
+                  >
+                    Remove {only.name}
+                  </Item>
+                </>
+              )}
             </Menu>
           );
+        }
         case "tags":
           return (
             <Menu>

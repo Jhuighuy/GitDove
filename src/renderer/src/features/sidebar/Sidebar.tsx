@@ -116,22 +116,27 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       children: [...remotes].map(([name, refs]) => {
         const remote = remoteList.find((r) => r.name === name);
         const names = refs.map((r) => r.name);
+        // With a single remote its subtree adds nothing: list its branches flatly
+        // (its own actions move to the section header menu).
+        const flat = remotes.size === 1;
         return (
           <div key={name}>
-            <Item
-              icon={<RemoteIcon remote={remote} />}
-              label={name}
-              title={remote?.fetchUrl ?? name}
-              visibility={groupVisibility(names)}
-              onToggle={() => toggleGroup(`refs/remotes/${name}/`, names)}
-              onContextMenu={() => remote && setMenu({ kind: "remote", remote })}
-            />
+            {!flat && (
+              <Item
+                icon={<RemoteIcon remote={remote} />}
+                label={name}
+                title={remote?.fetchUrl ?? name}
+                visibility={groupVisibility(names)}
+                onToggle={() => toggleGroup(`refs/remotes/${name}/`, names)}
+                onContextMenu={() => remote && setMenu({ kind: "remote", remote })}
+              />
+            )}
             {refs
               .filter((r) => match(r.short))
               .map((r) => (
                 <RefItem
                   key={r.name}
-                  depth={1}
+                  depth={flat ? 0 : 1}
                   refItem={r}
                   label={r.short.slice(name.length + 1)}
                   icon={<IconGitBranch />}
