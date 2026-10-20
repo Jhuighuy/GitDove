@@ -28,6 +28,7 @@ Restart toast in A, clicking it completes Electron's shutdown, Sparkle replaces
 the bundle, and B must load its renderer and attest its runtime version. These
 copies use a unique app identity and isolated user-data directory. The production
 app's packages and update key are left untouched.
+The disposable copies use software rendering so hosted runners do not need GPU access.
 
 After packaging, the release validation job checks that all platform artifacts
 exist, use one version, and match the Windows/Linux update metadata checksums.

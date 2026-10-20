@@ -66,6 +66,7 @@ const server = createServer((request, response) => {
 await new Promise((done) => server.listen(0, "127.0.0.1", done));
 const base = `http://127.0.0.1:${server.address().port}`;
 let browser;
+let page;
 let launchPID;
 let diagnostics = "";
 
@@ -96,7 +97,7 @@ async function createBundle(name, version) {
   writeFileSync(packageFile, JSON.stringify(metadata));
   const main = join(extracted, metadata.main);
   // Instrument only these disposable copies: attest runtime version after the renderer loads.
-  const prelude = `import{app as proofApp}from'electron';import{appendFileSync as proofLog}from'node:fs';proofApp.on('browser-window-created',(_event,window)=>window.webContents.once('did-finish-load',()=>proofLog(${JSON.stringify(marker)},proofApp.getVersion()+' '+process.pid+'\\n')));\n`;
+  const prelude = `import{app as proofApp}from'electron';import{appendFileSync as proofLog}from'node:fs';proofApp.disableHardwareAcceleration();proofApp.on('browser-window-created',(_event,window)=>window.webContents.once('did-finish-load',()=>proofLog(${JSON.stringify(marker)},proofApp.getVersion()+' '+process.pid+'\\n')));\n`;
   writeFileSync(main, prelude + readFileSync(main, "utf8"));
   rmSync(archivePath);
   rmSync(`${archivePath}.unpacked`, { recursive: true, force: true });
@@ -168,7 +169,10 @@ try {
   // Renderer CDP avoids a Node inspector holding the old process open during quit.
   browser = await chromium.connectOverCDP(endpoint);
   const context = browser.contexts()[0];
-  const page = context.pages()[0] ?? (await context.waitForEvent("page"));
+  page = context.pages()[0] ?? (await context.waitForEvent("page"));
+  page.on("pageerror", (error) => {
+    diagnostics += `\nRenderer error: ${error.stack}\n`;
+  });
   await page.waitForLoadState("domcontentloaded");
   await page.waitForFunction(
     async () => {
@@ -204,6 +208,14 @@ try {
     "PASS: packaged GitDove A → Restart toast → B; B renderer loaded, no Apple certificate",
   );
 } catch (error) {
+  if (page && !page.isClosed()) {
+    diagnostics += `\nRenderer state: ${await page
+      .evaluate(() => document.body.innerText)
+      .catch(() => "unavailable")}\n`;
+    await page
+      .screenshot({ path: join(output, `electron-failure-${process.arch}.png`), timeout: 5000 })
+      .catch(() => {});
+  }
   writeFileSync(
     join(output, `electron-error-${process.arch}.log`),
     `${error.stack}\n${diagnostics}`,
