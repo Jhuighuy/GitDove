@@ -108,10 +108,15 @@ async function main([command, ...args]) {
     const [dir, prefix] = args;
     const seed = process.env.SPARKLE_PRIVATE_KEY;
     if (!seed) throw new Error("SPARKLE_PRIVATE_KEY is not set");
-    const [zip, ...others] = readdirSync(dir)
+    const entries = readdirSync(dir);
+    const [zip, ...others] = entries
       .filter((name) => name.endsWith("-mac-arm64.zip"))
       .map((name) => join(dir, name));
-    if (!zip || others.length) throw new Error(`Expected one macOS ZIP in ${dir}`);
+    if (!zip || others.length) {
+      throw new Error(
+        `Expected one *-mac-arm64.zip in ${dir}, found: ${entries.join(", ") || "nothing"}`,
+      );
+    }
     const output = join(dir, "appcast.xml");
     await writeAppcast({
       zip,

@@ -145,6 +145,18 @@ jobs:
           pattern: packages-*
           merge-multiple: true
           path: dist
+      # upload-artifact keeps paths relative to the patterns' common root (`release/`), so each
+      # package sits in a version directory; the steps below expect the files directly in dist/.
+      - name: Flatten packages
+        run: |
+          find dist -mindepth 2 -type f -exec mv -n {} dist/ \;
+          find dist -mindepth 1 -type d -empty -delete
+          if [ -n "$(find dist -mindepth 2 -print -quit)" ]; then
+            echo "Duplicate file names across packages:" >&2
+            find dist -mindepth 2 >&2
+            exit 1
+          fi
+          ls -l dist
       - id: version
         run: node scripts/release.mjs version
       - name: Sign the macOS update
