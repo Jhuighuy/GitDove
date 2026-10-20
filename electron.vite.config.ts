@@ -28,6 +28,8 @@ export default defineConfig({
       alias: { ...shared, "@": resolve(import.meta.dirname, "src/renderer/src") },
     },
     plugins: [react(), tailwindcss()],
+    // ES module workers can code-split (shiki loads grammars on demand).
+    worker: { format: "es" },
     build: { minify: true, sourcemap: true },
   },
 });
