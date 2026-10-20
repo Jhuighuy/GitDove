@@ -29,8 +29,13 @@ interface PatchAction {
   readonly destructive: boolean;
 }
 
-const actionsFor = (target: DiffTarget, what: "Hunk" | "Lines"): PatchAction[] =>
-  target.kind === "unstaged" && !target.untracked
+/**
+ * Hunk and line actions. A rename has none: its patch moves the file between
+ * paths, so applying part of it in reverse would undo the whole rename.
+ */
+const actionsFor = (target: DiffTarget, what: "Hunk" | "Lines"): PatchAction[] => {
+  if (target.kind !== "unstaged" && target.oldPath) return [];
+  return target.kind === "unstaged" && !target.untracked
     ? [
         { label: `Discard ${what}`, reverse: true, cached: false, destructive: true },
         { label: `Stage ${what}`, reverse: false, cached: true, destructive: false },
@@ -38,6 +43,7 @@ const actionsFor = (target: DiffTarget, what: "Hunk" | "Lines"): PatchAction[] =
     : target.kind === "staged"
       ? [{ label: `Unstage ${what}`, reverse: true, cached: true, destructive: false }]
       : [];
+};
 
 const EMPTY_SELECTION: ReadonlySet<number> = new Set();
 

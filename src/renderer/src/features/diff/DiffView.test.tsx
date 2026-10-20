@@ -58,15 +58,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function render(path: string) {
+/** Gives the virtualized list a viewport, so that lines render. */
+const withViewport = () => {
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(600);
+};
+
+async function render(path: string, target: DiffTarget = { kind: "unstaged", path }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <DiffView repo="local:/repo" target={{ kind: "unstaged", path }} />
+        <DiffView repo="local:/repo" target={target} />
       </QueryClientProvider>,
     ),
   );
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
   await act(async () => new Promise((r) => setTimeout(r, 0)));
 }
 
@@ -104,9 +111,7 @@ it("switches SVGs between text and image, and remembers the choice", async () =>
 });
 
 it("drops a line selection when switching to the image view", async () => {
-  // Give the virtualized list a viewport, so that lines render.
-  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
-  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(600);
+  withViewport();
   await render("a.svg");
   await act(async () => new Promise((r) => setTimeout(r, 0)));
   const line = container.querySelector<HTMLElement>("[data-line]");
@@ -116,6 +121,15 @@ it("drops a line selection when switching to the image view", async () => {
   expect(container.textContent).not.toContain("selected");
   await click("Text diff");
   expect(container.textContent).not.toContain("selected");
+});
+
+it("offers hunk actions, except across a rename", async () => {
+  withViewport();
+  await render("a.svg", { kind: "staged", path: "a.svg" });
+  expect(container.textContent).toContain("Unstage Hunk");
+  await render("a.svg", { kind: "staged", path: "a.svg", oldPath: "old.svg" });
+  expect(container.textContent).toContain("@@ -1 +1 @@");
+  expect(container.textContent).not.toContain("Unstage Hunk");
 });
 
 it("closes on Escape, also from the swipe slider but not from text fields", async () => {
