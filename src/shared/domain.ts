@@ -243,6 +243,19 @@ export interface FileDiff {
   readonly truncated: boolean;
 }
 
+/** One side of a file change, as raw bytes. */
+export type FileContent =
+  | { readonly kind: "missing" }
+  /** Larger than we transfer; `size` is in bytes. */
+  | { readonly kind: "large"; readonly size: number }
+  | { readonly kind: "blob"; readonly bytes: Uint8Array };
+
+/** Both sides of a diff target, for rendered (non-textual) views. */
+export interface FileVersions {
+  readonly old: FileContent;
+  readonly new: FileContent;
+}
+
 // ---------------------------------------------------------------------------
 // Remote hosts
 // ---------------------------------------------------------------------------

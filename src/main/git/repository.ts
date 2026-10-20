@@ -2,6 +2,7 @@ import type {
   CommitDetails,
   DiffTarget,
   FileDiff,
+  FileVersions,
   GraphInfo,
   GraphRow,
   RefsSnapshot,
@@ -24,10 +25,12 @@ import {
   StaleGraphError,
 } from "../exec/errors";
 import type { ExecOptions, Host } from "../exec/hosts";
+import { shellQuote } from "../exec/shell";
 import type { SpawnResult } from "../exec/spawn";
 import { GraphBuilder, LOG_FORMAT, LogParser } from "./graph";
 import {
   parseDiff,
+  parseFileVersions,
   parseNameStatus,
   parseNumstat,
   parseRefs,
@@ -54,6 +57,9 @@ const GIT_CONFIG = [
 
 /** Largest diff we render before truncating (bytes). */
 const MAX_DIFF_BYTES = 8 * 1024 * 1024;
+
+/** Largest file version we transfer for rendered views (bytes). */
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 const decoder = new TextDecoder("utf-8");
 const text = (r: SpawnResult) => decoder.decode(r.stdout);
@@ -116,6 +122,67 @@ const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARe
       };
     }),
   );
+
+// ---------------------------------------------------------------------------
+// File versions
+// ---------------------------------------------------------------------------
+
+/**
+ * Prints both sides of a change in one round trip, see `parseFileVersions`.
+ * Revisions are resolved to object ids first so that the size and the content
+ * always describe the same blob, even if the index changes meanwhile.
+ */
+const FILE_VERSIONS_SCRIPT = String.raw`
+emit_blob() {
+  oid=$(git rev-parse -q --verify "$1" 2>/dev/null) || { echo missing; return; }
+  set -- $(printf '%s
+' "$oid" | git cat-file --batch-check)
+  if [ "$2" != blob ]; then echo missing
+  elif [ "$3" -gt "$max" ]; then echo "large $3"
+  else echo "blob $3"; git cat-file blob "$1"; fi
+}
+emit_file() {
+  if [ -f "$1" ] && [ ! -L "$1" ]; then
+    size=$(($(wc -c < "$1")))
+    if [ "$size" -gt "$max" ]; then echo "large $size"; else echo file; cat -- "$1"; fi
+  else echo missing; fi
+}
+`;
+
+/** Where one side of a change is read from. */
+type VersionSource =
+  | { readonly kind: "none" }
+  | { readonly kind: "rev"; readonly spec: string }
+  | { readonly kind: "file"; readonly path: string };
+
+const versionSources = (target: DiffTarget): [VersionSource, VersionSource] => {
+  const { path } = target;
+  switch (target.kind) {
+    case "unstaged":
+      return [
+        target.untracked ? { kind: "none" } : { kind: "rev", spec: `:0:${path}` },
+        { kind: "file", path },
+      ];
+    case "staged":
+      return [
+        { kind: "rev", spec: `HEAD:${path}` },
+        { kind: "rev", spec: `:0:${path}` },
+      ];
+    case "commit":
+      // The first parent, like `diff`; a root commit has none and reads as missing.
+      return [
+        { kind: "rev", spec: `${target.hash}^:${path}` },
+        { kind: "rev", spec: `${target.hash}:${path}` },
+      ];
+  }
+};
+
+const emitVersion = (source: VersionSource): string =>
+  source.kind === "none"
+    ? "echo missing"
+    : source.kind === "rev"
+      ? `emit_blob ${shellQuote(source.spec)}`
+      : `emit_file ${shellQuote(source.path)}`;
 
 // ---------------------------------------------------------------------------
 // Graph state
@@ -333,6 +400,31 @@ export class Repository {
       }
       const r = yield* self.git(args, { maxBytes: MAX_DIFF_BYTES, okCodes });
       return parseDiff(text(r), target.path, null, r.truncated);
+    });
+  }
+
+  /** Both sides of `target` as bytes, for views that render the whole file. */
+  fileVersions(target: DiffTarget): Effect.Effect<FileVersions, GitError | InvalidInputError> {
+    const self = this;
+    return Effect.gen(function* () {
+      yield* validatePath(target.path);
+      if (target.kind === "commit") yield* validateRev(target.hash);
+      const [old, next] = versionSources(target);
+      const script = `${FILE_VERSIONS_SCRIPT}max=${MAX_FILE_BYTES}\n${emitVersion(old)}\n${emitVersion(next)}\n`;
+      const r = yield* self.host.sh(script, {
+        cwd: self.workTree,
+        maxBytes: 2 * MAX_FILE_BYTES + 1024,
+      });
+      return yield* Effect.try({
+        try: () => parseFileVersions(r.stdout, r.truncated),
+        catch: (e) =>
+          new CommandError({
+            message: String(e),
+            command: "file versions",
+            exitCode: 0,
+            stderr: "",
+          }),
+      });
     });
   }
 
@@ -943,6 +1035,12 @@ const validateRev = (rev: string) =>
   rev && !rev.startsWith("-") && !/[\0\n]/.test(rev)
     ? Effect.void
     : Effect.fail(new InvalidInputError({ message: `Invalid revision: ${rev}` }));
+
+/** A repository-relative path that stays inside the working tree. */
+const validatePath = (path: string) =>
+  path && !path.startsWith("/") && !path.includes("\0") && !path.split("/").includes("..")
+    ? Effect.void
+    : Effect.fail(new InvalidInputError({ message: `Invalid path: ${path}` }));
 
 const validateBranchName = (name: string) =>
   name && !name.startsWith("-") && !/[\0\n\s~^:?*[\\]|\.\.|@\{|\/$|\.lock$/.test(name)
