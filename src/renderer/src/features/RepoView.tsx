@@ -2,7 +2,7 @@ import type { RepoId } from "@shared/domain";
 import { repoLocationOf } from "@shared/domain";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Spinner } from "@/components/ui/spinner";
@@ -68,6 +68,9 @@ export function RepoView({ repo, active }: { repo: RepoId; active: boolean }) {
 function RepoLayout({ repo, active }: { repo: RepoId; active: boolean }) {
   const layout = useLayout();
   const { diff } = useRepoUi(repo);
+  // The panel library keeps layout state per group id, and every tab has a group: a shared id
+  // made a tab opened after a hidden one inherit its unmeasured layout (equal thirds).
+  const id = useId();
 
   // Menu commands target the active tab only.
   useEvent("menu.command", ({ command }) => {
@@ -114,22 +117,22 @@ function RepoLayout({ repo, active }: { repo: RepoId; active: boolean }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Toolbar repo={repo} />
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" id="gitdove-main">
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" id={`${id}main`}>
         {layout.sidebar && (
           <>
-            <ResizablePanel id="sidebar" defaultSize={230} minSize={160} maxSize={480}>
+            <ResizablePanel id={`${id}sidebar`} defaultSize={230} minSize={160} maxSize={480}>
               <Sidebar repo={repo} />
             </ResizablePanel>
             <ResizableHandle />
           </>
         )}
-        <ResizablePanel id="center" minSize={320}>
+        <ResizablePanel id={`${id}center`} minSize={320}>
           {diff ? <DiffView repo={repo} target={diff} /> : <CommitGraph repo={repo} />}
         </ResizablePanel>
         {layout.details && (
           <>
             <ResizableHandle />
-            <ResizablePanel id="details" defaultSize={400} minSize={280} maxSize={720}>
+            <ResizablePanel id={`${id}details`} defaultSize={400} minSize={280} maxSize={720}>
               <DetailsPanel repo={repo} />
             </ResizablePanel>
           </>
