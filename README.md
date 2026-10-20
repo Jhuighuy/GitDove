@@ -27,7 +27,7 @@ robustness as the top priorities.
   self-hosted, detected from the remote's host) and Gravatar, and cached on disk. Commit emails
   (or their hashes, for Gravatar) are sent to those services; GitHub and GitLab are only queried
   for repositories hosted there.
-- **Over-the-air updates:** delivered from GitHub releases.
+- **Over-the-air updates:** delivered from GitHub releases, using Sparkle on macOS.
 
 ## Development
 
@@ -74,9 +74,11 @@ All git work happens in the main process by spawning `git`, either locally or vi
 The renderer never touches the file system. Query results are cached with TanStack Query and
 invalidated by `repo.changed` events from the watchers, so the UI never polls.
 
-Releases: bump `version` in `package.json`, then push a `vX.Y.Z` tag. The release workflow builds
-for macOS, Windows and Linux and publishes a GitHub release that installed apps update from. Signed
-macOS builds are required for auto-update on macOS (see `electron-builder.yml`).
+Every successful push-to-main CI run produces packages for macOS (Apple Silicon and Intel),
+Windows, and Linux, then publishes a complete GitHub release. macOS updates use Sparkle with
+Ed25519-signed feeds and archives, without an Apple certificate. First installations may require
+macOS approval because builds are not notarized. See [updates and releases](docs/updates.md) for
+versioning, signing-key maintenance, and the reproducible update proof.
 
 ## License
 

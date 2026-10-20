@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { type EventName, type Events, IPC_EVENT, type MenuCommand } from "@shared/ipc";
-import { app, BrowserWindow, Menu, type MenuItemConstructorOptions, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, type MenuItemConstructorOptions, shell } from "electron";
 import log from "electron-log/main";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import dockIcon from "../../build/icon.png?asset";
@@ -10,6 +10,7 @@ import { handleAvatarProtocol, registerAvatarScheme } from "./avatars";
 import { fixProcessPath } from "./exec/environment";
 import { HostsLive } from "./exec/hosts";
 import { registerIpc } from "./ipc";
+import { cleanupOnQuit } from "./lifecycle";
 import { Notifier, RepoSettings, ReposLive } from "./services";
 import { repoSettings, updateRepoSettings } from "./state";
 import { updater } from "./updater";
@@ -103,6 +104,22 @@ const buildMenu = () => {
       role: "help",
       submenu: [
         {
+          label: "Check for Updates…",
+          enabled: app.isPackaged,
+          click: async () => {
+            await updater.check();
+            const status = updater.status();
+            if (status.kind === "error" || status.kind === "idle") {
+              void dialog.showMessageBox({
+                type: status.kind === "error" ? "error" : "info",
+                message:
+                  status.kind === "error" ? "Could not check for updates" : "GitDove is up to date",
+                detail: status.kind === "error" ? status.message : `Version ${app.getVersion()}`,
+              });
+            }
+          },
+        },
+        {
           label: "GitDove on GitHub",
           click: () => void shell.openExternal("https://github.com/Jhuighuy/GitDove"),
         },
@@ -195,16 +212,13 @@ app.on("window-all-closed", () => {
   if (!isMac) app.quit();
 });
 
-let disposing = false;
-app.on("will-quit", (e) => {
-  if (disposing) return;
-  disposing = true;
-  e.preventDefault();
-  // Close SSH masters and file watchers before exiting.
-  void runtime
-    .dispose()
-    .catch((err: unknown) => log.error("dispose failed", err))
-    .finally(() => app.exit(0));
-});
+cleanupOnQuit(
+  app,
+  async () => {
+    updater.dispose();
+    await runtime.dispose();
+  },
+  (error) => log.error("dispose failed", error),
+);
 
 void main();

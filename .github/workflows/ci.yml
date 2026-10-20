@@ -35,7 +35,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: macos-latest
+            platform: mac
+            arch: arm64
+          - os: macos-15-intel
+            platform: mac
+            arch: x64
+          - os: windows-latest
+            platform: win
+            arch: x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -49,3 +61,53 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Prove Sparkle update and tamper rejection without an Apple certificate
+        if: runner.os == 'macOS'
+        run: npm run test:updates
+      - name: Release version
+        id: version
+        run: node scripts/release.mjs version
+      - name: Package distributions
+        run: npm run package -- --${{ matrix.platform }} --${{ matrix.arch }} -c.extraMetadata.version=${{ steps.version.outputs.version }}
+      - name: Prove packaged GitDove restart and update
+        if: runner.os == 'macOS'
+        run: npm run test:updates:electron -- release/${{ steps.version.outputs.version }}
+      - name: Save tested distribution packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.platform }}-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+          path: |
+            release/*/*.AppImage
+            release/*/*.deb
+            release/*/*.exe
+            release/*/*.dmg
+            release/*/*.zip
+            release/*/*.blockmap
+            release/*/latest*.yml
+      - name: Save Sparkle proof
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-proof-${{ matrix.arch }}
+          overwrite: true
+          path: out/update-proof/
+
+  release-check:
+    name: Release package validation
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: packages-*
+          path: out/release-artifacts
+      - run: node scripts/release.mjs validate out/release-artifacts

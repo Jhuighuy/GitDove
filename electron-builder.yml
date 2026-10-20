@@ -1,5 +1,7 @@
 appId: dev.gitdove.app
 productName: GitDove
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+afterPack: scripts/after-pack.mjs
 copyright: Copyright © 2026 Oleg Butakov
 directories:
   output: release/${version}
@@ -22,14 +24,15 @@ mac:
   icon: build/icon.icns
   category: public.app-category.developer-tools
   target:
-    - target: dmg
-      arch: [arm64, x64]
-    # The zip is what electron-updater downloads for over-the-air updates.
-    - target: zip
-      arch: [arm64, x64]
+    - dmg
+    # Sparkle downloads the ZIP; the DMG is for the first installation.
+    - zip
   hardenedRuntime: true
-  # Auto-updates on macOS require a signed build; set CSC_LINK/CSC_KEY_PASSWORD
-  # and APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID in CI to sign and notarize.
+  identity: "-"
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  minimumSystemVersion: "13.0"
+  # Ad-hoc signing needs no Apple certificate. Sparkle verifies our Ed25519 signatures.
   notarize: false
 linux:
   icon: build/icons
