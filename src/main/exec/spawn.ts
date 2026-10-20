@@ -91,31 +91,13 @@ export const spawn = (
       );
     });
     child.on("close", (code, signal) => {
-      const stdout = Buffer.concat(chunks);
-      if (truncated) {
-        finish(Effect.succeed({ stdout, stderr, exitCode: code ?? 0, truncated }));
-        return;
-      }
-      const exitCode = code ?? -1;
-      if (code !== null && okCodes.includes(code)) {
-        finish(Effect.succeed({ stdout, stderr, exitCode, truncated }));
-      } else {
-        const firstLine = summarizeStderr(stderr);
-        finish(
-          Effect.fail(
-            new CommandError({
-              message:
-                firstLine ??
-                (signal
-                  ? `${display} was killed by ${signal}`
-                  : `${display} exited with ${exitCode}`),
-              command: display,
-              exitCode: code,
-              stderr: stderr.trim(),
-            }),
-          ),
-        );
-      }
+      finish(
+        completion(
+          { stdout: Buffer.concat(chunks), stderr, code, signal, truncated },
+          okCodes,
+          display,
+        ),
+      );
     });
 
     child.stdin.on("error", () => {
@@ -128,6 +110,40 @@ export const spawn = (
       if (!done && child.exitCode === null) child.kill();
     });
   });
+
+/**
+ * Turns a finished process into a result, or a `CommandError` when its exit
+ * code is not one of `okCodes`. Truncated output always counts as success
+ * since the process was killed on purpose.
+ */
+export const completion = (
+  r: {
+    readonly stdout: Buffer;
+    readonly stderr: string;
+    readonly code: number | null;
+    readonly signal?: string | null | undefined;
+    readonly truncated: boolean;
+  },
+  okCodes: readonly number[],
+  display: string,
+): Effect.Effect<SpawnResult, CommandError> => {
+  const { stdout, stderr, code, signal, truncated } = r;
+  if (truncated) return Effect.succeed({ stdout, stderr, exitCode: code ?? 0, truncated });
+  const exitCode = code ?? -1;
+  if (code !== null && okCodes.includes(code)) {
+    return Effect.succeed({ stdout, stderr, exitCode, truncated });
+  }
+  return Effect.fail(
+    new CommandError({
+      message:
+        summarizeStderr(stderr) ??
+        (signal ? `${display} was killed by ${signal}` : `${display} exited with ${exitCode}`),
+      command: display,
+      exitCode: code,
+      stderr: stderr.trim(),
+    }),
+  );
+};
 
 /**
  * Picks the most informative line of git's stderr: the first `fatal:`/`error:`
