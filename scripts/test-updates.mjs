@@ -95,11 +95,11 @@ function running(app) {
     .map((m) => Number(m[1]));
 }
 
-async function until(condition, what, timeout = 120_000) {
-  for (const end = Date.now() + timeout; Date.now() < end; await sleep(250)) {
-    if (await condition()) return; // NOSONAR: polling is sequential by design.
-  }
-  throw new Error(`Timed out waiting until ${what}`);
+async function until(condition, what, deadline = Date.now() + 120_000) {
+  if (await condition()) return;
+  if (Date.now() > deadline) throw new Error(`Timed out waiting until ${what}`);
+  await sleep(250);
+  return until(condition, what, deadline);
 }
 
 /** Launches `app` and connects to its renderer. */
