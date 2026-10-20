@@ -58,6 +58,7 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
         expect(seen()).toContain(scope);
       },
       /** Waits until no notification arrived for a while. */
+      /** Waits until notifications stop, then clears them; returns how many there were. */
       quiet: async () => {
         let n = -1;
         while (n !== batches.length) {
@@ -65,6 +66,7 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
           await sleep(500);
         }
         batches.length = 0;
+        return n;
       },
     };
   };
@@ -115,9 +117,8 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
     for (let i = 0; i < 20; i++) touch(join(dir, `f${i}`));
     touch(join(dir, ".git", "FETCH_HEAD"));
     await vi.waitFor(() => expect(w.batches.length).toBeGreaterThan(0));
-    await w.quiet().catch(() => {});
     // 21 writes in a few milliseconds end up in at most a couple of batches.
-    expect(w.batches.length).toBeLessThanOrEqual(2);
+    expect(await w.quiet()).toBeLessThanOrEqual(2);
   });
 
   it("ignores object database writes and unknown git files", async () => {
