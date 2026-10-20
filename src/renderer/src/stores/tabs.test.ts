@@ -65,11 +65,27 @@ it("opens a repository in a new tab when the active tab has one", async () => {
   expect(lastSaved()).toEqual({ tabs: [A, B], activeTab: B, recent: [B] });
 });
 
-it("opens a repository in a given tab", async () => {
+it("opens a repository in a given blank tab", async () => {
+  await load([A], A);
+  s().newTab();
+  const blank = s().active!;
+  s().activate(s().tabs[0]!.key);
+  s().openRepo(B, blank);
+  expect(s().tabs).toEqual([expect.objectContaining({ repo: A }), { key: blank, repo: B }]);
+  expect(s().active).toBe(blank);
+});
+
+it("opens a new tab when the given tab was filled or closed meanwhile", async () => {
   await load([A, C], A);
   s().openRepo(B, s().tabs[1]!.key);
-  expect(repos()).toEqual([A, B]);
+  // C stays open in its tab instead of being replaced without closing it.
+  expect(repos()).toEqual([A, C, B]);
   expect(activeRepo()).toBe(B);
+  expect(mocks.api).not.toHaveBeenCalledWith("repo.close", C);
+
+  s().openRepo("local:/d", "tab-gone");
+  expect(repos()).toEqual([A, C, B, "local:/d"]);
+  expect(activeRepo()).toBe("local:/d");
 });
 
 it("focuses an already open repository, dropping the blank tab it was opened from", async () => {
