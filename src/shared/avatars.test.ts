@@ -12,7 +12,7 @@ describe("avatars", () => {
     expect(remoteHost("https://github.com/Jhuighuy/GitDove.git")).toBe("github.com");
     expect(remoteHost("git@github.com:Jhuighuy/GitDove.git")).toBe("github.com");
     expect(remoteHost("ssh://git@gitlab.example.org:2222/a/b.git")).toBe("gitlab.example.org");
-    expect(remoteHost("/srv/git/repo.git")).toBe(null);
+    expect(remoteHost("/srv/git/repo.git")).toBeNull();
   });
 
   it("derives providers", () => {
@@ -40,7 +40,7 @@ describe("avatars", () => {
       providers: ["github", "gitlab:gitlab.com"],
       size: 64,
     });
-    expect(parseAvatarUrl("gitdove-avatar://avatar/?e=nope&s=64")).toBe(null);
+    expect(parseAvatarUrl("gitdove-avatar://avatar/?e=nope&s=64")).toBeNull();
     expect(
       parseAvatarUrl("gitdove-avatar://avatar/?e=a@b&p=gitlab:evil/path&s=64")?.providers,
     ).toEqual([]);
@@ -55,6 +55,6 @@ describe("avatars", () => {
       id: null,
       login: "SunBlack",
     });
-    expect(githubNoreply("a@gmail.com")).toBe(null);
+    expect(githubNoreply("a@gmail.com")).toBeNull();
   });
 });

@@ -424,7 +424,7 @@ function VisibilityToggle({
   onToggle,
 }: {
   visibility: Visibility;
-  onToggle?: (() => void) | undefined;
+  onToggle?: () => void;
 }) {
   if (visibility === "none") return <span className="w-5 shrink-0" />;
   if (visibility === "head") {
@@ -464,7 +464,7 @@ function RefItem({
 }: Omit<ItemProps, "label" | "active" | "trailing"> & { refItem: Ref; label?: string }) {
   const track = r.upstreamGone
     ? "gone"
-    : `${r.ahead ? `${r.ahead}↑` : ""} ${r.behind ? `${r.behind}↓` : ""}`.trim();
+    : [r.ahead ? r.ahead + "↑" : "", r.behind ? r.behind + "↓" : ""].join(" ").trim();
   return (
     <Item
       {...rest}

@@ -1,7 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { Effect } from "effect";
 import { CommandError, SshError } from "./errors";
-import { completion, type SpawnResult } from "./spawn";
+import { completion, type SpawnResult, type Stdin } from "./spawn";
 
 /*
  * A persistent command runner: one long-lived POSIX `sh` on a remote host that
@@ -79,7 +79,7 @@ const isPlain = (b: number) => b > 0x20 && b < 0x7f && b !== 0x25 && b !== 0x5c;
  * ASCII. Escapes are always three octal digits, which every `printf` reads as
  * one escape (even when a digit follows).
  */
-export const encodePrintf = (data: string | Buffer): string => {
+export const encodePrintf = (data: Stdin): string => {
   const bytes = typeof data === "string" ? Buffer.from(data, "utf8") : data;
   let out = "";
   let plainFrom = 0;
@@ -98,7 +98,7 @@ export const encodePrintf = (data: string | Buffer): string => {
 export const encodeRequest = (
   id: number,
   command: string,
-  stdin: string | Buffer | undefined,
+  stdin: Stdin | undefined,
   limit: number,
 ): string => {
   const parts = ["X", String(id), String(limit), encodePrintf(command)];
@@ -271,7 +271,7 @@ export class Runner {
   }
 
   /** Runs `command`; `callback` receives the response or the runner's failure. */
-  run(command: string, stdin: string | Buffer | undefined, limit: number, callback: Callback) {
+  run(command: string, stdin: Stdin | undefined, limit: number, callback: Callback) {
     const id = this.nextId++;
     if (this.error) {
       callback(this.error);
@@ -324,9 +324,9 @@ export const runOnRunner = (
   host: string,
   command: string,
   options: {
-    readonly stdin?: string | Buffer | undefined;
-    readonly okCodes?: readonly number[] | undefined;
-    readonly maxBytes?: number | undefined;
+    readonly stdin?: Stdin;
+    readonly okCodes?: readonly number[];
+    readonly maxBytes?: number;
     readonly display: string;
   },
 ): Effect.Effect<SpawnResult, CommandError | SshError> =>

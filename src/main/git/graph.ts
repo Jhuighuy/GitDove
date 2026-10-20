@@ -70,8 +70,8 @@ export class GraphBuilder {
   maxLanes = 0;
 
   /** For each column, the hash of the commit expected next in it (or null). */
-  private lanes: (string | null)[] = [];
-  private colors: number[] = [];
+  private readonly lanes: (string | null)[] = [];
+  private readonly colors: number[] = [];
   private nextColor = 0;
   readonly index = new Map<string, number>();
 
@@ -124,7 +124,7 @@ export class GraphBuilder {
       }
     }
 
-    while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
+    while (lanes.length > 0 && lanes.at(-1) === null) {
       lanes.pop();
       colors.pop();
     }

@@ -257,7 +257,7 @@ export class Repository {
     private readonly hooks: RepositoryHooks,
   ) {}
 
-  static open = (
+  static readonly open = (
     host: Host,
     location: RepoLocation,
     hooks: RepositoryHooks,
@@ -355,10 +355,9 @@ export class Repository {
   }
 
   commitDetails(hash: string): Effect.Effect<CommitDetails, GitError | InvalidInputError> {
-    const self = this;
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       yield* validateRev(hash);
-      const raw = yield* self.gitText([
+      const raw = yield* this.gitText([
         "show",
         "-s",
         "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%B",
@@ -370,7 +369,7 @@ export class Repository {
       const range = base ? [base, h!] : ["--root", h!];
       const [nameStatus, numstat] = yield* Effect.all(
         [
-          self.gitText([
+          this.gitText([
             "diff-tree",
             "-r",
             "-z",
@@ -379,7 +378,7 @@ export class Repository {
             "--name-status",
             ...range,
           ]),
-          self.gitText(["diff-tree", "-r", "-z", "-M", "--no-commit-id", "--numstat", ...range]),
+          this.gitText(["diff-tree", "-r", "-z", "-M", "--no-commit-id", "--numstat", ...range]),
         ],
         { concurrency: 2 },
       );
@@ -390,7 +389,7 @@ export class Repository {
           ? { ...f, additions: s.additions, deletions: s.deletions, binary: s.additions === null }
           : f;
       });
-      const message = body.join("\0").replace(/\n+$/, "");
+      const message = trimTrailingNewlines(body.join("\0"));
       const nl = message.indexOf("\n");
       return {
         hash: h!,
@@ -405,8 +404,7 @@ export class Repository {
   }
 
   diff(target: DiffTarget): Effect.Effect<FileDiff, GitError | InvalidInputError> {
-    const self = this;
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       const common = ["--no-color", "--no-ext-diff", "-M", "--patch"];
       let args: string[];
       let okCodes: number[] = [0];
@@ -426,7 +424,7 @@ export class Repository {
         case "commit": {
           yield* validateRev(target.hash);
           yield* validateOptionalPath(target.oldPath);
-          const parents = (yield* self.gitText(["rev-list", "--parents", "-n1", target.hash]))
+          const parents = (yield* this.gitText(["rev-list", "--parents", "-n1", target.hash]))
             .trim()
             .split(" ")
             .slice(1);
@@ -436,7 +434,7 @@ export class Repository {
           break;
         }
       }
-      const r = yield* self.git(args, { maxBytes: MAX_DIFF_BYTES, okCodes });
+      const r = yield* this.git(args, { maxBytes: MAX_DIFF_BYTES, okCodes });
       return parseDiff(
         text(r),
         target.path,
@@ -474,9 +472,7 @@ export class Repository {
   }
 
   lastCommitMessage(): Effect.Effect<string, GitError> {
-    return this.gitText(["log", "-1", "--format=%B"]).pipe(
-      Effect.map((s) => s.replace(/\n+$/, "")),
-    );
+    return this.gitText(["log", "-1", "--format=%B"]).pipe(Effect.map(trimTrailingNewlines));
   }
 
   search(query: string): Effect.Effect<string[], GitError> {
@@ -540,7 +536,7 @@ export class Repository {
   ): Effect.Effect<GraphRow[], StaleGraphError> {
     return Effect.suspend(() => {
       const g = this.graph;
-      if (!g || g.version !== version) {
+      if (g?.version !== version) {
         return Effect.fail(new StaleGraphError({ message: "Graph version is outdated" }));
       }
       return Effect.succeed(g.builder.rows.slice(Math.max(0, start), Math.max(start, end)));
@@ -550,7 +546,7 @@ export class Repository {
   findCommit(version: number, hash: string): Effect.Effect<number, StaleGraphError> {
     return Effect.suspend(() => {
       const g = this.graph;
-      if (!g || g.version !== version) {
+      if (g?.version !== version) {
         return Effect.fail(new StaleGraphError({ message: "Graph version is outdated" }));
       }
       const exact = g.builder.index.get(hash);
@@ -596,14 +592,13 @@ export class Repository {
   }
 
   private loadGraph(first: boolean, ready: Deferred.Deferred<void, GitError>) {
-    const self = this;
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       const stashes = parseStashes(
-        yield* self
-          .gitText(["stash", "list", `--format=${STASH_FORMAT}`])
-          .pipe(Effect.orElseSucceed(() => "")),
+        yield* this.gitText(["stash", "list", `--format=${STASH_FORMAT}`]).pipe(
+          Effect.orElseSucceed(() => ""),
+        ),
       );
-      const head = (yield* self.gitText(["rev-parse", "-q", "--verify", "HEAD"], {
+      const head = (yield* this.gitText(["rev-parse", "-q", "--verify", "HEAD"], {
         okCodes: [0, 1],
       })).trim();
       // Stash index/untracked commits are an implementation detail: hide them
@@ -613,7 +608,7 @@ export class Repository {
 
       // Revisions to walk. Without hidden refs, let git enumerate them; with
       // hidden refs, pass the visible ones explicitly. HEAD is always shown.
-      const hiddenRefs = self.hiddenRefs;
+      const hiddenRefs = this.hiddenRefs;
       let revs: string[];
       let stdinRevs: string[];
       if (hiddenRefs.length === 0) {
@@ -621,7 +616,7 @@ export class Repository {
         stdinRevs = stashes.map((s) => s.hash);
       } else {
         const names = lines(
-          yield* self.gitText([
+          yield* this.gitText([
             "for-each-ref",
             "--format=%(refname)",
             "refs/heads",
@@ -640,11 +635,11 @@ export class Repository {
       if (head) revs.push("HEAD");
 
       const snapshot: GraphSnapshot = {
-        version: self.nextVersion++,
+        version: this.nextVersion++,
         builder: new GraphBuilder(),
         complete: false,
       };
-      if (first) self.graph = snapshot;
+      if (first) this.graph = snapshot;
 
       let lastEmit = Date.now();
       let readyFired = false;
@@ -657,7 +652,7 @@ export class Repository {
         const now = Date.now();
         if (first && now - lastEmit > 300) {
           lastEmit = now;
-          self.hooks.onGraphProgress(self, self.snapshotInfo(snapshot));
+          this.hooks.onGraphProgress(this, this.snapshotInfo(snapshot));
         }
       };
       const parser = new LogParser((c) => {
@@ -669,12 +664,12 @@ export class Repository {
       if (revs.length === 0 && stdinRevs.length === 0) {
         // Everything is hidden and HEAD is unborn: nothing to show.
         snapshot.complete = true;
-        self.graph = snapshot;
+        this.graph = snapshot;
         if (!readyFired) yield* Deferred.succeed(ready, undefined);
-        self.hooks.onGraphProgress(self, self.snapshotInfo(snapshot));
+        this.hooks.onGraphProgress(this, this.snapshotInfo(snapshot));
         return;
       }
-      const r = yield* self.git(
+      const r = yield* this.git(
         ["log", "--date-order", `--format=${LOG_FORMAT}`, "--stdin", ...revs],
         {
           stdin: stdinRevs.join("\n") + "\n",
@@ -694,9 +689,9 @@ export class Repository {
         );
       }
       snapshot.complete = true;
-      self.graph = snapshot;
+      this.graph = snapshot;
       if (!readyFired) yield* Deferred.succeed(ready, undefined);
-      self.hooks.onGraphProgress(self, self.snapshotInfo(snapshot));
+      this.hooks.onGraphProgress(this, this.snapshotInfo(snapshot));
     });
   }
 
@@ -718,10 +713,9 @@ export class Repository {
 
   unstage(paths: readonly string[]) {
     if (paths.length === 0) return Effect.void;
-    const self = this;
-    return Effect.gen(function* () {
-      const hasHead = yield* self.hasHead();
-      yield* self.run(
+    return Effect.gen({ self: this }, function* () {
+      const hasHead = yield* this.hasHead();
+      yield* this.run(
         hasHead
           ? ["reset", "-q", "HEAD", "--pathspec-from-file=-", "--pathspec-file-nul"]
           : ["rm", "--cached", "-r", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"],
@@ -731,25 +725,23 @@ export class Repository {
   }
 
   unstageAll() {
-    const self = this;
-    return Effect.gen(function* () {
-      const hasHead = yield* self.hasHead();
-      yield* self.run(hasHead ? ["reset", "-q"] : ["rm", "--cached", "-r", "-q", "."], {
+    return Effect.gen({ self: this }, function* () {
+      const hasHead = yield* this.hasHead();
+      yield* this.run(hasHead ? ["reset", "-q"] : ["rm", "--cached", "-r", "-q", "."], {
         okCodes: [0, 1],
       });
     });
   }
 
   discard(paths: readonly string[], untracked: readonly string[]) {
-    const self = this;
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       if (paths.length > 0) {
-        yield* self.run(["checkout", "--pathspec-from-file=-", "--pathspec-file-nul", "--"], {
+        yield* this.run(["checkout", "--pathspec-from-file=-", "--pathspec-file-nul", "--"], {
           stdin: paths.join("\0"),
         });
       }
       if (untracked.length > 0) {
-        yield* self.run(["clean", "-f", "-q", "--", ...untracked]);
+        yield* this.run(["clean", "-f", "-q", "--", ...untracked]);
       }
     });
   }
@@ -870,20 +862,19 @@ export class Repository {
   }
 
   abortOperation() {
-    const self = this;
-    return Effect.gen(function* () {
-      const info = yield* self.info();
+    return Effect.gen({ self: this }, function* () {
+      const info = yield* this.info();
       switch (info.state) {
         case "merging":
-          return yield* self.run(["merge", "--abort"]);
+          return yield* this.run(["merge", "--abort"]);
         case "rebasing":
-          return yield* self.run(["rebase", "--abort"]);
+          return yield* this.run(["rebase", "--abort"]);
         case "cherry-picking":
-          return yield* self.run(["cherry-pick", "--abort"]);
+          return yield* this.run(["cherry-pick", "--abort"]);
         case "reverting":
-          return yield* self.run(["revert", "--abort"]);
+          return yield* this.run(["revert", "--abort"]);
         case "bisecting":
-          return yield* self.run(["bisect", "reset"]);
+          return yield* this.run(["bisect", "reset"]);
         case "clean":
           return;
       }
@@ -891,18 +882,17 @@ export class Repository {
   }
 
   continueOperation() {
-    const self = this;
-    return Effect.gen(function* () {
-      const info = yield* self.info();
+    return Effect.gen({ self: this }, function* () {
+      const info = yield* this.info();
       switch (info.state) {
         case "merging":
-          return yield* self.run(["commit", "--no-edit"]);
+          return yield* this.run(["commit", "--no-edit"]);
         case "rebasing":
-          return yield* self.run(["rebase", "--continue"]);
+          return yield* this.run(["rebase", "--continue"]);
         case "cherry-picking":
-          return yield* self.run(["cherry-pick", "--continue"]);
+          return yield* this.run(["cherry-pick", "--continue"]);
         case "reverting":
-          return yield* self.run(["revert", "--continue"]);
+          return yield* this.run(["revert", "--continue"]);
         default:
           return;
       }
@@ -923,15 +913,21 @@ export class Repository {
   }
 
   stashPop(index: number) {
-    return this.run(["stash", "pop", "--index", `stash@{${index | 0}}`]);
+    return validateStashIndex(index).pipe(
+      Effect.andThen(this.run(["stash", "pop", "--index", `stash@{${index}}`])),
+    );
   }
 
   stashApply(index: number) {
-    return this.run(["stash", "apply", "--index", `stash@{${index | 0}}`]);
+    return validateStashIndex(index).pipe(
+      Effect.andThen(this.run(["stash", "apply", "--index", `stash@{${index}}`])),
+    );
   }
 
   stashDrop(index: number) {
-    return this.run(["stash", "drop", `stash@{${index | 0}}`]);
+    return validateStashIndex(index).pipe(
+      Effect.andThen(this.run(["stash", "drop", `stash@{${index}}`])),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -950,32 +946,30 @@ export class Repository {
   }
 
   push(opts: { force: boolean; setUpstream: boolean }) {
-    const self = this;
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       const args = ["push", ...(opts.force ? ["--force-with-lease"] : [])];
       if (opts.setUpstream) {
-        const info = yield* self.info();
+        const info = yield* this.info();
         if (!info.head.branch) {
           return yield* Effect.fail(
             new InvalidInputError({ message: "Cannot push a detached HEAD" }),
           );
         }
-        const remotes = parseRemotes(yield* self.gitText(["remote", "-v"]));
+        const remotes = parseRemotes(yield* this.gitText(["remote", "-v"]));
         const remote = remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name;
         if (!remote)
           return yield* Effect.fail(new InvalidInputError({ message: "No remotes configured" }));
         args.push("-u", remote, info.head.branch);
       }
-      yield* self.run(args);
+      yield* this.run(args);
     });
   }
 
   /** Pushes a (not necessarily checked out) branch, setting its upstream if it has none. */
   pushBranch(branch: string, force: boolean) {
-    const self = this;
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       yield* validateBranchName(branch);
-      const [remote = "", merge = ""] = (yield* self.gitText([
+      const [remote = "", merge = ""] = (yield* this.gitText([
         "for-each-ref",
         "--format=%(upstream:remotename)%00%(upstream:remoteref)",
         `refs/heads/${branch}`,
@@ -984,22 +978,21 @@ export class Repository {
         .split("\0");
       const lease = force ? ["--force-with-lease"] : [];
       if (remote && merge) {
-        return yield* self.run(["push", ...lease, remote, `refs/heads/${branch}:${merge}`]);
+        return yield* this.run(["push", ...lease, remote, `refs/heads/${branch}:${merge}`]);
       }
-      const remotes = parseRemotes(yield* self.gitText(["remote", "-v"]));
+      const remotes = parseRemotes(yield* this.gitText(["remote", "-v"]));
       const target = remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name;
       if (!target)
         return yield* Effect.fail(new InvalidInputError({ message: "No remotes configured" }));
-      yield* self.run(["push", ...lease, "-u", target, branch]);
+      yield* this.run(["push", ...lease, "-u", target, branch]);
     });
   }
 
   /** Fast-forwards a branch that is not checked out to its upstream. */
   fastForwardBranch(branch: string) {
-    const self = this;
-    return Effect.gen(function* () {
+    return Effect.gen({ self: this }, function* () {
       yield* validateBranchName(branch);
-      const [remote = "", merge = ""] = (yield* self.gitText([
+      const [remote = "", merge = ""] = (yield* this.gitText([
         "for-each-ref",
         "--format=%(upstream:remotename)%00%(upstream:remoteref)",
         `refs/heads/${branch}`,
@@ -1011,7 +1004,7 @@ export class Repository {
           new InvalidInputError({ message: `${branch} has no upstream branch` }),
         );
       }
-      yield* self.run(["fetch", remote, `${merge}:refs/heads/${branch}`]);
+      yield* this.run(["fetch", remote, `${merge}:refs/heads/${branch}`]);
     });
   }
 
@@ -1076,6 +1069,18 @@ const toStash = (s: StashEntry): Stash => ({
 const lines = (s: string) => s.split("\n").filter(Boolean);
 
 /** Rejects revisions that could be interpreted as options. */
+/** Like `s.replace(/\n+$/, "")`, without the regex backtracking on interior newlines. */
+const trimTrailingNewlines = (s: string): string => {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === "\n") end--;
+  return s.slice(0, end);
+};
+
+const validateStashIndex = (index: number) =>
+  Number.isSafeInteger(index) && index >= 0
+    ? Effect.void
+    : Effect.fail(new InvalidInputError({ message: `Invalid stash index: ${index}` }));
+
 const validateRev = (rev: string) =>
   rev && !rev.startsWith("-") && !/[\0\n]/.test(rev)
     ? Effect.void
@@ -1091,6 +1096,6 @@ const validateOptionalPath = (path: string | undefined) =>
   path === undefined ? Effect.void : validatePath(path);
 
 const validateBranchName = (name: string) =>
-  name && !name.startsWith("-") && !/[\0\n\s~^:?*[\\]|\.\.|@\{|\/$|\.lock$/.test(name)
+  name && !name.startsWith("-") && !/[\0\s~^:?*[\\]|\.\.|@\{|\/$|\.lock$/.test(name)
     ? Effect.void
     : Effect.fail(new InvalidInputError({ message: `Invalid branch name: ${name}` }));

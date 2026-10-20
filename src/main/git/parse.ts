@@ -105,7 +105,7 @@ export const parseStashes = (out: string): StashEntry[] =>
 export const parseRemotes = (out: string): Remote[] => {
   const map = new Map<string, { fetchUrl: string; pushUrl: string }>();
   for (const line of out.split("\n")) {
-    const m = /^(\S+)\s+(.+?)\s+\((fetch|push)\)$/.exec(line);
+    const m = /^([^\t]+)\t(.*) \((fetch|push)\)$/.exec(line);
     if (!m) continue;
     const entry = map.get(m[1]!) ?? { fetchUrl: "", pushUrl: "" };
     if (m[3] === "fetch") entry.fetchUrl = m[2]!;

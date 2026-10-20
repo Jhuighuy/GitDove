@@ -77,7 +77,7 @@ function PillView({
 }: {
   pill: Pill;
   color: string;
-  onDoubleClick?: ((ref: Ref) => void) | undefined;
+  onDoubleClick?: (ref: Ref) => void;
 }) {
   const head = pill.local?.isHead ?? false;
   const ref = pill.local ?? pill.remotes[0] ?? pill.tag!;

@@ -41,11 +41,12 @@ done
 const openTerminal = (repo: Repository) =>
   Effect.sync(() => {
     const loc = repo.location;
+    const remoteShell = `cd ${shellQuote(loc.path)} && exec $SHELL -l`;
     if (process.platform === "darwin") {
       const command =
         loc.kind === "local"
           ? `cd ${shellQuote(loc.path)}`
-          : `ssh -t ${shellQuote(loc.host)} ${shellQuote(`cd ${shellQuote(loc.path)} && exec $SHELL -l`)}`;
+          : `ssh -t ${shellQuote(loc.host)} ${shellQuote(remoteShell)}`;
       const script = `tell application "Terminal"
   activate
   do script ${JSON.stringify(command)}
@@ -55,13 +56,10 @@ end tell`;
       const args =
         loc.kind === "local"
           ? ["/c", "start", "cmd", "/k", `cd /d "${loc.path}"`]
-          : ["/c", "start", "ssh", "-t", loc.host, `cd ${shellQuote(loc.path)} && exec $SHELL -l`];
+          : ["/c", "start", "ssh", "-t", loc.host, remoteShell];
       nodeSpawn("cmd.exe", args, { detached: true, stdio: "ignore" }).unref();
     } else {
-      const args =
-        loc.kind === "local"
-          ? []
-          : ["-e", "ssh", "-t", loc.host, `cd ${shellQuote(loc.path)} && exec $SHELL -l`];
+      const args = loc.kind === "local" ? [] : ["-e", "ssh", "-t", loc.host, remoteShell];
       nodeSpawn("x-terminal-emulator", args, {
         cwd: loc.kind === "local" ? loc.path : undefined,
         detached: true,
@@ -112,7 +110,7 @@ export const handlers: Handlers = {
       const [cwd, ...rest] = r.stdout.toString("utf8").split("\n");
       const entries: DirEntry[] = rest
         .filter((l) => l.length > 1)
-        .map((l) => ({ name: l.slice(1), isDir: true, isRepo: l[0] === "R" }))
+        .map((l) => ({ name: l.slice(1), isDir: true, isRepo: l.startsWith("R") }))
         .toSorted((a, b) => a.name.localeCompare(b.name));
       return { path: cwd ?? "", entries };
     }),

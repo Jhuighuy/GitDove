@@ -26,7 +26,7 @@ export const quotePath = (prefix: string, path: string): string => {
   for (const ch of path) {
     const esc = C_ESCAPES[ch];
     if (esc) out += esc;
-    else if (ch < " " || ch === "\x7f") out += octal(ch.charCodeAt(0));
+    else if (ch < " " || ch === "\x7f") out += octal(ch.codePointAt(0)!);
     else if (ch > "\x7f") for (const b of new TextEncoder().encode(ch)) out += octal(b);
     else out += ch;
   }
@@ -150,8 +150,8 @@ export const buildPatch = (
     let oldCount = 0;
     let newCount = 0;
     for (const line of body) {
-      if (line[0] !== "+" && line[0] !== "\\") oldCount++;
-      if (line[0] !== "-" && line[0] !== "\\") newCount++;
+      if (!line.startsWith("+") && !line.startsWith("\\")) oldCount++;
+      if (!line.startsWith("-") && !line.startsWith("\\")) newCount++;
     }
     // The side the patch applies to keeps its start; the other side is shifted
     // by the hunks before. An empty range starts at the line before it.
@@ -163,8 +163,7 @@ export const buildPatch = (
     const [oldStart, newStart] = reverse ? [otherStart, fixedStart] : [fixedStart, otherStart];
     delta += newCount - oldCount;
     any = true;
-    out.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
-    out.push(...body);
+    out.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`, ...body);
   });
 
   return any ? out.join("\n") + "\n" : null;

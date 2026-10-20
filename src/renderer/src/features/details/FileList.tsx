@@ -31,7 +31,7 @@ interface Props {
   readonly selectedPath: string | null;
   readonly onOpen: (file: FileChange) => void;
   /** Hover actions for a file. */
-  readonly actions?: (file: FileChange) => ReactNode;
+  readonly renderActions?: (file: FileChange) => ReactNode;
   readonly onContextMenu?: (file: FileChange) => void;
 }
 
@@ -40,7 +40,7 @@ export const FileList = memo(function FileList({
   files,
   selectedPath,
   onOpen,
-  actions,
+  renderActions,
   onContextMenu,
 }: Props) {
   return (
@@ -71,9 +71,9 @@ export const FileList = memo(function FileList({
                 {f.deletions ? <span className="text-red-500">-{f.deletions}</span> : null}
               </span>
             )}
-            {actions && (
+            {renderActions && (
               <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-                {actions(f)}
+                {renderActions(f)}
               </span>
             )}
           </li>

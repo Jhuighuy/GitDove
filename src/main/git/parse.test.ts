@@ -5,6 +5,7 @@ import {
   parseNameStatus,
   parseNumstat,
   parseRefs,
+  parseRemotes,
   parseStatus,
 } from "./parse";
 
@@ -120,5 +121,21 @@ describe("parseFileVersions", () => {
     expect(() => parseFileVersions(enc("blob 10\nab"), false)).toThrow(/Malformed/);
     expect(() => parseFileVersions(enc("what\n"), false)).toThrow(/Malformed/);
     expect(() => parseFileVersions(enc("missing"), false)).toThrow(/Malformed/);
+  });
+});
+
+describe("parseRemotes", () => {
+  it("pairs fetch and push URLs per remote, including URLs with spaces", () => {
+    const out = [
+      "origin\tgit@github.com:a/b.git (fetch)",
+      "origin\tgit@github.com:a/b.git (push)",
+      "local\t/srv/my repos/b.git (fetch)",
+      "local\tssh://host/b.git (push)",
+      "",
+    ].join("\n");
+    expect(parseRemotes(out)).toEqual([
+      { name: "origin", fetchUrl: "git@github.com:a/b.git", pushUrl: "git@github.com:a/b.git" },
+      { name: "local", fetchUrl: "/srv/my repos/b.git", pushUrl: "ssh://host/b.git" },
+    ]);
   });
 });

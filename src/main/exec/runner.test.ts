@@ -142,7 +142,7 @@ describe.skipIf(process.platform === "win32").each(shells)("runner script under 
         expect(cat.stdout.equals(bin)).toBe(true);
 
         const empty = yield* run(runner, "cat");
-        expect(empty.stdout.length).toBe(0);
+        expect(empty.stdout).toHaveLength(0);
 
         const cwd = yield* run(runner, "cd -- /tmp && pwd -P");
         expect(cwd.stdout.toString().trim()).toBe(
@@ -179,7 +179,7 @@ describe.skipIf(process.platform === "win32").each(shells)("runner script under 
           maxBytes: 100000,
         });
         expect(big.truncated).toBe(true);
-        expect(big.stdout.length).toBe(100000);
+        expect(big.stdout).toHaveLength(100000);
         const small = yield* run(runner, "echo hi", { maxBytes: 3 });
         expect([small.truncated, small.stdout.toString()]).toEqual([false, "hi\n"]);
       }),

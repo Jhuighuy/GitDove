@@ -10,7 +10,7 @@ import { shellJoin, shellQuote } from "./shell";
 import { spawn, type SpawnOptions, type SpawnResult } from "./spawn";
 
 export type ExecOptions = Omit<SpawnOptions, "cwd" | "env" | "display"> & {
-  readonly cwd?: string | undefined;
+  readonly cwd?: string;
 };
 
 /** A machine that can run commands: the local one, or one reachable via SSH. */
@@ -313,7 +313,7 @@ export class Hosts extends Context.Service<
 const parseSshConfigHosts = (text: string): string[] => {
   const hosts = new Set<string>();
   for (const line of text.split("\n")) {
-    const m = /^\s*Host\s+(.+)$/i.exec(line);
+    const m = /^\s*Host\s+(\S.*)$/i.exec(line);
     if (!m) continue;
     for (const h of m[1]!.split(/\s+/)) {
       if (h && !/[*?!]/.test(h)) hosts.add(h);

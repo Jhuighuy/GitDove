@@ -156,7 +156,10 @@ export const useRefsByHash = (repo: RepoId) => {
     for (const ref of data?.refs ?? []) {
       if (hiddenSet.size > 0 && isHidden(hiddenSet, ref.name)) continue;
       let list = map.get(ref.hash);
-      if (!list) map.set(ref.hash, (list = []));
+      if (!list) {
+        list = [];
+        map.set(ref.hash, list);
+      }
       list.push(ref);
     }
     return map;

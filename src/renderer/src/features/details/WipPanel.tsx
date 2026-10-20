@@ -100,7 +100,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
               files={conflicted}
               selectedPath={selected("unstaged")}
               onOpen={openUnstaged}
-              actions={(f) => (
+              renderActions={(f) => (
                 <RowAction label="Mark resolved" onClick={() => void stage([f.path])}>
                   <IconPlus />
                 </RowAction>
@@ -128,7 +128,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
             files={unstaged.slice(0, MAX_FILES)}
             selectedPath={selected("unstaged")}
             onOpen={openUnstaged}
-            actions={(f) => (
+            renderActions={(f) => (
               <>
                 <RowAction
                   label="Discard changes"
@@ -172,7 +172,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
             files={staged.slice(0, MAX_FILES)}
             selectedPath={selected("staged")}
             onOpen={(f) => openDiff(repo, { kind: "staged", path: f.path, ...renameSource(f) })}
-            actions={(f) => (
+            renderActions={(f) => (
               <RowAction label="Unstage file" onClick={() => void unstage([f.path])}>
                 <IconMinus />
               </RowAction>

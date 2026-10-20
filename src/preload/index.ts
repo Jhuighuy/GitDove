@@ -13,7 +13,10 @@ const bridge: Bridge = {
   invoke: (method, ...args) => ipcRenderer.invoke(IPC_INVOKE, method, args),
   on: (event, listener) => {
     let set = listeners.get(event);
-    if (!set) listeners.set(event, (set = new Set()));
+    if (!set) {
+      set = new Set();
+      listeners.set(event, set);
+    }
     set.add(listener as Listener);
     return () => set.delete(listener as Listener);
   },
