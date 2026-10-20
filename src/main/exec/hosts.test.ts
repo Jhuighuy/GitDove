@@ -238,7 +238,7 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
         good.sh("printf a; sleep 0.1; printf b", { onStdout: (c) => chunks.push(c.toString()) }),
       );
       expect(chunks.join("")).toBe("ab");
-      expect(r.stdout.length).toBe(0);
+      expect(r.stdout).toHaveLength(0);
       const payload = "x".repeat(MAX_RUNNER_STDIN + 1);
       expect(await run(() => shOut(good, "wc -c | tr -d ' '", { stdin: payload, cwd: dir }))).toBe(
         `${payload.length}\n`,

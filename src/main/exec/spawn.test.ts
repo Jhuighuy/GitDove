@@ -100,7 +100,7 @@ describe.skipIf(process.platform === "win32")("spawn", () => {
       sh("printf a; sleep 0.1; printf b", { onStdout: (c) => chunks.push(c.toString()) }),
     );
     expect(chunks.join("")).toBe("ab");
-    expect(r.stdout.length).toBe(0);
+    expect(r.stdout).toHaveLength(0);
   });
 
   it("caps collected stderr", async () => {
