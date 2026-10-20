@@ -44,7 +44,8 @@ const useDialogs = create<{ current: Request | null }>()(() => ({ current: null 
 
 const show = (request: Request) => {
   const prev = useDialogs.getState().current;
-  if (prev) prev.kind === "prompt" ? prev.resolve(null) : prev.resolve(false);
+  if (prev?.kind === "prompt") prev.resolve(null);
+  else if (prev?.kind === "confirm") prev.resolve(false);
   useDialogs.setState({ current: request });
 };
 

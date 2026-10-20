@@ -9,6 +9,7 @@ import type {
   RepoInfo,
   RepoLocation,
   RepoState,
+  Stash,
   WorkingStatus,
 } from "@shared/domain";
 import { repoDisplayName, repoIdOf } from "@shared/domain";
@@ -36,6 +37,7 @@ import {
   parseWorktrees,
   REFS_FORMAT,
   STASH_FORMAT,
+  type StashEntry,
 } from "./parse";
 
 export type GitError = CommandError | SshError;
@@ -219,7 +221,7 @@ export class Repository {
           "refs/tags",
         ]).pipe(Effect.map(parseRefs)),
         stashes: this.gitText(["stash", "list", `--format=${STASH_FORMAT}`]).pipe(
-          Effect.map((s) => parseStashes(s).map(({ parents: _, ...rest }) => rest)),
+          Effect.map((s) => parseStashes(s).map(toStash)),
           Effect.orElseSucceed(() => []),
         ),
         remotes: this.gitText(["remote", "-v"]).pipe(Effect.map(parseRemotes)),
@@ -798,6 +800,14 @@ export class Repository {
     );
   }
 }
+
+const toStash = (s: StashEntry): Stash => ({
+  index: s.index,
+  name: s.name,
+  hash: s.hash,
+  message: s.message,
+  time: s.time,
+});
 
 const lines = (s: string) => s.split("\n").filter(Boolean);
 

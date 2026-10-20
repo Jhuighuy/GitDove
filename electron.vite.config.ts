@@ -28,5 +28,6 @@ export default defineConfig({
       alias: { ...shared, "@": resolve(import.meta.dirname, "src/renderer/src") },
     },
     plugins: [react(), tailwindcss()],
+    build: { minify: true, sourcemap: true },
   },
 });

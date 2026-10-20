@@ -16,7 +16,7 @@ interface Pill {
 export const groupRefs = (refs: readonly Ref[]): Pill[] => {
   const pills: Pill[] = [];
   const byName = new Map<string, Pill>();
-  const sorted = [...refs].sort((a, b) => rank(a) - rank(b));
+  const sorted = refs.toSorted((a, b) => rank(a) - rank(b));
   for (const ref of sorted) {
     if (ref.kind === "branch") {
       const p: Pill = { label: ref.short, local: ref, remotes: [], tag: null };

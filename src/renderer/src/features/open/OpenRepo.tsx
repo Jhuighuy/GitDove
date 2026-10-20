@@ -9,7 +9,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { create } from "zustand";
 import { Button } from "@/components/ui/button";
 import {
@@ -200,18 +200,18 @@ const LAST_HOST_KEY = "gitdove.lastSshHost";
 
 function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone: () => void }) {
   const hosts = useQuery({ queryKey: ["ssh", "hosts"], queryFn: () => api("ssh.hosts") });
-  const [host, setHost] = useState(() => localStorage.getItem(LAST_HOST_KEY) ?? "");
-  const [browseHost, setBrowseHost] = useState<string | null>(host || null);
-  const [path, setPath] = useState<string | null>(null);
-  const [pathInput, setPathInput] = useState("");
+  const [hostDraft, setHost] = useState(() => localStorage.getItem(LAST_HOST_KEY) ?? "");
+  const [chosenHost, setBrowseHost] = useState<string | null>(hostDraft || null);
+  const [path, setPathState] = useState<string | null>(null);
+  const [pathDraft, setPathInput] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
-
-  useEffect(() => {
-    if (!host && hosts.data?.[0]) {
-      setHost(hosts.data[0]);
-      setBrowseHost(hosts.data[0]);
-    }
-  }, [hosts.data, host]);
+  // Until the user picks a host, default to the first one from ~/.ssh/config.
+  const host = hostDraft || hosts.data?.[0] || "";
+  const browseHost = chosenHost ?? (hosts.data?.[0] || null);
+  const setPath = (p: string | null) => {
+    setPathState(p);
+    setPathInput(null);
+  };
 
   const listing = useQuery({
     queryKey: ["ssh", "listDir", browseHost, path],
@@ -221,9 +221,7 @@ function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone
     staleTime: 10_000,
   });
 
-  useEffect(() => {
-    if (listing.data) setPathInput(listing.data.path);
-  }, [listing.data]);
+  const pathInput = pathDraft ?? listing.data?.path ?? "";
 
   const open = async (target: string) => {
     if (!browseHost) return;

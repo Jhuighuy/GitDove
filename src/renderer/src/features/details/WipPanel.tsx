@@ -71,7 +71,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
           {total} file {total === 1 ? "change" : "changes"}
         </span>
         <span className="text-muted-foreground">on</span>
-        <span className="bg-primary/15 text-primary rounded px-1.5 py-0.5 font-medium">
+        <span className="bg-sidebar-primary/15 text-sidebar-primary rounded px-1.5 py-0.5 font-medium">
           {info?.head.branch ?? (info?.head.hash ? "detached HEAD" : "—")}
         </span>
       </div>

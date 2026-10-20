@@ -1,5 +1,5 @@
 import type { ApiArgs, ApiMethod, ApiResult, EventName, Events, RpcError } from "@shared/ipc";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 /** Error thrown by {@link api} when the main process reports a failure. */
 export class ApiError extends Error {
@@ -26,7 +26,9 @@ export const api = async <M extends ApiMethod>(
 /** Subscribes to a main-process event for the lifetime of the component. */
 export const useEvent = <E extends EventName>(event: E, listener: (payload: Events[E]) => void) => {
   const ref = useRef(listener);
-  ref.current = listener;
+  useLayoutEffect(() => {
+    ref.current = listener;
+  });
   useEffect(() => window.gitdove.on(event, (p) => ref.current(p)), [event]);
 };
 

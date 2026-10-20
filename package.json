@@ -1,14 +1,13 @@
 {
   "name": "gitdove",
-  "productName": "GitDove",
   "version": "0.1.0",
-  "description": "A fast, open-source Git GUI with first-class remote (SSH) repositories.",
-  "license": "MIT",
   "private": true,
+  "description": "A fast, open-source Git GUI with first-class remote (SSH) repositories.",
+  "homepage": "https://github.com/Jhuighuy/GitDove",
+  "license": "MIT",
+  "author": "Oleg Butakov",
   "type": "module",
   "main": "./out/main/index.js",
-  "author": "Oleg Butakov",
-  "homepage": "https://github.com/Jhuighuy/GitDove",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -68,5 +67,6 @@
     "electron-winstaller": false,
     "@parcel/watcher": false,
     "fsevents": false
-  }
+  },
+  "productName": "GitDove"
 }

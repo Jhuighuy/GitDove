@@ -37,17 +37,17 @@ export function Sidebar({ repo }: { repo: RepoId }) {
 
   const { locals, remotes, tags } = useMemo(() => {
     const refs = data?.refs ?? [];
-    const remotes = new Map<string, Ref[]>();
+    const byRemote = new Map<string, Ref[]>();
     for (const r of refs) {
       if (r.kind !== "remote" || r.short.endsWith("/HEAD")) continue;
-      const list = remotes.get(r.remote ?? "") ?? [];
+      const list = byRemote.get(r.remote ?? "") ?? [];
       list.push(r);
-      remotes.set(r.remote ?? "", list);
+      byRemote.set(r.remote ?? "", list);
     }
     return {
       locals: refs.filter((r) => r.kind === "branch"),
-      remotes,
-      tags: refs.filter((r) => r.kind === "tag").reverse(),
+      remotes: byRemote,
+      tags: refs.filter((r) => r.kind === "tag").toReversed(),
     };
   }, [data]);
 

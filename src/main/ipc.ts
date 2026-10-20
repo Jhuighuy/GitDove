@@ -113,7 +113,7 @@ export const handlers: Handlers = {
       const entries: DirEntry[] = rest
         .filter((l) => l.length > 1)
         .map((l) => ({ name: l.slice(1), isDir: true, isRepo: l[0] === "R" }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .toSorted((a, b) => a.name.localeCompare(b.name));
       return { path: cwd ?? "", entries };
     }),
 

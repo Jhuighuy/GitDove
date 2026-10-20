@@ -396,7 +396,7 @@ function WipRow(p: {
         <WipGraphCell lane={p.lane} color={p.color} width={p.graphWidth} />
       </div>
       <div className="text-muted-foreground flex min-w-0 flex-1 items-center gap-2 px-2 italic">
-        <span>// WIP</span>
+        <span>{"// WIP"}</span>
         <span className="bg-muted rounded px-1.5 text-[11px] not-italic tabular-nums">
           {p.changes} {p.changes === 1 ? "change" : "changes"}
         </span>

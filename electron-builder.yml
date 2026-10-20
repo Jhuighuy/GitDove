@@ -1,0 +1,38 @@
+appId: dev.gitdove.app
+productName: GitDove
+copyright: Copyright © 2026 Oleg Butakov
+directories:
+  output: release/${version}
+  buildResources: build
+files:
+  - out/**
+  - package.json
+asarUnpack:
+  # Native file watcher binaries cannot be loaded from inside the asar archive.
+  - node_modules/@parcel/watcher*/**
+publish:
+  provider: github
+  owner: Jhuighuy
+  repo: GitDove
+  releaseType: release
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    # The zip is what electron-updater downloads for over-the-air updates.
+    - target: zip
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  # Auto-updates on macOS require a signed build; set CSC_LINK/CSC_KEY_PASSWORD
+  # and APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID in CI to sign and notarize.
+  notarize: false
+linux:
+  category: Development
+  target: [AppImage, deb]
+  maintainer: Oleg Butakov <butakovoleg@gmail.com>
+win:
+  target: [nsis]
+nsis:
+  oneClick: true
+  perMachine: false
