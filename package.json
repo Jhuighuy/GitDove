@@ -19,7 +19,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "dist": "electron-vite build && electron-builder",
-    "release": "electron-vite build && electron-builder --publish always",
+    "package": "electron-builder --publish never",
     "icons": "node scripts/build-icons.mjs"
   },
   "dependencies": {

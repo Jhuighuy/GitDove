@@ -116,7 +116,7 @@ export interface Api {
 
   // Updater
   "updater.status": () => UpdaterStatus;
-  "updater.check": () => void;
+  "updater.check": () => UpdaterStatus;
   "updater.install": () => void;
 }
 

@@ -1,6 +1,8 @@
 appId: dev.gitdove.app
 productName: GitDove
 copyright: Copyright © 2026 Oleg Butakov
+# Embeds the Sparkle updater into macOS builds.
+afterPack: scripts/after-pack.mjs
 directories:
   output: release/${version}
   buildResources: build
@@ -21,15 +23,17 @@ publish:
 mac:
   icon: build/icon.icns
   category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
   target:
     - target: dmg
       arch: [arm64, x64]
-    # The zip is what electron-updater downloads for over-the-air updates.
+    # The zip is what Sparkle downloads for over-the-air updates.
     - target: zip
       arch: [arm64, x64]
-  hardenedRuntime: true
-  # Auto-updates on macOS require a signed build; set CSC_LINK/CSC_KEY_PASSWORD
-  # and APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID in CI to sign and notarize.
+  # Ad-hoc signed: no Apple Developer ID, so no notarization and no use for the hardened runtime.
+  # Sparkle authenticates updates with our Ed25519 key instead (docs/updates.md).
+  identity: "-"
+  hardenedRuntime: false
   notarize: false
 linux:
   icon: build/icons
