@@ -70,6 +70,9 @@ jobs:
       - name: Package distributions
         shell: bash
         run: npm run package -- --${{ matrix.platform }} --${{ matrix.arch }} "-c.extraMetadata.version=${{ steps.version.outputs.version }}"
+        env:
+          # PRs need the same ad-hoc signatures as main; no signing credential is used.
+          CSC_FOR_PULL_REQUEST: "true"
       - name: Prove packaged GitDove restart and update
         if: runner.os == 'macOS'
         run: npm run test:updates:electron -- release/${{ steps.version.outputs.version }}
