@@ -74,6 +74,10 @@ export const spawn = (
         if (keep > 0) chunks.push(chunk.subarray(0, keep));
         truncated = true;
         child.kill();
+        // Children it started may still hold the pipes open, which would delay "close" until
+        // they exit; ours are not needed anymore (and a writer left behind gets SIGPIPE).
+        child.stdout.destroy();
+        child.stderr.destroy();
         return;
       }
       chunks.push(chunk);

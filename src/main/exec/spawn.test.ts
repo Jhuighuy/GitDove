@@ -82,6 +82,15 @@ describe.skipIf(process.platform === "win32")("spawn", () => {
     expect(e).toMatchObject({ command: "nope", exitCode: null, stderr: "" });
   });
 
+  it("returns truncated output without waiting for children that hold stdout", async () => {
+    // The shell is killed, but a background loop it started keeps writing to the pipe.
+    const t0 = Date.now();
+    const r = await run(sh("(while :; do echo xxxxxxxxxxxxxxx; done) & wait", { maxBytes: 1000 }));
+    expect(r.truncated).toBe(true);
+    expect(r.stdout).toHaveLength(1000);
+    expect(Date.now() - t0).toBeLessThan(5000);
+  });
+
   it("truncates stdout at maxBytes and kills the process", async () => {
     const r = await run(sh("printf 0123456789; exec sleep 30", { maxBytes: 4 }));
     expect(r.stdout.toString()).toBe("0123");
