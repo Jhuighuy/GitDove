@@ -269,6 +269,14 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
       expect(failure(cmd)).toMatchObject({ _tag: "SshError", host: "denied", mayHaveRun: false });
     });
 
+    it("runs scripts with the git environment, like programs", async () => {
+      const { run } = hosts();
+      const env = "echo $GIT_OPTIONAL_LOCKS $GIT_TERMINAL_PROMPT $GIT_EDITOR";
+      // The watcher's `git status` must not take index.lock on the host.
+      expect(await run((h) => shOut(h.get("good"), env))).toBe("0 0 true\n");
+      expect(await run((h) => out(h.get("good"), "/bin/sh", ["-c", env]))).toBe("0 0 true\n");
+    });
+
     it("connects again after a failed connection", async () => {
       const { runExit } = hosts();
       expect(failure(await runExit((h) => h.connect("later")))).toMatchObject({

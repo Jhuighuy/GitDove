@@ -205,16 +205,20 @@ const acquireRunner = (host: string, masters: RcMap.RcMap<string, SshMaster, Ssh
     (runner) => Effect.sync(() => runner.close()),
   );
 
+/** `env` arguments that give remote programs and scripts the same git environment. */
+const REMOTE_ENV = Object.entries(remoteGitEnv)
+  .map(([k, v]) => `${k}=${shellQuote(v)}`)
+  .join(" ");
+
 const remoteCommand = (program: string, args: readonly string[], cwd: string | undefined) => {
-  const env = Object.entries(remoteGitEnv).map(([k, v]) => `${k}=${shellQuote(v)}`);
-  const cmd = `exec env ${env.join(" ")} ${shellJoin([program, ...args])}`;
+  const cmd = `exec env ${REMOTE_ENV} ${shellJoin([program, ...args])}`;
   // Without a cwd, run in the home directory as a fresh SSH session would.
   return `cd -- ${cwd ? shellQuote(cwd) : '"$HOME"'} && ${cmd}`;
 };
 
 const remoteScript = (script: string, cwd: string | undefined) => {
   const inner = cwd ? `cd -- ${shellQuote(cwd)} && ${script}` : script;
-  return `cd -- "$HOME" && exec /bin/sh -c ${shellQuote(inner)}`;
+  return `cd -- "$HOME" && exec env ${REMOTE_ENV} /bin/sh -c ${shellQuote(inner)}`;
 };
 
 /**
