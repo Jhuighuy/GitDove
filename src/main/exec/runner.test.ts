@@ -228,10 +228,10 @@ describe.skipIf(process.platform === "win32").each(shells)("runner script under 
         const fiber = yield* Effect.forkChild(Effect.flip(run(runner, "sleep 5")));
         yield* Effect.sleep("100 millis");
         runner.close();
-        const inFlight = yield* Fiber.join(fiber);
+        const lost = yield* Fiber.join(fiber);
         // Sent to a runner that is already dead, the command never reaches the host.
-        const never = yield* Effect.flip(run(runner, "echo hi"));
-        return [inFlight, never];
+        const unsent = yield* Effect.flip(run(runner, "echo hi"));
+        return [lost, unsent];
       }),
     );
     expect(inFlight).toMatchObject({ _tag: "SshError", mayHaveRun: true });
