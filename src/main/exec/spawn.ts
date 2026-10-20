@@ -100,7 +100,7 @@ export const spawn = (
       if (code !== null && okCodes.includes(code)) {
         finish(Effect.succeed({ stdout, stderr, exitCode, truncated }));
       } else {
-        const firstLine = stderr.trim().split("\n").filter(Boolean).at(-1);
+        const firstLine = summarizeStderr(stderr);
         finish(
           Effect.fail(
             new CommandError({
@@ -128,3 +128,16 @@ export const spawn = (
       if (!done && child.exitCode === null) child.kill();
     });
   });
+
+/**
+ * Picks the most informative line of git's stderr: the first `fatal:`/`error:`
+ * line (git often ends with a bare "Aborting"), else the last non-empty line.
+ */
+export const summarizeStderr = (stderr: string): string | undefined => {
+  const lines = stderr
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const important = lines.find((l) => /^(fatal|error):/i.test(l));
+  return (important ?? lines.at(-1))?.replace(/^(fatal|error):\s*/i, "");
+};
