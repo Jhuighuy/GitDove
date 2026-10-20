@@ -56,9 +56,9 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   const setMode = useLayout((s) => s.setDiffMode);
   const close = () => useRepoUiStore.getState().openDiff(repo, null);
 
-  // Selected line ids, for line-level staging. A new diff starts afresh.
+  // Selected line ids, for line-level staging. A new diff, or another view, starts afresh.
   const [selection, setSelection] = useState(EMPTY_SELECTION);
-  useEffect(() => setSelection(EMPTY_SELECTION), [model]);
+  useEffect(() => setSelection(EMPTY_SELECTION), [model, textual]);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
@@ -115,24 +115,8 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
         </span>
         {textual && (isPending || isPlaceholderData) && <Spinner className="size-3.5" />}
         <span className="ml-auto flex shrink-0 items-center gap-1">
-          {selection.size > 0 && (
-            <>
-              <span className="text-muted-foreground mr-1 text-[11px]">
-                {selection.size} {selection.size === 1 ? "line" : "lines"} selected
-              </span>
-              {lineActions.map((a) => (
-                <Button
-                  key={a.label}
-                  size="xs"
-                  variant={a.destructive ? "destructive" : "secondary"}
-                  className="h-6 rounded-md px-2 text-[11px]"
-                  onClick={() => applyLines(a)}
-                >
-                  {a.label}
-                </Button>
-              ))}
-              <span className="bg-border mx-1 h-4 w-px" />
-            </>
+          {textual && selection.size > 0 && (
+            <SelectionBar count={selection.size} actions={lineActions} onAction={applyLines} />
           )}
           {kind.views.length > 1 && (
             <ViewToggle views={kind.views} view={view} setView={(v) => setView(kind.id, v)} />
@@ -143,29 +127,64 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
           </Button>
         </span>
       </div>
-      {!textual ? (
+      {textual ? (
+        <TextDiff
+          error={error}
+          model={model}
+          mode={mode}
+          actions={hunkActions}
+          onAction={applyHunk}
+          selectable={lineActions.length > 0}
+          selection={selection}
+          setSelection={setSelection}
+        />
+      ) : (
         <ImageDiff repo={repo} target={target} mime={kind.mime!} mode={mode} />
-      ) : error ? (
-        <div className="text-destructive p-4 text-sm">{error.message}</div>
-      ) : model ? (
-        model.diff.binary ? (
-          <div className="text-muted-foreground p-6 text-sm">Binary file — no textual diff.</div>
-        ) : model.diff.hunks.length === 0 ? (
-          <div className="text-muted-foreground p-6 text-sm">No changes.</div>
-        ) : (
-          <DiffBody
-            model={model}
-            mode={mode}
-            actions={hunkActions}
-            onAction={applyHunk}
-            selectable={lineActions.length > 0}
-            selection={selection}
-            setSelection={setSelection}
-          />
-        )
-      ) : null}
+      )}
     </div>
   );
+}
+
+function SelectionBar({
+  count,
+  actions,
+  onAction,
+}: Readonly<{ count: number; actions: PatchAction[]; onAction: (a: PatchAction) => void }>) {
+  return (
+    <>
+      <span className="text-muted-foreground mr-1 text-[11px]">
+        {count} {count === 1 ? "line" : "lines"} selected
+      </span>
+      {actions.map((a) => (
+        <Button
+          key={a.label}
+          size="xs"
+          variant={a.destructive ? "destructive" : "secondary"}
+          className="h-6 rounded-md px-2 text-[11px]"
+          onClick={() => onAction(a)}
+        >
+          {a.label}
+        </Button>
+      ))}
+      <span className="bg-border mx-1 h-4 w-px" />
+    </>
+  );
+}
+
+type DiffBodyProps = Parameters<typeof DiffBody>[0];
+
+function TextDiff({
+  error,
+  model,
+  ...body
+}: Readonly<Omit<DiffBodyProps, "model"> & { error: Error | null; model: DiffModel | null }>) {
+  if (error) return <div className="text-destructive p-4 text-sm">{error.message}</div>;
+  if (!model) return null;
+  if (model.diff.binary)
+    return <div className="text-muted-foreground p-6 text-sm">Binary file — no textual diff.</div>;
+  if (model.diff.hunks.length === 0)
+    return <div className="text-muted-foreground p-6 text-sm">No changes.</div>;
+  return <DiffBody model={model} {...body} />;
 }
 
 const VIEWS: Record<DiffViewId, { title: string; icon: React.ReactNode }> = {
@@ -177,11 +196,11 @@ function Segmented<T extends string>({
   items,
   value,
   onChange,
-}: {
+}: Readonly<{
   items: readonly { value: T; title: string; icon: React.ReactNode }[];
   value: T;
   onChange: (value: T) => void;
-}) {
+}>) {
   return (
     <span className="flex items-center rounded-md border p-px">
       {items.map((item) => (
@@ -206,11 +225,11 @@ function ViewToggle({
   views,
   view,
   setView,
-}: {
+}: Readonly<{
   views: readonly DiffViewId[];
   view: DiffViewId;
   setView: (v: DiffViewId) => void;
-}) {
+}>) {
   return (
     <Segmented
       items={views.map((v) => ({ value: v, ...VIEWS[v] }))}
@@ -224,11 +243,11 @@ function ModeToggle({
   mode,
   setMode,
   textual,
-}: {
+}: Readonly<{
   mode: DiffMode;
   setMode: (m: DiffMode) => void;
   textual: boolean;
-}) {
+}>) {
   return (
     <Segmented
       items={[

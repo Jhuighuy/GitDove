@@ -1,4 +1,4 @@
-import type { FileChange, RepoId } from "@shared/domain";
+import { type FileChange, type RepoId, renameSource } from "@shared/domain";
 import {
   IconChevronDown,
   IconMinus,
@@ -171,7 +171,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
           <FileList
             files={staged.slice(0, MAX_FILES)}
             selectedPath={selected("staged")}
-            onOpen={(f) => openDiff(repo, { kind: "staged", path: f.path })}
+            onOpen={(f) => openDiff(repo, { kind: "staged", path: f.path, ...renameSource(f) })}
             actions={(f) => (
               <RowAction label="Unstage file" onClick={() => void unstage([f.path])}>
                 <IconMinus />

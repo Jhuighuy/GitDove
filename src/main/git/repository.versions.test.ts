@@ -108,6 +108,31 @@ describe.skipIf(process.platform === "win32").each(targets)(
       });
     });
 
+    it("follows renames and reads only regular files", async () => {
+      const hash = (
+        await sh(
+          "git reset -q --hard && git clean -qfd && git mv 'a b.txt' 'c*d.txt' && " +
+            "ln -s 'c*d.txt' link.png && mkdir real && printf r > real/x.png && " +
+            "git add -A && git commit -qm three && git rev-parse HEAD",
+        )
+      ).stdout
+        .toString()
+        .trim();
+      const renamed = { kind: "commit", hash, path: "c*d.txt", oldPath: "a b.txt" } as const;
+      expect(await versions(renamed)).toEqual(["two", "two"]);
+      expect(await versions({ ...renamed, oldPath: undefined })).toEqual(["missing", "two"]);
+      const diff = await run(repo.diff(renamed));
+      expect([diff.oldPath, diff.hunks]).toEqual(["a b.txt", []]);
+      // Symlinks are stored as blobs holding the link target.
+      expect(await versions({ kind: "commit", hash, path: "link.png" })).toEqual([
+        "missing",
+        "missing",
+      ]);
+      // A directory replaced by a symlink to elsewhere must not be read through.
+      await sh(`rm -r real && d=$(mktemp -d) && printf outside > "$d/x.png" && ln -s "$d" real`);
+      expect(await versions({ kind: "unstaged", path: "real/x.png" })).toEqual(["r", "missing"]);
+    });
+
     it("rejects paths outside the working tree", async () => {
       for (const path of ["../x", "/etc/passwd", "a/../../x", ""]) {
         await expect(run(repo.fileVersions({ kind: "unstaged", path }))).rejects.toThrow(

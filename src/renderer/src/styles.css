@@ -185,11 +185,14 @@
   appearance: none;
   background: transparent;
   cursor: ew-resize;
-  &::-webkit-slider-runnable-track {
+}
+
+@layer components {
+  .swipe-range::-webkit-slider-runnable-track {
     height: 100%;
     background: transparent;
   }
-  &::-webkit-slider-thumb {
+  .swipe-range::-webkit-slider-thumb {
     appearance: none;
     width: 1px;
     height: 100%;

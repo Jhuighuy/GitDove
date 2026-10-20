@@ -182,6 +182,10 @@ export interface FileChange {
   readonly binary: boolean;
 }
 
+/** Where a renamed file came from, for a `DiffTarget`. Copies diff as added files. */
+export const renameSource = (f: FileChange): { readonly oldPath?: string } =>
+  f.kind === "renamed" && f.oldPath ? { oldPath: f.oldPath } : {};
+
 export interface WorkingStatus {
   readonly staged: readonly FileChange[];
   readonly unstaged: readonly FileChange[];
@@ -210,11 +214,16 @@ export interface CommitDetails {
 // Diffs
 // ---------------------------------------------------------------------------
 
-/** What a diff is computed against. */
+/** What a diff is computed against. `oldPath` is where a renamed or copied file came from. */
 export type DiffTarget =
   | { readonly kind: "unstaged"; readonly path: string; readonly untracked?: boolean }
-  | { readonly kind: "staged"; readonly path: string }
-  | { readonly kind: "commit"; readonly hash: string; readonly path: string };
+  | { readonly kind: "staged"; readonly path: string; readonly oldPath?: string }
+  | {
+      readonly kind: "commit";
+      readonly hash: string;
+      readonly path: string;
+      readonly oldPath?: string;
+    };
 
 export type DiffLineKind = "context" | "add" | "del" | "meta";
 

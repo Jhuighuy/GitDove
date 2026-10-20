@@ -129,20 +129,39 @@ const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARe
 
 /**
  * Prints both sides of a change in one round trip, see `parseFileVersions`.
- * Revisions are resolved to object ids first so that the size and the content
- * always describe the same blob, even if the index changes meanwhile.
+ * Entries are resolved to a mode and an object id first, so that only regular
+ * files are read and the size and the content always describe the same blob,
+ * even if the index changes meanwhile. A working tree file is read only if
+ * neither it nor a directory above it is a symlink, so reads stay inside the
+ * working tree.
  */
-const FILE_VERSIONS_SCRIPT = String.raw`
-emit_blob() {
-  oid=$(git rev-parse -q --verify "$1" 2>/dev/null) || { echo missing; return; }
-  set -- $(printf '%s
-' "$oid" | git cat-file --batch-check)
-  if [ "$2" != blob ]; then echo missing
-  elif [ "$3" -gt "$max" ]; then echo "large $3"
-  else echo "blob $3"; git cat-file blob "$1"; fi
+const FILE_VERSIONS_SCRIPT = `
+set -f
+emit_object() {
+  case $1 in
+  100644 | 100755) ;;
+  *) echo missing; return ;;
+  esac
+  size=$(git cat-file -s "$2" 2>/dev/null) || { echo missing; return; }
+  if [ "$size" -gt "$max" ]; then echo "large $size"; else echo "blob $size"; git cat-file blob "$2"; fi
+}
+emit_tree() {
+  oid=$(git rev-parse -q --verify "$1:$2" 2>/dev/null) || { echo missing; return; }
+  set -- $(git --literal-pathspecs ls-tree --full-tree "$1" -- "$2")
+  if [ "$3" = "$oid" ]; then emit_object "$1" "$oid"; else echo missing; fi
+}
+emit_index() {
+  oid=$(git rev-parse -q --verify ":0:$1" 2>/dev/null) || { echo missing; return; }
+  set -- $(git --literal-pathspecs ls-files -s -- "$1")
+  if [ "$2" = "$oid" ]; then emit_object "$1" "$oid"; else echo missing; fi
 }
 emit_file() {
-  if [ -f "$1" ] && [ ! -L "$1" ]; then
+  p=$1
+  while :; do
+    if [ -L "$p" ]; then echo missing; return; fi
+    case $p in */*) p=\${p%/*} ;; *) break ;; esac
+  done
+  if [ -f "$1" ]; then
     size=$(($(wc -c < "$1")))
     if [ "$size" -gt "$max" ]; then echo "large $size"; else echo file; cat -- "$1"; fi
   else echo missing; fi
@@ -152,7 +171,8 @@ emit_file() {
 /** Where one side of a change is read from. */
 type VersionSource =
   | { readonly kind: "none" }
-  | { readonly kind: "rev"; readonly spec: string }
+  | { readonly kind: "tree"; readonly rev: string; readonly path: string }
+  | { readonly kind: "index"; readonly path: string }
   | { readonly kind: "file"; readonly path: string };
 
 const versionSources = (target: DiffTarget): [VersionSource, VersionSource] => {
@@ -160,29 +180,39 @@ const versionSources = (target: DiffTarget): [VersionSource, VersionSource] => {
   switch (target.kind) {
     case "unstaged":
       return [
-        target.untracked ? { kind: "none" } : { kind: "rev", spec: `:0:${path}` },
+        target.untracked ? { kind: "none" } : { kind: "index", path },
         { kind: "file", path },
       ];
     case "staged":
       return [
-        { kind: "rev", spec: `HEAD:${path}` },
-        { kind: "rev", spec: `:0:${path}` },
+        { kind: "tree", rev: "HEAD", path: target.oldPath ?? path },
+        { kind: "index", path },
       ];
     case "commit":
       // The first parent, like `diff`; a root commit has none and reads as missing.
       return [
-        { kind: "rev", spec: `${target.hash}^:${path}` },
-        { kind: "rev", spec: `${target.hash}:${path}` },
+        { kind: "tree", rev: `${target.hash}^`, path: target.oldPath ?? path },
+        { kind: "tree", rev: target.hash, path },
       ];
   }
 };
 
-const emitVersion = (source: VersionSource): string =>
-  source.kind === "none"
-    ? "echo missing"
-    : source.kind === "rev"
-      ? `emit_blob ${shellQuote(source.spec)}`
-      : `emit_file ${shellQuote(source.path)}`;
+/** Pathspecs for a diff: a rename is only detected when both of its paths are included. */
+const diffPaths = (target: DiffTarget & { readonly oldPath?: string }): string[] =>
+  target.oldPath && target.oldPath !== target.path ? [target.oldPath, target.path] : [target.path];
+
+const emitVersion = (source: VersionSource): string => {
+  switch (source.kind) {
+    case "none":
+      return "echo missing";
+    case "tree":
+      return `emit_tree ${shellQuote(source.rev)} ${shellQuote(source.path)}`;
+    case "index":
+      return `emit_index ${shellQuote(source.path)}`;
+    case "file":
+      return `emit_file ${shellQuote(source.path)}`;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Graph state
@@ -384,48 +414,57 @@ export class Repository {
           }
           break;
         case "staged":
-          args = ["diff", "--cached", ...common, "--", target.path];
+          yield* validateOptionalPath(target.oldPath);
+          args = ["diff", "--cached", ...common, "--", ...diffPaths(target)];
           break;
         case "commit": {
           yield* validateRev(target.hash);
+          yield* validateOptionalPath(target.oldPath);
           const parents = (yield* self.gitText(["rev-list", "--parents", "-n1", target.hash]))
             .trim()
             .split(" ")
             .slice(1);
           args = parents[0]
-            ? ["diff", ...common, parents[0], target.hash, "--", target.path]
+            ? ["diff", ...common, parents[0], target.hash, "--", ...diffPaths(target)]
             : ["show", ...common, "--format=", target.hash, "--", target.path];
           break;
         }
       }
       const r = yield* self.git(args, { maxBytes: MAX_DIFF_BYTES, okCodes });
-      return parseDiff(text(r), target.path, null, r.truncated);
+      return parseDiff(
+        text(r),
+        target.path,
+        target.kind === "unstaged" ? null : (target.oldPath ?? null),
+        r.truncated,
+      );
     });
   }
 
   /** Both sides of `target` as bytes, for views that render the whole file. */
   fileVersions(target: DiffTarget): Effect.Effect<FileVersions, GitError | InvalidInputError> {
-    const self = this;
-    return Effect.gen(function* () {
-      yield* validatePath(target.path);
-      if (target.kind === "commit") yield* validateRev(target.hash);
-      const [old, next] = versionSources(target);
-      const script = `${FILE_VERSIONS_SCRIPT}max=${MAX_FILE_BYTES}\n${emitVersion(old)}\n${emitVersion(next)}\n`;
-      const r = yield* self.host.sh(script, {
-        cwd: self.workTree,
-        maxBytes: 2 * MAX_FILE_BYTES + 1024,
-      });
-      return yield* Effect.try({
-        try: () => parseFileVersions(r.stdout, r.truncated),
-        catch: (e) =>
-          new CommandError({
-            message: e instanceof Error ? e.message : String(e),
-            command: "file versions",
-            exitCode: r.exitCode,
-            stderr: r.stderr,
-          }),
-      });
-    });
+    const [old, next] = versionSources(target);
+    const script = `${FILE_VERSIONS_SCRIPT}max=${MAX_FILE_BYTES}\n${emitVersion(old)}\n${emitVersion(next)}\n`;
+    return Effect.all([
+      validatePath(target.path),
+      target.kind === "unstaged" ? Effect.void : validateOptionalPath(target.oldPath),
+      target.kind === "commit" ? validateRev(target.hash) : Effect.void,
+    ]).pipe(
+      Effect.andThen(
+        this.host.sh(script, { cwd: this.workTree, maxBytes: 2 * MAX_FILE_BYTES + 1024 }),
+      ),
+      Effect.flatMap((r) =>
+        Effect.try({
+          try: () => parseFileVersions(r.stdout, r.truncated),
+          catch: (e) =>
+            new CommandError({
+              message: e instanceof Error ? e.message : String(e),
+              command: "file versions",
+              exitCode: r.exitCode,
+              stderr: r.stderr,
+            }),
+        }),
+      ),
+    );
   }
 
   lastCommitMessage(): Effect.Effect<string, GitError> {
@@ -1041,6 +1080,9 @@ const validatePath = (path: string) =>
   path && !path.startsWith("/") && !path.includes("\0") && !path.split("/").includes("..")
     ? Effect.void
     : Effect.fail(new InvalidInputError({ message: `Invalid path: ${path}` }));
+
+const validateOptionalPath = (path: string | undefined) =>
+  path === undefined ? Effect.void : validatePath(path);
 
 const validateBranchName = (name: string) =>
   name && !name.startsWith("-") && !/[\0\n\s~^:?*[\\]|\.\.|@\{|\/$|\.lock$/.test(name)

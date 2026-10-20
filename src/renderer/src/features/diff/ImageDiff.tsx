@@ -53,11 +53,8 @@ export function useImage(content: FileContent, mime: string): ImageSide {
       URL.revokeObjectURL(url);
     };
   }, [content, mime]);
-  return decoded?.content === content && decoded.mime === mime
-    ? decoded.side
-    : content.kind === "blob"
-      ? { kind: "loading", size: content.bytes.length }
-      : content;
+  if (decoded?.content === content && decoded.mime === mime) return decoded.side;
+  return content.kind === "blob" ? { kind: "loading", size: content.bytes.length } : content;
 }
 
 /** Scale that fits a `width`×`height` box into the available space. */
@@ -92,12 +89,12 @@ export function ImageDiff({
   target,
   mime,
   mode,
-}: {
+}: Readonly<{
   repo: RepoId;
   target: DiffTarget;
   mime: string;
   mode: DiffMode;
-}) {
+}>) {
   const { data, error } = useFileVersions(repo, target);
   if (error) return <Notice className="text-destructive">{error.message}</Notice>;
   if (!data)
@@ -114,28 +111,18 @@ function ImageCompare({
   next,
   mime,
   mode,
-}: {
+}: Readonly<{
   old: FileContent;
   next: FileContent;
   mime: string;
   mode: DiffMode;
-}) {
+}>) {
   const before = useImage(old, mime);
   const after = useImage(next, mime);
   const areaRef = useRef<HTMLDivElement>(null);
   const area = useSize(areaRef);
 
-  const sides: (readonly [string, ImageSide])[] =
-    before.kind === "missing"
-      ? after.kind === "missing"
-        ? []
-        : [["Added", after]]
-      : after.kind === "missing"
-        ? [["Deleted", before]]
-        : [
-            ["Before", before],
-            ["After", after],
-          ];
+  const sides = labelSides(before, after);
   const swipe = mode === "unified" && before.kind === "ready" && after.kind === "ready";
   // Both sides share one scale, so that a change in size stays visible.
   const ready = [before, after].filter((s): s is ReadyImage => s.kind === "ready");
@@ -159,15 +146,14 @@ function ImageCompare({
           className="flex h-full w-full items-center justify-center overflow-hidden"
           style={{ gap: GAP }}
         >
-          {sides.length === 0 ? (
-            <Notice>No content.</Notice>
-          ) : swipe ? (
+          {sides.length === 0 && <Notice>No content.</Notice>}
+          {swipe && (
             <Swipe before={before} after={after} width={width} height={height} scale={scale} />
-          ) : (
+          )}
+          {!swipe &&
             sides.map(([label, side]) => (
               <Panel key={label} label={label} side={side} scale={scale} />
-            ))
-          )}
+            ))}
         </div>
       </div>
       <div className="text-muted-foreground flex h-7 shrink-0 items-center gap-4 border-t px-3 text-[11px]">
@@ -181,14 +167,43 @@ function ImageCompare({
   );
 }
 
-const describe = (side: ImageSide): string =>
-  side.kind === "missing"
-    ? ""
-    : side.kind === "ready"
-      ? `${side.width}×${side.height} · ${formatBytes(side.size)}`
-      : formatBytes(side.size);
+/** The sides to show, labelled; an added or deleted image has only one. */
+const labelSides = (before: ImageSide, after: ImageSide): (readonly [string, ImageSide])[] => {
+  if (before.kind === "missing") return after.kind === "missing" ? [] : [["Added", after]];
+  if (after.kind === "missing") return [["Deleted", before]];
+  return [
+    ["Before", before],
+    ["After", after],
+  ];
+};
 
-function Panel({ label, side, scale }: { label: string; side: ImageSide; scale: number }) {
+const describe = (side: ImageSide): string => {
+  switch (side.kind) {
+    case "missing":
+      return "";
+    case "ready":
+      return `${side.width}×${side.height} · ${formatBytes(side.size)}`;
+    default:
+      return formatBytes(side.size);
+  }
+};
+
+const placeholder = (side: ImageSide): React.ReactNode => {
+  switch (side.kind) {
+    case "loading":
+      return <Spinner />;
+    case "large":
+      return `Too large to display (${formatBytes(side.size)}).`;
+    default:
+      return "Cannot display this image.";
+  }
+};
+
+function Panel({
+  label,
+  side,
+  scale,
+}: Readonly<{ label: string; side: ImageSide; scale: number }>) {
   return (
     <figure className="flex min-w-0 flex-col items-center gap-1.5">
       <figcaption className="text-muted-foreground text-[11px]">{label}</figcaption>
@@ -202,13 +217,7 @@ function Panel({ label, side, scale }: { label: string; side: ImageSide; scale: 
         />
       ) : (
         <div className="text-muted-foreground flex min-h-24 min-w-48 items-center justify-center rounded border p-6 text-sm">
-          {side.kind === "loading" ? (
-            <Spinner />
-          ) : side.kind === "large" ? (
-            `Too large to display (${formatBytes(side.size)}).`
-          ) : (
-            "Cannot display this image."
-          )}
+          {placeholder(side)}
         </div>
       )}
     </figure>
@@ -221,14 +230,15 @@ function Swipe({
   width,
   height,
   scale,
-}: {
+}: Readonly<{
   before: ReadyImage;
   after: ReadyImage;
   width: number;
   height: number;
   scale: number;
-}) {
-  // Percentage of the width, from the left, where "after" starts.
+}>) {
+  // Percentage of the width, from the left, where "after" starts. Each side is
+  // clipped at the divider, so that a smaller "after" does not show "before" around it.
   const [split, setSplit] = useState(50);
   const frame = { width: width * scale, height: height * scale };
   const place = (s: ReadyImage) => ({
@@ -244,13 +254,15 @@ function Swipe({
         <span>After</span>
       </figcaption>
       <div className="relative" style={frame}>
-        <img
-          src={before.url}
-          alt="Before"
-          draggable={false}
-          className="bg-checker absolute max-w-none"
-          style={place(before)}
-        />
+        <div className="absolute inset-0" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}>
+          <img
+            src={before.url}
+            alt="Before"
+            draggable={false}
+            className="bg-checker absolute max-w-none"
+            style={place(before)}
+          />
+        </div>
         <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${split}%)` }}>
           <img
             src={after.url}
@@ -279,6 +291,9 @@ function Swipe({
   );
 }
 
-function Notice({ className, children }: { className?: string; children: React.ReactNode }) {
+function Notice({
+  className,
+  children,
+}: Readonly<{ className?: string; children: React.ReactNode }>) {
   return <div className={cn("text-muted-foreground p-6 text-sm", className)}>{children}</div>;
 }

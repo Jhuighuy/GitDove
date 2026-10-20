@@ -132,15 +132,15 @@ describe("ImageDiff", () => {
     ]);
     const slider = container.querySelector<HTMLInputElement>("input[type=range]")!;
     expect(slider.value).toBe("50");
-    const clip = () =>
-      (container.querySelector("img[alt=After]")!.parentElement as HTMLElement).style;
-    expect(clip().clipPath).toBe("inset(0 0 0 50%)");
+    const clip = (alt: string) =>
+      (container.querySelector(`img[alt=${alt}]`)!.parentElement as HTMLElement).style.clipPath;
+    expect([clip("Before"), clip("After")]).toEqual(["inset(0 50% 0 0)", "inset(0 0 0 50%)"]);
     await act(async () => {
       const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
       set.call(slider, "25");
       slider.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    expect(clip().clipPath).toBe("inset(0 0 0 25%)");
+    expect([clip("Before"), clip("After")]).toEqual(["inset(0 75% 0 0)", "inset(0 0 0 25%)"]);
   });
 
   it("falls back to side by side when a side cannot be shown", async () => {

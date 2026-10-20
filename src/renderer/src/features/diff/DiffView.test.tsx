@@ -13,9 +13,25 @@ vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
   api: async (method: string, _repo: string, target: DiffTarget): Promise<FileDiff> => {
     mocks.calls.push(`${method} ${target.path}`);
-    return { path: target.path, oldPath: null, binary: false, hunks: [], truncated: false };
+    const hunks = target.path.endsWith(".svg")
+      ? [
+          {
+            header: "@@ -1 +1 @@",
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: [
+              { kind: "del" as const, oldNo: 1, newNo: null, text: "<svg/>" },
+              { kind: "add" as const, oldNo: null, newNo: 1, text: "<svg></svg>" },
+            ],
+          },
+        ]
+      : [];
+    return { path: target.path, oldPath: null, binary: false, hunks, truncated: false };
   },
 }));
+vi.mock("./highlight", () => ({ useHighlighter: () => null, tokenStyle: () => undefined }));
 vi.mock("./ImageDiff", () => ({
   ImageDiff: ({ mime, mode }: { mime: string; mode: string }) => (
     <div data-testid="image">
@@ -39,6 +55,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
 });
 
 async function render(path: string) {
@@ -84,6 +101,21 @@ it("switches SVGs between text and image, and remembers the choice", async () =>
   expect(useLayout.getState().diffViews).toEqual({ svg: "image" });
   await render("b.svg");
   expect(button("Image")?.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("drops a line selection when switching to the image view", async () => {
+  // Give the virtualized list a viewport, so that lines render.
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(600);
+  await render("a.svg");
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+  const line = container.querySelector<HTMLElement>("[data-line]");
+  await act(async () => line!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+  expect(container.textContent).toContain("1 line selected");
+  await click("Image");
+  expect(container.textContent).not.toContain("selected");
+  await click("Text diff");
+  expect(container.textContent).not.toContain("selected");
 });
 
 it("closes on Escape, also from the swipe slider but not from text fields", async () => {
