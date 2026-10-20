@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isHidden, toggleHidden } from "./visibility";
+import { isHidden, showNames, toggleHidden } from "./visibility";
 
 describe("visibility", () => {
   it("matches exact names and group prefixes", () => {
@@ -13,9 +13,35 @@ describe("visibility", () => {
   it("toggles single entries and splits groups", () => {
     expect(toggleHidden([], "refs/heads/a")).toEqual(["refs/heads/a"]);
     expect(toggleHidden(["refs/heads/a"], "refs/heads/a")).toEqual([]);
-    const siblings = ["refs/remotes/origin/main", "refs/remotes/origin/dev"];
-    expect(toggleHidden(["refs/remotes/origin/"], "refs/remotes/origin/main", siblings)).toEqual([
+    const all = ["refs/heads/a", "refs/remotes/origin/main", "refs/remotes/origin/dev"];
+    expect(toggleHidden(["refs/remotes/origin/"], "refs/remotes/origin/main", all)).toEqual([
       "refs/remotes/origin/dev",
     ]);
+  });
+
+  it("shows names covered by nested groups", () => {
+    const all = [
+      "refs/remotes/origin/main",
+      "refs/remotes/origin/release/1",
+      "refs/remotes/origin/release/2",
+      "refs/remotes/upstream/main",
+    ];
+    const hidden = ["refs/remotes/origin/", "refs/remotes/origin/release/", "refs/heads/x"];
+    // Showing one member keeps its siblings in both groups hidden.
+    expect(showNames(hidden, ["refs/remotes/origin/release/1"], all).toSorted()).toEqual([
+      "refs/heads/x",
+      "refs/remotes/origin/main",
+      "refs/remotes/origin/release/2",
+    ]);
+    // Showing a whole folder leaves the rest of the remote hidden.
+    const folder = ["refs/remotes/origin/release/", ...all.slice(1, 3)];
+    expect(showNames(hidden, folder, all).toSorted()).toEqual([
+      "refs/heads/x",
+      "refs/remotes/origin/main",
+    ]);
+    // Toggling an explicitly hidden name inside a hidden group shows it.
+    expect(
+      toggleHidden(["refs/remotes/origin/", "refs/remotes/origin/main"], all[0]!, all),
+    ).toEqual(["refs/remotes/origin/release/1", "refs/remotes/origin/release/2"]);
   });
 });

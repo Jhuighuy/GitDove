@@ -18,6 +18,16 @@ export type SidebarTarget =
   | { readonly kind: "branch"; readonly ref: Ref }
   | { readonly kind: "remote-branch"; readonly ref: Ref }
   | { readonly kind: "remote"; readonly remote: Remote }
+  | {
+      readonly kind: "folder";
+      readonly name: string;
+      /** Full names of the folder's branches (without the checked-out one, which is always shown). */
+      readonly names: readonly string[];
+      /** Full names of all the folder's branches. */
+      readonly members: readonly string[];
+      /** Prefix to hide the folder by, if it hides as a group. */
+      readonly prefix: string | undefined;
+    }
   | { readonly kind: "tag"; readonly ref: Ref }
   | { readonly kind: "stash"; readonly stash: Stash }
   | { readonly kind: "worktree"; readonly worktree: Worktree }
@@ -27,8 +37,6 @@ export type SidebarTarget =
 interface Props {
   readonly repo: RepoId;
   readonly target: SidebarTarget | null;
-  /** Every visibility-toggleable name, for "Solo". */
-  readonly all: readonly string[];
   readonly vis: ReturnType<typeof useVisibility>;
 }
 
@@ -40,23 +48,15 @@ function Menu({ children }: { children: ReactNode }) {
 }
 
 /** Hide/show and solo entries shared by every graph-visible item. */
-function VisibilityItems({
-  name,
-  all,
-  vis,
-}: {
-  name: string;
-  all: readonly string[];
-  vis: Props["vis"];
-}) {
+function VisibilityItems({ name, vis }: { readonly name: string; readonly vis: Props["vis"] }) {
   const hidden = vis.isHidden(name);
   return (
     <>
       <Sep />
-      <Item onClick={() => (hidden ? vis.show([name]) : vis.toggle(name, all))}>
+      <Item onClick={() => (hidden ? vis.show([name]) : vis.hide([name]))}>
         {hidden ? "Show in graph" : "Hide from graph"}
       </Item>
-      <Item onClick={() => vis.solo(all, name)}>Solo (hide everything else)</Item>
+      <Item onClick={() => vis.solo([name])}>Solo (hide everything else)</Item>
       {vis.anyHidden && <Item onClick={vis.showAll}>Show all</Item>}
     </>
   );
@@ -81,7 +81,59 @@ function ResetItems({ repo, hash, head }: { repo: RepoId; hash: string; head: st
   );
 }
 
-export function SidebarMenu({ repo, target, all, vis }: Props) {
+function RemoteMenu({
+  repo,
+  remote: r,
+  vis,
+}: {
+  readonly repo: RepoId;
+  readonly remote: Remote;
+  readonly vis: Props["vis"];
+}) {
+  const { data: refs } = useRefs(repo);
+  const prefix = `refs/remotes/${r.name}/`;
+  const members = (refs?.refs ?? [])
+    .filter((x) => x.name.startsWith(prefix) && !x.short.endsWith("/HEAD"))
+    .map((x) => x.name);
+  const allHidden = members.length > 0 && members.every((m) => vis.isHidden(m));
+  return (
+    <Menu>
+      <Item onClick={() => void commands.fetchRemote(repo, r.name)}>Fetch {r.name}</Item>
+      <Sep />
+      <Item onClick={() => void commands.editRemoteUrl(repo, r.name, r.fetchUrl)}>Edit URL…</Item>
+      <Item onClick={() => commands.copy(r.fetchUrl, "Remote URL copied")}>Copy URL</Item>
+      <Sep />
+      <Item onClick={() => vis.toggleGroup(members, prefix)}>
+        {allHidden ? `Show ${r.name} branches` : `Hide ${r.name} branches`}
+      </Item>
+      <Sep />
+      <Item variant="destructive" onClick={() => void commands.removeRemote(repo, r.name)}>
+        Remove {r.name}
+      </Item>
+    </Menu>
+  );
+}
+
+function FolderMenu({
+  target: { name, names, members, prefix },
+  vis,
+}: {
+  readonly target: Extract<SidebarTarget, { kind: "folder" }>;
+  readonly vis: Props["vis"];
+}) {
+  const allHidden = names.length > 0 && names.every((n) => vis.isHidden(n));
+  return (
+    <Menu>
+      <Item onClick={() => vis.toggleGroup(names, prefix)}>
+        {allHidden ? `Show ${name} in graph` : `Hide ${name} from graph`}
+      </Item>
+      <Item onClick={() => vis.solo(members)}>Solo {name} (hide everything else)</Item>
+      {vis.anyHidden && <Item onClick={vis.showAll}>Show all</Item>}
+    </Menu>
+  );
+}
+
+export function SidebarMenu({ repo, target, vis }: Props) {
   const { data: info } = useRepoInfo(repo);
   const { data: refs } = useRefs(repo);
   const head = info?.head.branch ?? "HEAD";
@@ -135,7 +187,7 @@ export function SidebarMenu({ repo, target, all, vis }: Props) {
           <Sep />
           <Item onClick={() => commands.copy(r.short, "Branch name copied")}>Copy branch name</Item>
           <Item onClick={() => commands.copy(r.hash, "Commit SHA copied")}>Copy commit SHA</Item>
-          {!r.isHead && <VisibilityItems name={r.name} all={all} vis={vis} />}
+          {!r.isHead && <VisibilityItems name={r.name} vis={vis} />}
         </Menu>
       );
     }
@@ -167,37 +219,16 @@ export function SidebarMenu({ repo, target, all, vis }: Props) {
           <Sep />
           <Item onClick={() => commands.copy(r.short, "Branch name copied")}>Copy branch name</Item>
           <Item onClick={() => commands.copy(r.hash, "Commit SHA copied")}>Copy commit SHA</Item>
-          <VisibilityItems name={r.name} all={all} vis={vis} />
+          <VisibilityItems name={r.name} vis={vis} />
         </Menu>
       );
     }
 
-    case "remote": {
-      const r = target.remote;
-      const prefix = `refs/remotes/${r.name}/`;
-      const members = (refs?.refs ?? [])
-        .filter((x) => x.name.startsWith(prefix))
-        .map((x) => x.name);
-      const allHidden = members.length > 0 && members.every((m) => vis.isHidden(m));
-      return (
-        <Menu>
-          <Item onClick={() => void commands.fetchRemote(repo, r.name)}>Fetch {r.name}</Item>
-          <Sep />
-          <Item onClick={() => void commands.editRemoteUrl(repo, r.name, r.fetchUrl)}>
-            Edit URL…
-          </Item>
-          <Item onClick={() => commands.copy(r.fetchUrl, "Remote URL copied")}>Copy URL</Item>
-          <Sep />
-          <Item onClick={() => (allHidden ? vis.show([prefix, ...members]) : vis.hide([prefix]))}>
-            {allHidden ? `Show ${r.name} branches` : `Hide ${r.name} branches`}
-          </Item>
-          <Sep />
-          <Item variant="destructive" onClick={() => void commands.removeRemote(repo, r.name)}>
-            Remove {r.name}
-          </Item>
-        </Menu>
-      );
-    }
+    case "remote":
+      return <RemoteMenu repo={repo} remote={target.remote} vis={vis} />;
+
+    case "folder":
+      return <FolderMenu target={target} vis={vis} />;
 
     case "tag": {
       const r = target.ref;
@@ -221,7 +252,7 @@ export function SidebarMenu({ repo, target, all, vis }: Props) {
           <Sep />
           <Item onClick={() => commands.copy(r.short, "Tag name copied")}>Copy tag name</Item>
           <Item onClick={() => commands.copy(r.hash, "Commit SHA copied")}>Copy commit SHA</Item>
-          <VisibilityItems name={r.name} all={all} vis={vis} />
+          <VisibilityItems name={r.name} vis={vis} />
         </Menu>
       );
     }
@@ -239,7 +270,7 @@ export function SidebarMenu({ repo, target, all, vis }: Props) {
           <Item variant="destructive" onClick={() => void commands.dropStash(repo, s.index)}>
             Delete stash
           </Item>
-          <VisibilityItems name={stashKey(s.hash)} all={all} vis={vis} />
+          <VisibilityItems name={stashKey(s.hash)} vis={vis} />
         </Menu>
       );
     }

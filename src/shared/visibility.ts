@@ -17,25 +17,34 @@ export const isHidden = (
   return false;
 };
 
-/** Toggles one entry, expanding a hidden group into its remaining members when needed. */
+/**
+ * Shows `names`. A hidden group prefix that covers any of them is expanded into
+ * its other members (taken from `all`) so that the rest of the group stays hidden.
+ */
+export const showNames = (
+  hidden: readonly string[],
+  names: readonly string[],
+  /** Every toggleable name, used to expand group prefixes. */
+  all: readonly string[] = [],
+): string[] => {
+  const show = new Set(names);
+  const out = new Set<string>();
+  for (const entry of hidden) {
+    if (show.has(entry)) continue;
+    if (entry.endsWith("/") && names.some((n) => n.startsWith(entry))) {
+      for (const n of all) if (n.startsWith(entry) && !show.has(n)) out.add(n);
+      continue;
+    }
+    out.add(entry);
+  }
+  return [...out];
+};
+
+/** Toggles one entry, expanding hidden groups into their remaining members when needed. */
 export const toggleHidden = (
   hidden: readonly string[],
   name: string,
-  /** All names currently covered by a group prefix that contains `name`. */
-  siblings: readonly string[] = [],
-): string[] => {
-  const set = new Set(hidden);
-  if (set.has(name)) {
-    set.delete(name);
-    return [...set];
-  }
-  const group = [...set].find((e) => e.endsWith("/") && name.startsWith(e));
-  if (group) {
-    // Showing one member of a hidden group: hide the other members individually.
-    set.delete(group);
-    for (const s of siblings) if (s !== name) set.add(s);
-    return [...set];
-  }
-  set.add(name);
-  return [...set];
-};
+  /** Every toggleable name, used to expand group prefixes. */
+  all: readonly string[] = [],
+): string[] =>
+  isHidden(hidden, name) ? showNames(hidden, [name], all) : [...new Set([...hidden, name])];
