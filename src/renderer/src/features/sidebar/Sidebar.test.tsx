@@ -249,3 +249,15 @@ it("toggles whole remotes and tags", async () => {
   await eye("v1.0");
   expect(mocks.setHidden.at(-1)).toContain("refs/tags/v1.0");
 });
+
+it("keeps the checked-out branch when soloing its folder", async () => {
+  const refs = base.refs.map((r) =>
+    r.name === "refs/heads/main" ? ref("refs/heads/release/main", { isHead: true }) : r,
+  );
+  await render([], { ...base, refs });
+  await menu("release/", "Solo release (hide everything else)");
+  expect(mocks.setHidden.at(-1)).not.toContain("refs/heads/release/main");
+  // The eye toggle still leaves it alone.
+  await eye("release/");
+  expect(mocks.setHidden.at(-1)).not.toContain("refs/heads/release/main");
+});

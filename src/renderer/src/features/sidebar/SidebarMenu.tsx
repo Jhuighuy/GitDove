@@ -21,8 +21,10 @@ export type SidebarTarget =
   | {
       readonly kind: "folder";
       readonly name: string;
-      /** Full names of the folder's branches (without the checked-out one). */
+      /** Full names of the folder's branches (without the checked-out one, which is always shown). */
       readonly names: readonly string[];
+      /** Full names of all the folder's branches. */
+      readonly members: readonly string[];
       /** Prefix to hide the folder by, if it hides as a group. */
       readonly prefix: string | undefined;
     }
@@ -111,7 +113,7 @@ function RemoteMenu({
 }
 
 function FolderMenu({
-  target: { name, names, prefix },
+  target: { name, names, members, prefix },
   vis,
 }: {
   readonly target: Extract<SidebarTarget, { kind: "folder" }>;
@@ -123,7 +125,7 @@ function FolderMenu({
       <Item onClick={() => vis.toggleGroup(names, prefix)}>
         {allHidden ? `Show ${name} in graph` : `Hide ${name} from graph`}
       </Item>
-      <Item onClick={() => vis.solo(names)}>Solo {name} (hide everything else)</Item>
+      <Item onClick={() => vis.solo(members)}>Solo {name} (hide everything else)</Item>
       {vis.anyHidden && <Item onClick={vis.showAll}>Show all</Item>}
     </Menu>
   );
