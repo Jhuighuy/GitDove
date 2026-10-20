@@ -24,12 +24,12 @@ mac:
   icon: build/icon.icns
   category: public.app-category.developer-tools
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  # Apple silicon only. The zip is what Sparkle downloads for over-the-air updates.
   target:
     - target: dmg
-      arch: [arm64, x64]
-    # The zip is what Sparkle downloads for over-the-air updates.
+      arch: arm64
     - target: zip
-      arch: [arm64, x64]
+      arch: arm64
   # Ad-hoc signed: no Apple Developer ID, so no notarization and no use for the hardened runtime.
   # Sparkle authenticates updates with our Ed25519 key instead (docs/updates.md).
   identity: "-"

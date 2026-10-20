@@ -5,5 +5,6 @@ import { embedUpdater } from "./sparkle.mjs";
 
 export default async function afterPack({ electronPlatformName, appOutDir, arch, packager }) {
   if (electronPlatformName !== "darwin") return;
-  await embedUpdater(join(appOutDir, `${packager.appInfo.productFilename}.app`), Arch[arch]);
+  if (Arch[arch] !== "arm64") throw new Error("macOS builds are Apple silicon (arm64) only");
+  await embedUpdater(join(appOutDir, `${packager.appInfo.productFilename}.app`));
 }

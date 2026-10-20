@@ -1,6 +1,6 @@
 // End-to-end test of macOS updates on a packaged GitDove.app, with a local feed and a throwaway key:
 //
-//   node scripts/test-updates.mjs release/<version>/mac-<arch>/GitDove.app
+//   node scripts/test-updates.mjs release/<version>/mac-arm64/GitDove.app
 //
 // Set CASE to run only the cases whose names contain it.
 //
@@ -21,7 +21,6 @@ import { writeAppcast } from "./release.mjs";
 import { helperPath, readPlist, updateSettings, writePlist } from "./sparkle.mjs";
 
 const source = resolve(process.argv[2] ?? "");
-const arch = { arm64: "arm64", x64: "x64" }[process.arch];
 const id = `dev.gitdove.test.${randomUUID()}`;
 // Real path: Sparkle relaunches the app from /private/var rather than the /var symlink.
 const work = realpathSync(mkdtempSync(join(tmpdir(), "gitdove-updates-")));
@@ -45,7 +44,7 @@ const server = createServer((request, response) => {
 });
 await new Promise((done) => server.listen(0, "127.0.0.1", done));
 const base = `http://127.0.0.1:${server.address().port}`;
-const settings = updateSettings(arch, { feedURL: `${base}/appcast.xml`, publicKey: publicKeyText });
+const settings = updateSettings({ feedURL: `${base}/appcast.xml`, publicKey: publicKeyText });
 
 const version = (app) => {
   try {

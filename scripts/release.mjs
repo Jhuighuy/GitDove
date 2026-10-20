@@ -2,8 +2,8 @@
 //
 //   node scripts/release.mjs version
 //     Prints the release version: package.json's major.minor plus the CI run number.
-//   node scripts/release.mjs appcasts <dir> <download URL prefix>
-//     Signs the macOS ZIPs in <dir> with SPARKLE_PRIVATE_KEY and writes appcast-<arch>.xml next to them.
+//   node scripts/release.mjs appcast <dir> <download URL prefix>
+//     Signs the macOS ZIP in <dir> with SPARKLE_PRIVATE_KEY and writes appcast.xml next to it.
 import { execFileSync } from "node:child_process";
 import { createPublicKey, verify } from "node:crypto";
 import { appendFileSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -104,27 +104,25 @@ async function main([command, ...args]) {
     console.log(release);
     if (process.env.GITHUB_OUTPUT)
       appendFileSync(process.env.GITHUB_OUTPUT, `version=${release}\n`);
-  } else if (command === "appcasts" && args.length === 2) {
+  } else if (command === "appcast" && args.length === 2) {
     const [dir, prefix] = args;
     const seed = process.env.SPARKLE_PRIVATE_KEY;
     if (!seed) throw new Error("SPARKLE_PRIVATE_KEY is not set");
-    for (const arch of ["arm64", "x64"]) {
-      const [zip, ...others] = readdirSync(dir)
-        .filter((name) => name.endsWith(`-mac-${arch}.zip`))
-        .map((name) => join(dir, name));
-      if (!zip || others.length) throw new Error(`Expected one macOS ${arch} ZIP in ${dir}`);
-      const output = join(dir, `appcast-${arch}.xml`);
-      await writeAppcast({
-        zip,
-        url: `${prefix}/${basename(zip)}`,
-        seed,
-        output,
-        settings: updateSettings(arch),
-      });
-      console.log(`Wrote ${output} for ${basename(zip)}`);
-    }
+    const [zip, ...others] = readdirSync(dir)
+      .filter((name) => name.endsWith("-mac-arm64.zip"))
+      .map((name) => join(dir, name));
+    if (!zip || others.length) throw new Error(`Expected one macOS ZIP in ${dir}`);
+    const output = join(dir, "appcast.xml");
+    await writeAppcast({
+      zip,
+      url: `${prefix}/${basename(zip)}`,
+      seed,
+      output,
+      settings: updateSettings(),
+    });
+    console.log(`Wrote ${output} for ${basename(zip)}`);
   } else {
-    throw new Error("usage: release.mjs version | appcasts <dir> <download URL prefix>");
+    throw new Error("usage: release.mjs version | appcast <dir> <download URL prefix>");
   }
 }
 

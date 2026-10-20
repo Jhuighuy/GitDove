@@ -42,10 +42,7 @@ export function writePlist(file, data) {
 }
 
 /** Info.plist settings for GitDove.app; tests override the feed and key. */
-export function updateSettings(
-  arch,
-  { feedURL = config.feedURL.replace("{arch}", arch), publicKey = config.publicKey } = {},
-) {
+export function updateSettings({ feedURL = config.feedURL, publicKey = config.publicKey } = {}) {
   return {
     SUFeedURL: feedURL,
     SUPublicEDKey: publicKey,
@@ -61,9 +58,9 @@ export function updateSettings(
 
 /**
  * Embeds Sparkle.framework and the updater helper into `app` (before code signing) and adds the
- * update settings to its Info.plist. `arch` is the app's architecture: "arm64" or "x64".
+ * update settings to its Info.plist. GitDove ships for Apple silicon only.
  */
-export async function embedUpdater(app, arch, settings = updateSettings(arch)) {
+export async function embedUpdater(app, settings = updateSettings()) {
   const sparkle = await fetchSparkle();
   const frameworks = join(app, "Contents/Frameworks");
   rmSync(join(frameworks, "Sparkle.framework"), { recursive: true, force: true });
@@ -81,7 +78,7 @@ export async function embedUpdater(app, arch, settings = updateSettings(arch)) {
     "-O",
     "-parse-as-library",
     "-target",
-    `${arch === "x64" ? "x86_64" : arch}-apple-macos${info.LSMinimumSystemVersion}`,
+    `arm64-apple-macos${info.LSMinimumSystemVersion}`,
     "-F",
     sparkle,
     "-framework",
