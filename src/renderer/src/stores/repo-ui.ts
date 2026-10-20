@@ -48,11 +48,15 @@ const sameSelection = (a: Selection | null, b: Selection | null) =>
 
 export const useRepoUi = (repo: RepoId): RepoUi => useRepoUiStore((s) => s.byRepo[repo] ?? EMPTY);
 
+export type DiffMode = "unified" | "split";
+
 interface LayoutState {
   readonly sidebar: boolean;
   readonly details: boolean;
+  readonly diffMode: DiffMode;
   toggleSidebar(): void;
   toggleDetails(): void;
+  setDiffMode(mode: DiffMode): void;
 }
 
 export const useLayout = create<LayoutState>()(
@@ -60,8 +64,10 @@ export const useLayout = create<LayoutState>()(
     (set) => ({
       sidebar: true,
       details: true,
+      diffMode: "unified",
       toggleSidebar: () => set((s) => ({ sidebar: !s.sidebar })),
       toggleDetails: () => set((s) => ({ details: !s.details })),
+      setDiffMode: (diffMode) => set({ diffMode }),
     }),
     { name: "gitdove.layout" },
   ),
