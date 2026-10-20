@@ -159,13 +159,20 @@ const acquireMaster = (host: string) =>
       }),
   ).pipe(Effect.map(({ master }) => master));
 
+/**
+ * Gets a cached resource. RcMap keeps a failed lookup like a successful one, so drop it: the
+ * next call tries again (e.g. once the VPN is up) instead of failing until the entry expires.
+ */
+const getOrRetry = <A, E>(map: RcMap.RcMap<string, A, E>, host: string) =>
+  RcMap.get(map, host).pipe(Effect.tapError(() => RcMap.invalidate(map, host)));
+
 /** Returns the host's master connection, reconnecting if it died. */
 const liveMaster = (masters: RcMap.RcMap<string, SshMaster, SshError>, host: string) =>
   Effect.gen(function* () {
-    const master = yield* RcMap.get(masters, host);
+    const master = yield* getOrRetry(masters, host);
     if (master.isAlive()) return master;
     yield* RcMap.invalidate(masters, host);
-    return yield* RcMap.get(masters, host);
+    return yield* getOrRetry(masters, host);
   });
 
 /** The remote runner could not be started; commands fall back to plain sessions. */
@@ -226,13 +233,14 @@ const makeSshHost = (
   host: string,
   masters: RcMap.RcMap<string, SshMaster, SshError>,
   runners: RcMap.RcMap<string, Runner, SshError | RunnerUnavailable>,
+  /** When each host's runner may be tried again after it failed to start. */
+  runnerRetryAt: Map<string, number>,
 ): Host => {
   // sshd allows 10 multiplexed sessions per connection by default (MaxSessions);
   // the runner holds one of them.
   const sessions = Semaphore.makeUnsafe(7);
   // Commands running concurrently on the runner.
   const runnerSlots = Semaphore.makeUnsafe(32);
-  let runnerRetryAt = 0;
 
   /** Runs a command in its own SSH session. */
   const viaSession = (remote: string, display: string, options: ExecOptions) =>
@@ -273,10 +281,11 @@ const makeSshHost = (
   const viaRunner = (remote: string, display: string, options: ExecOptions) =>
     Effect.scoped(
       Effect.gen(function* () {
-        let runner = yield* RcMap.get(runners, host);
+        // A runner that failed to start is tried again after RUNNER_RETRY_MS (see `run`).
+        let runner = yield* getOrRetry(runners, host);
         if (!runner.alive) {
           yield* RcMap.invalidate(runners, host);
-          runner = yield* RcMap.get(runners, host);
+          runner = yield* getOrRetry(runners, host);
         }
         return yield* runOnRunner(runner, host, remote, { ...options, display });
       }),
@@ -286,7 +295,7 @@ const makeSshHost = (
       Effect.retry({ while: retryable(options), times: 1 }),
       Effect.catchTag("RunnerUnavailable", (e) =>
         Effect.gen(function* () {
-          runnerRetryAt = Date.now() + RUNNER_RETRY_MS;
+          runnerRetryAt.set(host, Date.now() + RUNNER_RETRY_MS);
           yield* Effect.logWarning(e.message);
           return yield* viaSession(remote, display, options);
         }),
@@ -298,7 +307,7 @@ const makeSshHost = (
     const useRunner =
       options.onStdout === undefined &&
       (options.stdin === undefined || Buffer.byteLength(options.stdin) <= MAX_RUNNER_STDIN) &&
-      Date.now() >= runnerRetryAt;
+      Date.now() >= (runnerRetryAt.get(host) ?? 0);
     return useRunner ? viaRunner(remote, display, options) : viaSession(remote, display, options);
   };
 
@@ -351,12 +360,13 @@ export const HostsLive = Layer.effect(
       idleTimeToLive: "10 minutes",
     });
     const cache = new Map<string, Host>();
+    const runnerRetryAt = new Map<string, number>();
     return {
       get: (id) => {
         if (id === LOCAL_HOST) return localHost;
         let h = cache.get(id);
         if (!h) {
-          h = makeSshHost(id, masters, runners);
+          h = makeSshHost(id, masters, runners, runnerRetryAt);
           cache.set(id, h);
         }
         return h;
@@ -371,10 +381,14 @@ export const HostsLive = Layer.effect(
       connect: (id) =>
         id === LOCAL_HOST
           ? Effect.void
-          : Effect.scoped(RcMap.get(runners, id)).pipe(
+          : Effect.scoped(getOrRetry(runners, id)).pipe(
               Effect.asVoid,
-              // Commands will fall back to plain sessions.
-              Effect.catchTag("RunnerUnavailable", () => Effect.void),
+              // Commands will fall back to plain sessions for a while.
+              Effect.catchTag("RunnerUnavailable", (e) =>
+                Effect.sync(() => runnerRetryAt.set(id, Date.now() + RUNNER_RETRY_MS)).pipe(
+                  Effect.andThen(Effect.logWarning(e.message)),
+                ),
+              ),
             ),
     };
   }),

@@ -38,6 +38,9 @@ if [ -n "$master" ]; then
   echo "master $host" >>"$d/log"
   case $host in
     denied) echo "debug1: trying key" >&2; echo "Permission denied (publickey)." >&2; exit 255 ;;
+    later) if [ "$(count later-masters)" = 1 ]; then
+        echo "ssh: connect to host later port 22: Connection refused" >&2; exit 255
+      fi ;;
   esac
   echo $$ >"$d/master-$host.pid"
   exec sleep 600
@@ -266,6 +269,21 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
       expect(failure(cmd)).toMatchObject({ _tag: "SshError", host: "denied", mayHaveRun: false });
     });
 
+    it("connects again after a failed connection", async () => {
+      const { runExit } = hosts();
+      expect(failure(await runExit((h) => h.connect("later")))).toMatchObject({
+        _tag: "SshError",
+        message:
+          "Could not connect to later: ssh: connect to host later port 22: Connection refused",
+      });
+      // The host is reachable now (say, the VPN came up): the failure is not cached.
+      expect(Exit.isSuccess(await runExit((h) => h.connect("later")))).toBe(true);
+      expect((await runExit((h) => shOut(h.get("later"), "echo up"))).toJSON()).toMatchObject({
+        value: "up\n",
+      });
+      expect(log().filter((l) => l === "master later")).toHaveLength(2);
+    });
+
     it("falls back to plain sessions when the runner cannot start", async () => {
       const { run } = hosts();
       const host = await run((h) => Effect.succeed(h.get("norunner")));
@@ -279,10 +297,10 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
         "session norunner",
         "session norunner",
       ]);
-      // After the retry delay the runner is asked again; RcMap still holds its failure.
+      // After the retry delay, starting the runner is tried again.
       vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
       expect(await run(() => shOut(host, "echo three"))).toBe("three\n");
-      expect(log().at(-1)).toBe("session norunner");
+      expect(log().slice(-2)).toEqual(["runner norunner", "session norunner"]);
     });
 
     it("restarts a runner that died with a read-only command in flight", async () => {
