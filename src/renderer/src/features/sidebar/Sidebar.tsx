@@ -10,6 +10,8 @@ import {
   IconDeviceLaptop,
   IconEye,
   IconEyeOff,
+  IconFolder,
+  IconFolderOpen,
   IconFolders,
   IconGitBranch,
   IconSearch,
@@ -17,6 +19,8 @@ import {
   IconTag,
 } from "@tabler/icons-react";
 import { type ReactNode, useMemo, useState } from "react";
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { useRefs, useRepoInfo } from "@/lib/queries";
@@ -24,9 +28,32 @@ import { cn } from "@/lib/utils";
 import { commands } from "../commands";
 import { SectionStack } from "./SectionStack";
 import { SidebarMenu, type SidebarTarget } from "./SidebarMenu";
-import { allVisibilityNames, useVisibility } from "./visibility";
+import { buildTree, type TreeNode } from "./tree";
+import { useVisibility } from "./visibility";
 
 type Visibility = "visible" | "hidden" | "partial" | "head" | "none";
+
+interface FolderState {
+  /** Collapsed branch folders, keyed by `folderKey` (default: expanded). */
+  readonly collapsed: Readonly<Record<string, true>>;
+  toggle(key: string): void;
+}
+
+const useFolderStore = create<FolderState>()(
+  persist(
+    (set) => ({
+      collapsed: {},
+      toggle: (key) =>
+        set((s) => {
+          const { [key]: was, ...rest } = s.collapsed;
+          return { collapsed: was ? rest : { ...rest, [key]: true } };
+        }),
+    }),
+    { name: "gitdove.sidebar-folders" },
+  ),
+);
+
+const folderKey = (repo: RepoId, prefix: string) => `${repo}\n${prefix}`;
 
 export function Sidebar({ repo }: { repo: RepoId }) {
   const { data } = useRefs(repo);
@@ -34,11 +61,13 @@ export function Sidebar({ repo }: { repo: RepoId }) {
   const vis = useVisibility(repo);
   const [filter, setFilter] = useState("");
   const [menu, setMenu] = useState<SidebarTarget | null>(null);
+  const collapsed = useFolderStore((s) => s.collapsed);
+  const toggleFolder = useFolderStore((s) => s.toggle);
 
   const f = filter.trim().toLowerCase();
   const match = (s: string) => !f || s.toLowerCase().includes(f);
 
-  const { locals, remotes, tags, all } = useMemo(() => {
+  const { locals, remotes, tags } = useMemo(() => {
     const refs = data?.refs ?? [];
     const byRemote = new Map<string, Ref[]>();
     for (const r of data?.remotes ?? []) byRemote.set(r.name, []);
@@ -48,11 +77,16 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       list.push(r);
       byRemote.set(r.remote ?? "", list);
     }
+    const trees = new Map<string, { refs: Ref[]; tree: TreeNode<Ref>[] }>();
+    for (const [name, list] of byRemote) {
+      const tree = buildTree(list, (r) => r.short.slice(name.length + 1), `refs/remotes/${name}/`);
+      trees.set(name, { refs: list, tree });
+    }
+    const branches = refs.filter((r) => r.kind === "branch");
     return {
-      locals: refs.filter((r) => r.kind === "branch"),
-      remotes: byRemote,
+      locals: { refs: branches, tree: buildTree(branches, (r) => r.short, "refs/heads/") },
+      remotes: trees,
       tags: refs.filter((r) => r.kind === "tag").toReversed(),
-      all: allVisibilityNames(data),
     };
   }, [data]);
 
@@ -74,46 +108,85 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       </span>
     );
   };
+  const all = vis.all;
   const visibleTotal = all.filter((n) => !vis.isHidden(n)).length;
   const groupVisibility = (names: readonly string[]): Visibility => {
     const hiddenCount = names.filter((n) => vis.isHidden(n)).length;
     if (names.length === 0 || hiddenCount === 0) return "visible";
     return hiddenCount === names.length ? "hidden" : "partial";
   };
-  const toggleGroup = (prefix: string, names: readonly string[]) => {
-    if (groupVisibility(names) === "hidden") vis.show([prefix, ...names]);
-    else vis.hide([prefix]);
-  };
+
+  /**
+   * Renders a branch tree. Folders hide by prefix when `byPrefix` is set, else
+   * branch by branch (like the Local section, so new branches stay visible).
+   */
+  const tree = (
+    nodes: readonly TreeNode<Ref>[],
+    depth: number,
+    byPrefix: boolean,
+    leaf: (r: Ref, label: string, depth: number) => ReactNode,
+  ): ReactNode[] =>
+    nodes.flatMap((n) => {
+      if (n.kind === "leaf") return match(n.item.short) ? [leaf(n.item, n.name, depth)] : [];
+      if (f && !n.items.some((r) => match(r.short))) return [];
+      // The checked-out branch is always shown, so it does not count towards a folder's state.
+      const names = n.items.filter((r) => !r.isHead).map((r) => r.name);
+      const key = folderKey(repo, n.prefix);
+      const open = !!f || !collapsed[key];
+      const prefix = byPrefix ? n.prefix : undefined;
+      return [
+        <Item
+          key={n.prefix}
+          depth={depth}
+          icon={open ? <IconFolderOpen /> : <IconFolder />}
+          label={n.name}
+          title={n.prefix.replace(/^refs\/(heads|remotes)\//, "")}
+          visibility={groupVisibility(names)}
+          trailing={
+            !open && (
+              <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
+                {n.items.length}
+              </span>
+            )
+          }
+          onToggle={() => vis.toggleGroup(names, prefix)}
+          onClick={() => toggleFolder(key)}
+          onContextMenu={() => setMenu({ kind: "folder", name: n.name, names, prefix })}
+        />,
+        ...(open ? tree(n.children, depth + 1, byPrefix, leaf) : []),
+      ];
+    });
 
   const sections = [
     {
       id: "local",
       title: "Local",
       icon: <IconDeviceLaptop />,
-      count: count(locals.map((r) => r.name)),
+      count: count(locals.refs.map((r) => r.name)),
       onHeaderContextMenu: () => setMenu({ kind: "section", section: "local" }),
-      children: locals
-        .filter((r) => match(r.short))
-        .map((r) => (
-          <RefItem
-            key={r.name}
-            refItem={r}
-            icon={<IconGitBranch />}
-            visibility={refVisibility(r)}
-            onToggle={() => vis.toggle(r.name)}
-            onClick={() => reveal(r.hash)}
-            onDoubleClick={() => void commands.checkoutRef(repo, r)}
-            onContextMenu={() => setMenu({ kind: "branch", ref: r })}
-          />
-        )),
+      children: tree(locals.tree, 0, false, (r, label, depth) => (
+        <RefItem
+          key={r.name}
+          depth={depth}
+          refItem={r}
+          label={label}
+          title={r.short}
+          icon={<IconGitBranch />}
+          visibility={refVisibility(r)}
+          onToggle={() => vis.toggle(r.name)}
+          onClick={() => reveal(r.hash)}
+          onDoubleClick={() => void commands.checkoutRef(repo, r)}
+          onContextMenu={() => setMenu({ kind: "branch", ref: r })}
+        />
+      )),
     },
     {
       id: "remote",
       title: "Remote",
       icon: <IconCloud />,
-      count: count([...remotes.values()].flat().map((r) => r.name)),
+      count: count([...remotes.values()].flatMap((t) => t.refs.map((r) => r.name))),
       onHeaderContextMenu: () => setMenu({ kind: "section", section: "remote" }),
-      children: [...remotes].map(([name, refs]) => {
+      children: [...remotes].map(([name, { refs, tree: nodes }]) => {
         const remote = remoteList.find((r) => r.name === name);
         const names = refs.map((r) => r.name);
         // With a single remote its subtree adds nothing: list its branches flatly
@@ -127,26 +200,25 @@ export function Sidebar({ repo }: { repo: RepoId }) {
                 label={name}
                 title={remote?.fetchUrl ?? name}
                 visibility={groupVisibility(names)}
-                onToggle={() => toggleGroup(`refs/remotes/${name}/`, names)}
+                onToggle={() => vis.toggleGroup(names, `refs/remotes/${name}/`)}
                 onContextMenu={() => remote && setMenu({ kind: "remote", remote })}
               />
             )}
-            {refs
-              .filter((r) => match(r.short))
-              .map((r) => (
-                <RefItem
-                  key={r.name}
-                  depth={flat ? 0 : 1}
-                  refItem={r}
-                  label={r.short.slice(name.length + 1)}
-                  icon={<IconGitBranch />}
-                  visibility={refVisibility(r)}
-                  onToggle={() => vis.toggle(r.name, names)}
-                  onClick={() => reveal(r.hash)}
-                  onDoubleClick={() => void commands.checkoutRef(repo, r)}
-                  onContextMenu={() => setMenu({ kind: "remote-branch", ref: r })}
-                />
-              ))}
+            {tree(nodes, flat ? 0 : 1, true, (r, label, depth) => (
+              <RefItem
+                key={r.name}
+                depth={depth}
+                refItem={r}
+                label={label}
+                title={r.short}
+                icon={<IconGitBranch />}
+                visibility={refVisibility(r)}
+                onToggle={() => vis.toggle(r.name)}
+                onClick={() => reveal(r.hash)}
+                onDoubleClick={() => void commands.checkoutRef(repo, r)}
+                onContextMenu={() => setMenu({ kind: "remote-branch", ref: r })}
+              />
+            ))}
           </div>
         );
       }),
@@ -207,12 +279,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
             refItem={r}
             icon={<IconTag />}
             visibility={refVisibility(r)}
-            onToggle={() =>
-              vis.toggle(
-                r.name,
-                tags.map((t) => t.name),
-              )
-            }
+            onToggle={() => vis.toggle(r.name)}
             onClick={() => reveal(r.hash)}
             onDoubleClick={() => void commands.checkout(repo, r.short)}
             onContextMenu={() => setMenu({ kind: "tag", ref: r })}
@@ -272,7 +339,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
         <ContextMenuTrigger render={<div className="flex min-h-0 flex-1 flex-col border-t" />}>
           <SectionStack sections={sections} />
         </ContextMenuTrigger>
-        <SidebarMenu repo={repo} target={menu} all={all} vis={vis} />
+        <SidebarMenu repo={repo} target={menu} vis={vis} />
       </ContextMenu>
     </div>
   );
