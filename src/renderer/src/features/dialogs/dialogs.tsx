@@ -186,9 +186,8 @@ function PromptBody({
               onChange={(e) => setDetails(e.target.value)}
               onKeyDown={(e) => {
                 // Enter adds a line here; Cmd/Ctrl+Enter submits, but not while an
-                // input method is composing text (keyCode 229 on some platforms).
-                const composing = e.nativeEvent.isComposing || e.keyCode === 229;
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !composing) {
+                // input method is composing text (its keystrokes report key "Process").
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   submit();
                 }
