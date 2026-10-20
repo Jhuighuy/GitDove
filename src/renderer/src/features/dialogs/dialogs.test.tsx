@@ -1,0 +1,74 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { beforeEach, expect, it } from "vitest";
+import { DialogHost, prompt } from "./dialogs";
+
+beforeEach(async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  document.body.innerHTML = "";
+  const root = document.createElement("div");
+  document.body.append(root);
+  await act(async () => createRoot(root).render(<DialogHost />));
+});
+
+/** Sets a controlled input's value the way typing does. */
+const type = (el: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement;
+  Object.getOwnPropertyDescriptor(proto.prototype, "value")!.set!.call(el, value);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+};
+
+const byId = <T extends HTMLElement>(id: string) => {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`#${id} is not rendered`);
+  return el as T;
+};
+
+const button = (label: string) => {
+  const el = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === label);
+  if (!el) throw new Error(`No "${label}" button`);
+  return el;
+};
+
+it("returns the optional multi-line details, trimmed", async () => {
+  let result: Awaited<ReturnType<typeof prompt>> | undefined;
+  await act(async () => {
+    void prompt({
+      title: "Create tag",
+      label: "Tag name",
+      confirmLabel: "Create Tag",
+      details: { label: "Message (optional)" },
+    }).then((r) => (result = r));
+  });
+  expect(document.body.textContent).toContain("Message (optional)");
+
+  await act(async () => {
+    type(byId<HTMLInputElement>("prompt-input"), "v1.0.0");
+    type(byId<HTMLTextAreaElement>("prompt-details"), "  Release 1.0\n\nNotes.  ");
+  });
+  // Plain Enter adds a line; Cmd/Ctrl+Enter submits.
+  await act(async () => {
+    byId("prompt-details").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+  });
+  expect(result).toBeUndefined();
+  await act(async () => {
+    byId("prompt-details").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+    );
+  });
+  expect(result).toEqual({ value: "v1.0.0", checked: false, details: "Release 1.0\n\nNotes." });
+});
+
+it("returns empty details when the field is unused", async () => {
+  let result: Awaited<ReturnType<typeof prompt>> | undefined;
+  await act(async () => {
+    void prompt({ title: "Rename", confirmLabel: "Rename" }).then((r) => (result = r));
+  });
+  expect(document.getElementById("prompt-details")).toBeNull();
+  await act(async () => type(byId<HTMLInputElement>("prompt-input"), "topic"));
+  await act(async () => button("Rename").click());
+  expect(result).toEqual({ value: "topic", checked: false, details: "" });
+});
