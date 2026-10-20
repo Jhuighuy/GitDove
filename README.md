@@ -37,6 +37,7 @@ Requires Node.js 24+ and `git`; `ssh` is needed for remote repositories.
 npm install
 npm run dev        # start the app with hot reload
 npm test           # unit tests
+npm run test:coverage # unit tests with LCOV coverage in coverage/lcov.info
 npm run typecheck
 npm run lint
 npm run format
@@ -48,6 +49,14 @@ Run the integration smoke test against real repositories:
 ```bash
 GITDOVE_INT_LOCAL=~/some/repo GITDOVE_INT_SSH=myhost:/path/to/repo npx vitest run int
 ```
+
+CI runs on pull requests and pushes to `main`, including a
+[SonarCloud analysis](https://sonarcloud.io/dashboard?id=Jhuighuy_GitDove) that fails if the quality
+gate fails. The scan imports Vitest coverage from `coverage/lcov.info` and uses the repository's
+`SONAR_TOKEN` Actions secret and the settings in
+`sonar-project.properties`. SonarCloud's Automatic Analysis must be disabled under
+**Administration > Analysis Method** when using this CI analysis. Pull requests from forks run
+the usual checks but skip SonarCloud because GitHub does not expose repository secrets to them.
 
 `scripts/drive.mjs` launches the built app under Playwright for scripted UI checks and
 screenshots. Set `GITDOVE_USER_DATA` to use an isolated profile.
