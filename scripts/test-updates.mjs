@@ -35,7 +35,10 @@ let tampered = false;
 const files = {};
 const server = createServer((request, response) => {
   let body = files[request.url];
-  if (!body) return void response.writeHead(404).end();
+  if (!body) {
+    response.writeHead(404).end();
+    return;
+  }
   if (request.url.endsWith(".zip") && tampered) {
     body = Buffer.from(body);
     body[body.length >> 1] ^= 0xff;
@@ -57,7 +60,7 @@ const version = (app) => {
 /** Copies `source` to `app` as the given version, set up for the local feed and test key. */
 function copyApp(app, bundleVersion) {
   mkdirSync(join(app, ".."), { recursive: true });
-  execFileSync("ditto", [source, app]);
+  execFileSync("/usr/bin/ditto", [source, app]);
   // Sparkle connects to the loopback feed from the helper.
   const local = { NSAppTransportSecurity: { NSAllowsLocalNetworking: true } };
   const helper = join(app, helperPath);
@@ -79,13 +82,13 @@ function copyApp(app, bundleVersion) {
     LSEnvironment: { GITDOVE_USER_DATA: join(work, "user-data") },
   });
   for (const code of [helper, app])
-    execFileSync("codesign", ["--force", "--sign", "-", code], { stdio: "ignore" });
+    execFileSync("/usr/bin/codesign", ["--force", "--sign", "-", code], { stdio: "ignore" });
 }
 
 /** PIDs of GitDove main processes running from `app`. */
 function running(app) {
   const exe = join(app, "Contents/MacOS/GitDove");
-  return execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" })
+  return execFileSync("/bin/ps", ["-axo", "pid=,command="], { encoding: "utf8" })
     .split("\n")
     .map((line) => /^\s*(\d+) (.*)$/.exec(line))
     .filter((m) => m && (m[2] === exe || m[2].startsWith(`${exe} `)))
@@ -94,7 +97,7 @@ function running(app) {
 
 async function until(condition, what, timeout = 120_000) {
   for (const end = Date.now() + timeout; Date.now() < end; await sleep(250)) {
-    if (await condition()) return;
+    if (await condition()) return; // NOSONAR: polling is sequential by design.
   }
   throw new Error(`Timed out waiting until ${what}`);
 }
@@ -133,7 +136,7 @@ async function launch(app) {
 function resetSparkle() {
   for (const domain of [id, `${id}.updater`]) {
     try {
-      execFileSync("defaults", ["delete", domain], { stdio: "ignore" });
+      execFileSync("/usr/bin/defaults", ["delete", domain], { stdio: "ignore" });
     } catch {
       // Nothing stored yet.
     }
@@ -173,6 +176,26 @@ const cases = {
   },
 };
 
+/** Runs a case on a fresh copy of `installed`; returns whether it passed. */
+async function runCase(name, run, installed) {
+  resetSparkle();
+  const app = join(work, name.replaceAll(" ", "-"), "GitDove.app");
+  execFileSync("/usr/bin/ditto", [installed, app]);
+  output = "";
+  try {
+    await run(app);
+    console.log(`ok - ${name}`);
+    return true;
+  } catch (error) {
+    const history = await statuses().catch(() => "unavailable");
+    console.log(`not ok - ${name}\n${error.stack}\nStatuses: ${JSON.stringify(history)}`);
+    console.log(`GitDove output:\n${output.slice(-4000)}`);
+    return false;
+  } finally {
+    for (const pid of running(app)) process.kill(pid, "SIGKILL");
+  }
+}
+
 // Diagnostics for the current case.
 let output = "";
 let statuses = async () => [];
@@ -187,7 +210,7 @@ try {
   const update = join(work, "update/GitDove.app");
   copyApp(update, "1.0.1");
   const zip = join(work, "GitDove-1.0.1.zip");
-  execFileSync("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", update, zip]);
+  execFileSync("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", update, zip]);
   const feed = join(work, "appcast.xml");
   await writeAppcast({ zip, url: `${base}/update.zip`, seed, output: feed, settings });
   files["/appcast.xml"] = readFileSync(feed);
@@ -197,21 +220,8 @@ try {
 
   for (const [name, run] of Object.entries(cases)) {
     if (!name.includes(process.env.CASE ?? "")) continue;
-    resetSparkle();
-    const app = join(work, name.replaceAll(" ", "-"), "GitDove.app");
-    execFileSync("ditto", [installed, app]);
-    output = "";
-    try {
-      await run(app);
-      console.log(`ok - ${name}`);
-    } catch (error) {
-      failed = true;
-      const history = await statuses().catch(() => "unavailable");
-      console.log(`not ok - ${name}\n${error.stack}\nStatuses: ${JSON.stringify(history)}`);
-      console.log(`GitDove output:\n${output.slice(-4000)}`);
-    } finally {
-      for (const pid of running(app)) process.kill(pid, "SIGKILL");
-    }
+    // Cases share the bundle identifier, so they run one at a time.
+    if (!(await runCase(name, run, installed))) failed = true; // NOSONAR
   }
 } finally {
   server.close();

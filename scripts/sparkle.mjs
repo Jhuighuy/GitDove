@@ -1,5 +1,6 @@
 // Sparkle (macOS updates) packaging: fetches the pinned Sparkle release, builds the updater helper
 // from `native/macos/Updater.swift`, and embeds both into a GitDove.app bundle. See docs/updates.md.
+// macOS tools are run by absolute path rather than looked up on PATH.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -25,20 +26,20 @@ export async function fetchSparkle() {
   mkdirSync(dir, { recursive: true });
   const archive = join(dir, "Sparkle.tar.xz");
   writeFileSync(archive, data);
-  execFileSync("tar", ["-xf", archive, "-C", dir]);
+  execFileSync("/usr/bin/tar", ["-xf", archive, "-C", dir]);
   return dir;
 }
 
 export function readPlist(file) {
   return JSON.parse(
-    execFileSync("plutil", ["-convert", "json", "-o", "-", file], { encoding: "utf8" }),
+    execFileSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", file], { encoding: "utf8" }),
   );
 }
 
 export function writePlist(file, data) {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(data));
-  execFileSync("plutil", ["-convert", "xml1", file]);
+  execFileSync("/usr/bin/plutil", ["-convert", "xml1", file]);
 }
 
 /** Info.plist settings for GitDove.app; tests override the feed and key. */
@@ -64,7 +65,7 @@ export async function embedUpdater(app, settings = updateSettings()) {
   const sparkle = await fetchSparkle();
   const frameworks = join(app, "Contents/Frameworks");
   rmSync(join(frameworks, "Sparkle.framework"), { recursive: true, force: true });
-  execFileSync("ditto", [
+  execFileSync("/usr/bin/ditto", [
     join(sparkle, "Sparkle.framework"),
     join(frameworks, "Sparkle.framework"),
   ]);
@@ -73,7 +74,7 @@ export async function embedUpdater(app, settings = updateSettings()) {
   const helper = join(app, helperPath);
   rmSync(helper, { recursive: true, force: true });
   mkdirSync(join(helper, "Contents/MacOS"), { recursive: true });
-  execFileSync("xcrun", [
+  execFileSync("/usr/bin/xcrun", [
     "swiftc",
     "-O",
     "-parse-as-library",

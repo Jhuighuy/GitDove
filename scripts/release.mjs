@@ -50,9 +50,9 @@ export function appcastXml({
 
 /** Info.plist of the GitDove.app inside a ZIP built by electron-builder. */
 export function archivedInfo(zip) {
-  const plist = execFileSync("unzip", ["-p", zip, "GitDove.app/Contents/Info.plist"]);
+  const plist = execFileSync("/usr/bin/unzip", ["-p", zip, "GitDove.app/Contents/Info.plist"]);
   return JSON.parse(
-    execFileSync("plutil", ["-convert", "json", "-o", "-", "-"], {
+    execFileSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", "-"], {
       input: plist,
       encoding: "utf8",
     }),
