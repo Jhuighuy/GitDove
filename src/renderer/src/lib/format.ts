@@ -3,20 +3,26 @@ const LOCALE = "en";
 const rtf = new Intl.RelativeTimeFormat(LOCALE, { numeric: "auto" });
 const dtf = new Intl.DateTimeFormat(LOCALE, { dateStyle: "medium", timeStyle: "short" });
 
-const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
-  ["year", 365 * 24 * 3600],
-  ["month", 30 * 24 * 3600],
-  ["week", 7 * 24 * 3600],
-  ["day", 24 * 3600],
-  ["hour", 3600],
-  ["minute", 60],
+/** Each unit's length, and the count that reads as one of the next larger unit. */
+const UNITS: [Intl.RelativeTimeFormatUnit, number, number][] = [
+  ["year", 365 * 24 * 3600, Infinity],
+  ["month", 30 * 24 * 3600, 12],
+  ["week", 7 * 24 * 3600, Infinity],
+  ["day", 24 * 3600, 7],
+  ["hour", 3600, 24],
+  ["minute", 60, 60],
 ];
 
 /** "3 days ago" style formatting of a unix timestamp (seconds). */
 export const relativeTime = (seconds: number, now = Date.now() / 1000): string => {
   const diff = seconds - now;
-  for (const [unit, size] of UNITS) {
-    if (Math.abs(diff) >= size) return rtf.format(Math.round(diff / size), unit);
+  for (const [i, [unit, size, next]] of UNITS.entries()) {
+    if (Math.abs(diff) < size) continue;
+    const count = Math.round(diff / size);
+    // Rounding up to e.g. 12 months reads as "last year" instead.
+    return Math.abs(count) >= next
+      ? rtf.format(Math.sign(count), UNITS[i - 1]![0])
+      : rtf.format(count, unit);
   }
   return "just now";
 };
