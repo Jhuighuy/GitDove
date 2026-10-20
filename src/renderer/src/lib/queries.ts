@@ -87,7 +87,8 @@ export const useFileVersions = (repo: RepoId, target: DiffTarget) =>
   useQuery({
     queryKey: keys.fileVersions(repo, target),
     queryFn: () => api("repo.fileVersions", repo, target),
-    gcTime: 30 * 1000,
+    // Whole files can be large: drop them as soon as no view shows them.
+    gcTime: 0,
   });
 
 export const GRAPH_PAGE = 256;

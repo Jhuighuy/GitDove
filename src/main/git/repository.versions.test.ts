@@ -133,6 +133,17 @@ describe.skipIf(process.platform === "win32").each(targets)(
       expect(await versions({ kind: "unstaged", path: "real/x.png" })).toEqual(["r", "missing"]);
     });
 
+    it("compares a merge conflict with our side", async () => {
+      await sh(
+        "git reset -q --hard && git clean -qfd && git checkout -qb side && " +
+          "printf side > c.txt && git add c.txt && git commit -qm side && git checkout -q main && " +
+          "printf main > c.txt && git add c.txt && git commit -qm main && (git merge -q side || true)",
+      );
+      const [old, next] = await versions({ kind: "unstaged", path: "c.txt" });
+      expect(old).toBe("main");
+      expect(next).toContain("<<<<<<<");
+    });
+
     it("rejects paths outside the working tree", async () => {
       for (const path of ["../x", "/etc/passwd", "a/../../x", ""]) {
         await expect(run(repo.fileVersions({ kind: "unstaged", path }))).rejects.toThrow(

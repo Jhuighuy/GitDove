@@ -131,7 +131,8 @@ const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARe
  * Prints both sides of a change in one round trip, see `parseFileVersions`.
  * Entries are resolved to a mode and an object id first, so that only regular
  * files are read and the size and the content always describe the same blob,
- * even if the index changes meanwhile. A working tree file is read only if
+ * even if the index changes meanwhile. An unmerged path has no stage 0 in the
+ * index; its old side is then "ours" (stage 2). A working tree file is read only if
  * neither it nor a directory above it is a symlink, so reads stay inside the
  * working tree.
  */
@@ -151,9 +152,14 @@ emit_tree() {
   if [ "$3" = "$oid" ]; then emit_object "$1" "$oid"; else echo missing; fi
 }
 emit_index() {
-  oid=$(git rev-parse -q --verify ":0:$1" 2>/dev/null) || { echo missing; return; }
-  set -- $(git --literal-pathspecs ls-files -s -- "$1")
-  if [ "$2" = "$oid" ]; then emit_object "$1" "$oid"; else echo missing; fi
+  for stage in 0 2; do
+    oid=$(git rev-parse -q --verify ":$stage:$1" 2>/dev/null) && break
+  done
+  [ -n "$oid" ] || { echo missing; return; }
+  mode=$(git --literal-pathspecs ls-files -s -- "$1" | while read -r m o s _; do
+    if [ "$o" = "$oid" ] && [ "$s" = "$stage" ]; then echo "$m"; break; fi
+  done)
+  emit_object "$mode" "$oid"
 }
 emit_file() {
   p=$1
