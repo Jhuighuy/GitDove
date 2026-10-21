@@ -78,7 +78,7 @@ export const RefPills = memo(function RefPills({ refs, color, onDoubleClick }: P
               className="isolate z-50"
             >
               <Popover.Popup
-                className="bg-popover ring-foreground/10 flex max-w-80 min-w-[calc(var(--anchor-width)+4px)] flex-col gap-0.5 rounded-lg p-0.5 shadow-lg ring-1 outline-hidden"
+                className="bg-popover ring-foreground/10 flex max-h-(--available-height) max-w-80 min-w-[calc(var(--anchor-width)+4px)] flex-col gap-0.5 overflow-y-auto overscroll-contain rounded-lg p-0.5 shadow-lg ring-1 outline-hidden *:shrink-0"
                 aria-label="Branches and tags"
               >
                 {pills.map((p) => (

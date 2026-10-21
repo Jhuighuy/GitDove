@@ -122,6 +122,9 @@ it("expands the other pills in place, and checks them out on double click", asyn
   const more = [...container.querySelectorAll("span")].find((s) => s.textContent === "+2")!;
   await act(async () => more.click());
   const popup = document.querySelector<HTMLElement>("[aria-label='Branches and tags']")!;
+  // Many refs scroll inside the window instead of running off it.
+  expect(popup.className).toContain("max-h-(--available-height)");
+  expect(popup.className).toContain("overflow-y-auto");
   const pills = [...popup.querySelectorAll<HTMLElement>("[title]")];
   // All of them, the first one again on top.
   expect(pills.map((p) => p.textContent)).toEqual(["main", "dev", "v1"]);
