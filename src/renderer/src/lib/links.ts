@@ -91,7 +91,29 @@ export type Segment = { readonly text: string; readonly href?: string; readonly 
 const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+/g;
 /** Punctuation that ends a sentence rather than a URL. */
 const TRAILING = new Set(".,;:!?)]}");
-const REF_RE = /(^|[^\w/&#!-])(?:([\w.-]+\/[\w.-]+))?([#!])(\d+)\b/g;
+/** `#12` or `!12`; what comes before and after is checked by `reference`. */
+const REF_RE = /[#!]\d+/g;
+const WORD = /\w/;
+/** Characters of an `owner/repo` qualifier. */
+const QUALIFIER = /[\w./-]/;
+/** Characters that make `#12` part of something else (`a#12`, `&#12;`, `##12`). */
+const JOINED = /[\w/&#!-]/;
+
+/**
+ * The reference at `m` in `s` (`#12`, `owner/repo#12`) with where it starts, or null when the
+ * match is part of a word, an entity or the like.
+ */
+const reference = (s: string, m: RegExpMatchArray) => {
+  const at = m.index!;
+  const end = at + m[0].length;
+  if (end < s.length && WORD.test(s[end]!)) return null;
+  let start = at;
+  while (start > 0 && QUALIFIER.test(s[start - 1]!)) start--;
+  const qualifier = s.slice(start, at);
+  if (qualifier && !/^[\w.-]+\/[\w.-]+$/.test(qualifier)) return null;
+  if (start > 0 && JOINED.test(s[start - 1]!)) return null;
+  return { start, end, path: qualifier || null, sigil: m[0][0]!, n: m[0].slice(1) };
+};
 
 /** Splits a message into plain text and links. */
 export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
@@ -101,16 +123,14 @@ export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
     if (!repo) return void out.push({ text: s });
     let last = 0;
     for (const m of s.matchAll(REF_RE)) {
-      const [, before = "", path, sigil = "#", n = ""] = m;
-      if (sigil === "!" && repo.forge !== "gitlab") continue;
-      const start = m.index + before.length;
-      if (start > last) out.push({ text: s.slice(last, start) });
-      const end = m.index + m[0].length;
+      const ref = reference(s, m);
+      if (!ref || ref.start < last || (ref.sigil === "!" && repo.forge !== "gitlab")) continue;
+      if (ref.start > last) out.push({ text: s.slice(last, ref.start) });
       out.push({
-        text: s.slice(start, end),
-        href: referenceUrl(repo, path ?? repo.path, sigil, n),
+        text: s.slice(ref.start, ref.end),
+        href: referenceUrl(repo, ref.path ?? repo.path, ref.sigil, ref.n),
       });
-      last = end;
+      last = ref.end;
     }
     if (last < s.length) out.push({ text: s.slice(last) });
   };

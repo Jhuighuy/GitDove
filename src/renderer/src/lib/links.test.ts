@@ -57,7 +57,14 @@ it("links issue and pull request references", () => {
     ["other/lib#4", "https://github.com/other/lib/issues/4"],
   ]);
   // Not references: inside words, URLs, entities; `!` outside GitLab.
-  expect(links("a#1 &#38; x/#2 ##3 !4", gh)).toEqual([]);
+  expect(links("a#1 &#38; x/#2 ##3 !4 #5a a/b/c#8", gh)).toEqual([]);
+  expect(links("#1, -#2 x(#3) #6#7", gh)).toEqual([
+    ["#1", `${gh}/issues/1`],
+    ["#3", `${gh}/issues/3`],
+    ["#6", `${gh}/issues/6`],
+  ]);
+  // Long words stay fast.
+  expect(links(`${"a".repeat(50_000)}#1`, gh)).toEqual([]);
   expect(links("Merge !5 for #6", "https://gitlab.com/g/p")).toEqual([
     ["!5", "https://gitlab.com/g/p/-/merge_requests/5"],
     ["#6", "https://gitlab.com/g/p/-/issues/6"],
