@@ -87,6 +87,12 @@ const useColumns = create<ColumnsState>()(
 
 const EMPTY_REFS: readonly Ref[] = [];
 
+/**
+ * Where each repository's graph was, so that it comes back there after a diff replaced it:
+ * the scroll offset, the fitted graph width and the last reveal request it handled.
+ */
+const views = new Map<RepoId, { scroll: number; fit: number; revealed: number }>();
+
 /** The commit last clicked in `selection`, where ranges and arrow keys start. */
 const anchorOf = (selection: Selection | null) =>
   selection?.kind === "commit"
@@ -120,6 +126,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 24,
+    initialOffset: () => views.get(repo)?.scroll ?? 0,
   });
   const items = virtualizer.getVirtualItems();
   const firstIndex = Math.max(0, (items[0]?.index ?? 0) - offset);
@@ -139,7 +146,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     if (row) widestRow = Math.max(widestRow, rowGraphWidth(row));
   }
   const visibleWidth = Math.max(widestRow, graphWidthFor(MIN_AUTO_LANES));
-  const [fitWidth, setFitWidth] = useState(0);
+  const [fitWidth, setFitWidth] = useState(() => views.get(repo)?.fit ?? 0);
   useLayoutEffect(() => {
     if (visibleWidth > fitWidth) setFitWidth(visibleWidth);
   }, [visibleWidth, fitWidth]);
@@ -151,9 +158,22 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     setFitWidth(0);
   };
 
-  // Scroll the selected commit into view when asked to (e.g. from the sidebar).
+  const view = () => {
+    let v = views.get(repo);
+    if (!v) views.set(repo, (v = { scroll: 0, fit: 0, revealed: 0 }));
+    return v;
+  };
+  useEffect(() => {
+    view().fit = fitWidth;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo, fitWidth]);
+
+  // Scroll the selected commit into view when asked to (e.g. from the sidebar), once: coming
+  // back from a diff keeps the place instead.
   useEffect(() => {
     if (!revealToken || selection?.kind !== "commit" || !info) return;
+    if (view().revealed === revealToken) return;
+    view().revealed = revealToken;
     let cancelled = false;
     void api("repo.findCommit", repo, info.version, selection.hash).then(
       (index) => {
@@ -316,6 +336,9 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
               ref={scrollRef}
               tabIndex={0}
               onKeyDown={onKeyDown}
+              onScroll={(e) => {
+                view().scroll = e.currentTarget.scrollTop;
+              }}
               className="relative min-h-0 flex-1 overflow-auto outline-none [contain:strict]"
             />
           }

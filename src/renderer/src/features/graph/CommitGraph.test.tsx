@@ -285,6 +285,29 @@ it("scrolls to a commit revealed elsewhere", async () => {
   expect(mocks.api.filter(([m]) => m === "repo.findCommit")).toEqual([]);
 });
 
+it("comes back where it was after being replaced (e.g. by a diff)", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  mocks.found = 150;
+  await render();
+  // A commit revealed from the sidebar is scrolled to once.
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c150" }, true),
+  );
+  await settle();
+  expect(mocks.api.filter(([m]) => m === "repo.findCommit")).toHaveLength(1);
+  // Then the user scrolls elsewhere.
+  await act(async () => {
+    scroller().scrollTop = 1234;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render(null);
+  expect(scroller().scrollTop).toBe(1234);
+  expect(mocks.api.filter(([m]) => m === "repo.findCommit")).toHaveLength(1);
+});
+
 it("shows loading, empty and error states", async () => {
   mocks.info = { version: 1, count: 0, complete: false, maxLanes: 0 };
   await render("Loading history…");
