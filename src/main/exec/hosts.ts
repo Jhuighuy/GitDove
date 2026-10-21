@@ -159,12 +159,28 @@ const acquireMaster = (host: string) =>
       }),
   ).pipe(Effect.map(({ master }) => master));
 
+/** How many failed lookups each map has dropped per host, to drop each failure only once. */
+const evictions = new WeakMap<object, Map<string, number>>();
+
 /**
  * Gets a cached resource. RcMap keeps a failed lookup like a successful one, so drop it: the
  * next call tries again (e.g. once the VPN is up) instead of failing until the entry expires.
+ * Callers that shared the failed lookup drop it once: a later one must not drop the new
+ * attempt that an earlier one has started meanwhile.
  */
-const getOrRetry = <A, E>(map: RcMap.RcMap<string, A, E>, host: string) =>
-  RcMap.get(map, host).pipe(Effect.tapError(() => RcMap.invalidate(map, host)));
+export const getOrRetry = <A, E>(map: RcMap.RcMap<string, A, E>, host: string) =>
+  Effect.suspend(() => {
+    let counts = evictions.get(map);
+    if (!counts) evictions.set(map, (counts = new Map()));
+    const seen = counts.get(host) ?? 0;
+    return RcMap.get(map, host).pipe(
+      Effect.tapError(() => {
+        if ((counts.get(host) ?? 0) !== seen) return Effect.void;
+        counts.set(host, seen + 1);
+        return RcMap.invalidate(map, host);
+      }),
+    );
+  });
 
 /** Returns the host's master connection, reconnecting if it died. */
 const liveMaster = (masters: RcMap.RcMap<string, SshMaster, SshError>, host: string) =>
@@ -385,15 +401,18 @@ export const HostsLive = Layer.effect(
       connect: (id) =>
         id === LOCAL_HOST
           ? Effect.void
-          : Effect.scoped(getOrRetry(runners, id)).pipe(
-              Effect.asVoid,
-              // Commands will fall back to plain sessions for a while.
-              Effect.catchTag("RunnerUnavailable", (e) =>
-                Effect.sync(() => runnerRetryAt.set(id, Date.now() + RUNNER_RETRY_MS)).pipe(
-                  Effect.andThen(Effect.logWarning(e.message)),
+          : Date.now() < (runnerRetryAt.get(id) ?? 0)
+            ? // The runner is backed off: commands use plain sessions, which need just the master.
+              Effect.scoped(liveMaster(masters, id)).pipe(Effect.asVoid)
+            : Effect.scoped(getOrRetry(runners, id)).pipe(
+                Effect.asVoid,
+                // Commands will fall back to plain sessions for a while.
+                Effect.catchTag("RunnerUnavailable", (e) =>
+                  Effect.sync(() => runnerRetryAt.set(id, Date.now() + RUNNER_RETRY_MS)).pipe(
+                    Effect.andThen(Effect.logWarning(e.message)),
+                  ),
                 ),
               ),
-            ),
     };
   }),
 );

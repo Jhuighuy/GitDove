@@ -13,9 +13,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Exit, ManagedRuntime } from "effect";
+import { Deferred, Effect, Exit, Fiber, ManagedRuntime, RcMap } from "effect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ExecOptions, type Host, Hosts, HostsLive, LOCAL_HOST } from "./hosts";
+import { type ExecOptions, getOrRetry, type Host, Hosts, HostsLive, LOCAL_HOST } from "./hosts";
 import { MAX_RUNNER_STDIN } from "./runner";
 
 const FAKE_SSH = String.raw`#!/bin/sh
@@ -277,6 +277,17 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
       expect(await run((h) => out(h.get("good"), "/bin/sh", ["-c", env]))).toBe("0 0 true\n");
     });
 
+    it("only checks the master on connect while the runner is backed off", async () => {
+      const { run } = hosts();
+      await run((h) => h.connect("norunner"));
+      await run((h) => h.connect("norunner"));
+      // E.g. browsing folders: no new runner attempt (and its timeout) per request.
+      expect(log().filter((l) => l === "runner norunner")).toHaveLength(1);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+      await run((h) => h.connect("norunner"));
+      expect(log().filter((l) => l === "runner norunner")).toHaveLength(2);
+    });
+
     it("connects again after a failed connection", async () => {
       const { runExit } = hosts();
       expect(failure(await runExit((h) => h.connect("later")))).toMatchObject({
@@ -380,5 +391,39 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
       current = null;
       expect(log()).toEqual(["master good", "check good", "runner good", "exit good"]);
     });
+  });
+});
+
+describe("getOrRetry", () => {
+  it("drops a shared failed lookup once, keeping a newer attempt", async () => {
+    let attempts = 0;
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const failNow = yield* Deferred.make<void>();
+          const map = yield* RcMap.make({
+            lookup: (_: string) =>
+              attempts++ === 0
+                ? Deferred.await(failNow).pipe(Effect.andThen(Effect.fail("down")))
+                : Effect.yieldNow.pipe(Effect.as(attempts)),
+            // Like the hosts' maps, keep entries after their last user is done.
+            idleTimeToLive: "1 minute",
+          });
+          // Two callers wait on the same failing lookup; the first retries right away.
+          const first = yield* Effect.forkChild(
+            Effect.scoped(getOrRetry(map, "h")).pipe(Effect.retry({ times: 1 })),
+          );
+          const second = yield* Effect.forkChild(Effect.scoped(getOrRetry(map, "h")));
+          yield* Effect.yieldNow;
+          yield* Deferred.succeed(failNow, undefined);
+          expect(yield* Fiber.join(first)).toBe(2);
+          expect(yield* Effect.flip(Fiber.join(second))).toBe("down");
+          // The retry's entry survived the second caller's failure: no third lookup.
+          expect(yield* Effect.scoped(getOrRetry(map, "h"))).toBe(2);
+        }),
+      ),
+    );
+    expect(Exit.isSuccess(exit) ? "ok" : exit).toBe("ok");
+    expect(attempts).toBe(2);
   });
 });
