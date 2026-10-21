@@ -25,6 +25,8 @@ import { type DiffViewId, fileKind, viewFor } from "./views";
 
 const LINE_HEIGHT = 20;
 const HUNK_HEIGHT = 28;
+/** Rows rendered (and highlighted) beyond each edge of the view. */
+const OVERSCAN = 30;
 
 interface PatchAction {
   readonly label: string;
@@ -337,22 +339,46 @@ function DiffBody({
 }) {
   const rows = mode === "split" ? model.split : model.unified;
   const scrollRef = useRef<HTMLDivElement>(null);
-  // The row a text selection started in stays mounted while it scrolls away: the selection
-  // would collapse if its anchor were removed.
-  const anchorRow = useRef<number | null>(null);
+  // The rows a text selection starts and ends in stay mounted while they scroll away: the
+  // selection would lose an end if its row were removed.
+  const keptRows = useRef<readonly (number | null)[]>([]);
   useEffect(() => {
-    anchorRow.current = null;
+    keptRows.current = [];
   }, [rows]);
+  useEffect(() => {
+    const rowOf = (node: Node | null) => {
+      const el = node instanceof Element ? node : node?.parentElement;
+      const row = el?.closest<HTMLElement>("[data-row]");
+      return row ? Number(row.dataset.row) : null;
+    };
+    const onChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !scrollRef.current?.contains(sel.anchorNode)) {
+        keptRows.current = [];
+        return;
+      }
+      // An end whose row is gone anyway keeps the row it was last in.
+      const [anchor, focus] = keptRows.current;
+      keptRows.current = [
+        rowOf(sel.anchorNode) ?? anchor ?? null,
+        rowOf(sel.focusNode) ?? focus ?? null,
+      ];
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => document.removeEventListener("selectionchange", onChange);
+  }, []);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => (rows[i]!.type === "hunk" ? HUNK_HEIGHT : LINE_HEIGHT),
-    overscan: 30,
+    overscan: OVERSCAN,
     rangeExtractor: (range) => {
       const indexes = defaultRangeExtractor(range);
-      const a = anchorRow.current;
-      if (a === null || a >= range.count || indexes.includes(a)) return indexes;
-      return [...indexes, a].toSorted((x, y) => x - y);
+      const kept = keptRows.current.filter(
+        (r): r is number => r !== null && r < range.count && !indexes.includes(r),
+      );
+      if (kept.length === 0) return indexes;
+      return [...new Set([...indexes, ...kept])].toSorted((x, y) => x - y);
     },
   });
   const items = virtualizer.getVirtualItems();
@@ -361,9 +387,10 @@ function DiffBody({
   const theme: ThemeKind = resolvedTheme === "light" ? "light" : "dark";
   const hl = useHighlighter(model);
 
-  // Highlight what is on screen (plus overscan), lazily.
-  const first = items[0]?.index ?? 0;
-  const last = items.at(-1)?.index ?? -1;
+  // Highlight what is on screen (plus overscan), lazily; rows kept mounted off screen are not.
+  const visible = virtualizer.range;
+  const first = visible ? Math.max(visible.startIndex - OVERSCAN, 0) : 0;
+  const last = visible ? Math.min(visible.endIndex + OVERSCAN, rows.length - 1) : -1;
   useEffect(() => {
     if (!hl) return;
     const lo: [number, number] = [Infinity, Infinity];
@@ -441,8 +468,6 @@ function DiffBody({
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
-    const row = target.closest<HTMLElement>("[data-row]");
-    anchorRow.current = row ? Number(row.dataset.row) : null;
     // A text selection stays within the column it starts in.
     const side = target.closest<HTMLElement>("[data-side]")?.dataset.side;
     if (side) scrollRef.current?.setAttribute("data-select-side", side);

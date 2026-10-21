@@ -395,3 +395,35 @@ it("selects and copies text within one column in split view", async () => {
   // Context lines sit in both columns; the right one has the replacement and no extra deletion.
   expect(await copy([3, 0], [4, 4])).toBe("const a = 2;\ntail");
 });
+
+it("keeps the rows a text selection ends in mounted while scrolling, until it collapses", async () => {
+  const lines = Array.from({ length: 300 }, (_, i) => ctx(i + 1, i + 1, `line ${i}`));
+  const hunk = { header: "@@ -1,300 +1,300 @@", oldStart: 1, oldLines: 300, newStart: 1 };
+  mocks.diffs.set("long.txt", { ...diff("long.txt"), hunks: [{ ...hunk, newLines: 300, lines }] });
+  await render({ kind: "unstaged", path: "long.txt" });
+  const scroller = container.querySelector<HTMLElement>(".overflow-auto.font-mono")!;
+  const mounted = (id: number) => container.querySelector(`[data-line="${id}"]`) !== null;
+  const scrollTo = async (top: number) => {
+    await act(async () => {
+      scroller.scrollTop = top;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await settle();
+  };
+
+  const range = document.createRange();
+  range.setStart(textOf(2), 0);
+  range.setEnd(textOf(5), 1);
+  const sel = window.getSelection()!;
+  sel.removeAllRanges();
+  sel.addRange(range);
+  mocks.ensured = [];
+  await scrollTo(4000);
+  expect([mounted(2), mounted(5), mounted(10)]).toEqual([true, true, false]);
+  // Only the rows on screen are highlighted, not the ones kept for the selection.
+  expect(mocks.ensured.at(-1)![2]).toBeGreaterThan(100);
+
+  sel.removeAllRanges();
+  await scrollTo(4020);
+  expect(mounted(2)).toBe(false);
+});
