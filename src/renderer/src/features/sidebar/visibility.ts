@@ -85,7 +85,7 @@ export const contributorsOf = (owners: BranchOwners): Contributor[] => {
       return {
         person,
         name: [...spellings].toSorted((a, b) => b[1] - a[1])[0]![0],
-        avatarEmail: emails.reduce((a, b) => (time(b) > time(a) ? b : a)).email,
+        avatarEmail: emails.reduce((a, b) => (time(b) > time(a) ? b : a), emails[0]!).email,
         emails,
         branches: byPerson.get(person)!.size,
         isMe:

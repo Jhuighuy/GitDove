@@ -65,9 +65,10 @@ const parseUser = (out: string): BranchOwners["me"] => {
   let name: string | null = null;
   for (const line of out.split("\n")) {
     const m = /^user\.(name|email) (.*)$/i.exec(line);
-    if (!m || !m[2]!.trim()) continue;
-    if (m[1]!.toLowerCase() === "email") email = m[2]!.trim().toLowerCase();
-    else name = m[2]!.trim();
+    const value = m?.[2]?.trim();
+    if (!value) continue;
+    if (m![1]!.toLowerCase() === "email") email = value.toLowerCase();
+    else name = value;
   }
   return { email, name };
 };
