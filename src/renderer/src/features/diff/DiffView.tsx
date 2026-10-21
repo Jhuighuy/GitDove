@@ -2,7 +2,7 @@ import { buildPatch, hunkPatch } from "@shared/diff/patch";
 import { type Range, wordDiff, type WordDiff } from "@shared/diff/words";
 import type { DiffTarget, RepoId } from "@shared/domain";
 import { IconCode, IconLayoutColumns, IconLayoutRows, IconPhoto, IconX } from "@tabler/icons-react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import { useTheme } from "next-themes";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -17,12 +17,18 @@ import { useBusy, writeProps } from "@/stores/busy";
 import { type DiffMode, useLayout, useRepoUiStore } from "@/stores/repo-ui";
 import type { ThemeKind } from "./highlight-protocol";
 import { type DocHighlighter, tokenStyle, useHighlighter } from "./highlight";
+import { copiedText, type TextPoint } from "./copy";
 import { ImageDiff } from "./ImageDiff";
+import { stepTarget, useSiblingFiles } from "./targets";
 import { buildModel, type DiffModel, isChange, type Line } from "./model";
 import { type DiffViewId, fileKind, viewFor } from "./views";
 
 const LINE_HEIGHT = 20;
 const HUNK_HEIGHT = 28;
+/** Rows rendered (and highlighted) beyond each edge of the view. */
+const OVERSCAN = 30;
+/** How far, in pixels, the pointer can move during a click on a line's text. */
+const CLICK_SLOP = 4;
 
 interface PatchAction {
   readonly label: string;
@@ -53,6 +59,11 @@ const EMPTY_SELECTION: ReadonlySet<number> = new Set();
 const isTextEntry = (el: EventTarget | null) =>
   el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && el.type !== "range");
 
+/** Whether a key press belongs to a slider, menu, dialog or popup, which handles arrows itself. */
+const ownsArrows = (el: EventTarget | null) =>
+  el instanceof HTMLInputElement ||
+  (el instanceof Element && el.closest("[role=menu],[role=dialog],[role=listbox]") !== null);
+
 export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget }) {
   const kind = useMemo(() => fileKind(target.path), [target.path]);
   const view = useLayout((s) => viewFor(kind, s.diffViews));
@@ -70,11 +81,31 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
+  // Up and down step through the files of the list this diff was opened from.
+  const siblings = useSiblingFiles(repo, target);
+  const step = (by: number) => {
+    const next = stepTarget(siblings.files, siblings.source, target, by);
+    if (next) useRepoUiStore.getState().openDiff(repo, next);
+  };
+  const stepRef = useRef(step);
+  stepRef.current = step;
+
+  // Every repository tab stays mounted; only the visible one's diff takes keys.
+  const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isTextEntry(e.target)) {
+      if (isTextEntry(e.target) || rootRef.current?.closest("[hidden]")) return;
+      if (e.key === "Escape") {
         if (selectionRef.current.size > 0) setSelection(EMPTY_SELECTION);
         else close();
+      } else if (
+        (e.key === "ArrowDown" || e.key === "ArrowUp") &&
+        !e.defaultPrevented &&
+        !(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) &&
+        !ownsArrows(e.target)
+      ) {
+        e.preventDefault();
+        stepRef.current(e.key === "ArrowDown" ? 1 : -1);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -112,7 +143,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
+    <div ref={rootRef} className="flex h-full min-w-0 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
         <span className="min-w-0 truncate text-[13px]">
           {dirname(target.path) && (
@@ -312,11 +343,47 @@ function DiffBody({
 }) {
   const rows = mode === "split" ? model.split : model.unified;
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The rows a text selection starts and ends in stay mounted while they scroll away: the
+  // selection would lose an end if its row were removed.
+  const keptRows = useRef<readonly (number | null)[]>([]);
+  useEffect(() => {
+    keptRows.current = [];
+  }, [rows]);
+  useEffect(() => {
+    const rowOf = (node: Node | null) => {
+      const el = node instanceof Element ? node : node?.parentElement;
+      const row = el?.closest<HTMLElement>("[data-row]");
+      return row ? Number(row.dataset.row) : null;
+    };
+    const onChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !scrollRef.current?.contains(sel.anchorNode)) {
+        keptRows.current = [];
+        return;
+      }
+      // An end whose row is gone anyway keeps the row it was last in.
+      const [anchor, focus] = keptRows.current;
+      keptRows.current = [
+        rowOf(sel.anchorNode) ?? anchor ?? null,
+        rowOf(sel.focusNode) ?? focus ?? null,
+      ];
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => document.removeEventListener("selectionchange", onChange);
+  }, []);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => (rows[i]!.type === "hunk" ? HUNK_HEIGHT : LINE_HEIGHT),
-    overscan: 30,
+    overscan: OVERSCAN,
+    rangeExtractor: (range) => {
+      const indexes = defaultRangeExtractor(range);
+      const kept = keptRows.current.filter(
+        (r): r is number => r !== null && r < range.count && !indexes.includes(r),
+      );
+      if (kept.length === 0) return indexes;
+      return [...new Set([...indexes, ...kept])].toSorted((x, y) => x - y);
+    },
   });
   const items = virtualizer.getVirtualItems();
 
@@ -324,9 +391,10 @@ function DiffBody({
   const theme: ThemeKind = resolvedTheme === "light" ? "light" : "dark";
   const hl = useHighlighter(model);
 
-  // Highlight what is on screen (plus overscan), lazily.
-  const first = items[0]?.index ?? 0;
-  const last = items.at(-1)?.index ?? -1;
+  // Highlight what is on screen (plus overscan), lazily; rows kept mounted off screen are not.
+  const visible = virtualizer.range;
+  const first = visible ? Math.max(visible.startIndex - OVERSCAN, 0) : 0;
+  const last = visible ? Math.min(visible.endIndex + OVERSCAN, rows.length - 1) : -1;
   useEffect(() => {
     if (!hl) return;
     const lo: [number, number] = [Infinity, Infinity];
@@ -381,14 +449,8 @@ function DiffBody({
     }
     return next;
   };
-  const onMouseDown = (e: React.MouseEvent) => {
-    if (!selectable || e.button !== 0) return;
-    const id = lineAt(e);
-    if (id === null || !isChange(model.lines[id]!)) {
-      if (id !== null) setSelection(EMPTY_SELECTION);
-      return;
-    }
-    e.preventDefault();
+  /** Line selection: a click selects a line, shift extends it, the platform key toggles. */
+  const pressLine = (e: React.MouseEvent, id: number) => {
     const anchor = dragRef.current?.anchor;
     if (e.shiftKey && anchor !== undefined && model.lines[anchor]) {
       setSelection(rangeSelection(anchor, id, EMPTY_SELECTION));
@@ -403,7 +465,42 @@ function DiffBody({
       setSelection(selection.size === 1 && selection.has(id) ? EMPTY_SELECTION : new Set([id]));
       dragRef.current = { anchor: id, base: EMPTY_SELECTION };
     }
+  };
+  // A press on the text starts a text selection; a single click there (a release on the same
+  // line, without dragging), a press with a modifier, or a press on the line numbers selects lines.
+  // The pointer tells a click from a drag: a click inside selected text collapses the selection
+  // only after mouseup.
+  const pending = useRef<{ id: number; x: number; y: number } | null>(null);
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    // A text selection stays within the column it starts in.
+    const side = target.closest<HTMLElement>("[data-side]")?.dataset.side;
+    if (side) scrollRef.current?.setAttribute("data-select-side", side);
+    else scrollRef.current?.removeAttribute("data-select-side");
+
+    pending.current = null;
+    if (!selectable) return;
+    const id = lineAt(e);
+    if (id === null || !isChange(model.lines[id]!)) {
+      if (id !== null) setSelection(EMPTY_SELECTION);
+      return;
+    }
+    const modifier = e.shiftKey || e.metaKey || e.ctrlKey;
+    if (!modifier && !target.closest("[data-gutter]")) {
+      pending.current = { id, x: e.clientX, y: e.clientY };
+      return;
+    }
+    e.preventDefault();
+    pressLine(e, id);
     dragging.current = true;
+  };
+  const onMouseUp = (e: React.MouseEvent) => {
+    const press = pending.current;
+    pending.current = null;
+    if (e.button !== 0 || e.detail !== 1 || !press) return;
+    const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+    if (lineAt(e) === press.id && moved < CLICK_SLOP) pressLine(e, press.id);
   };
   const dragging = useRef(false);
   useEffect(() => {
@@ -418,6 +515,28 @@ function DiffBody({
     if (id === null || id === drag.anchor) return;
     setSelection(rangeSelection(drag.anchor, id, drag.base));
   };
+
+  // Copying takes the selected text from the diff rather than the page: rows scrolled out of
+  // view are not in the page, and line numbers and signs are not part of the text.
+  const copyRef = useRef<(e: ClipboardEvent) => void>(null);
+  copyRef.current = (e) => {
+    const sel = window.getSelection();
+    const scroller = scrollRef.current;
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !scroller) return;
+    const range = sel.getRangeAt(0);
+    if (!scroller.contains(range.commonAncestorContainer)) return;
+    const start = textPoint(range.startContainer, range.startOffset, false);
+    const end = textPoint(range.endContainer, range.endOffset, true);
+    if (!start || !end) return;
+    const side = scroller.dataset.selectSide === "1" ? 1 : 0;
+    e.preventDefault();
+    e.clipboardData?.setData("text/plain", copiedText(model, rows, start, end, side));
+  };
+  useEffect(() => {
+    const onCopy = (e: ClipboardEvent) => copyRef.current?.(e);
+    document.addEventListener("copy", onCopy);
+    return () => document.removeEventListener("copy", onCopy);
+  }, []);
 
   // Split view: both columns scroll horizontally together, driven by the bars below.
   const barRefs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
@@ -442,10 +561,14 @@ function DiffBody({
         ref={scrollRef}
         className={cn(
           "min-h-0 flex-1 font-mono text-[12px] [contain:strict]",
+          // The other column's text is unselectable; these outrank its own `select-text`.
+          "[&[data-select-side='0']_[data-side='1']_[data-text]]:select-none",
+          "[&[data-select-side='1']_[data-side='0']_[data-text]]:select-none",
           mode === "split" ? "overflow-x-hidden overflow-y-auto" : "overflow-auto",
         )}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
         onWheel={onWheel}
       >
         <div
@@ -463,6 +586,7 @@ function DiffBody({
               return (
                 <div
                   key={v.key}
+                  data-row={v.index}
                   style={style}
                   className="bg-muted/40 text-muted-foreground absolute top-0 left-0 flex w-full items-center gap-2 border-y px-3"
                 >
@@ -485,10 +609,15 @@ function DiffBody({
               );
             }
             if (row.type === "line") {
-              return <UnifiedLine key={v.key} style={style} id={row.id} ctx={ctx} />;
+              return <UnifiedLine key={v.key} row={v.index} style={style} id={row.id} ctx={ctx} />;
             }
             return (
-              <div key={v.key} style={style} className="absolute top-0 left-0 flex w-full">
+              <div
+                key={v.key}
+                data-row={v.index}
+                style={style}
+                className="absolute top-0 left-0 flex w-full"
+              >
                 <SplitCell id={row.left} side={0} ctx={ctx} />
                 <div className="bg-border w-px shrink-0" />
                 <SplitCell id={row.right} side={1} ctx={ctx} />
@@ -529,6 +658,24 @@ interface CellContext {
   readonly selectable: boolean;
 }
 
+const GUTTER = "text-muted-foreground/70 shrink-0 pr-2 text-right select-none";
+
+/**
+ * Where a DOM selection boundary falls in the diff's text. A boundary outside a line's text
+ * (on its line numbers, say) counts as that line's start, or its end for the selection's end.
+ */
+const textPoint = (node: Node, offset: number, isEnd: boolean): TextPoint | null => {
+  const el = node instanceof Element ? node : node.parentElement;
+  const row = el?.closest<HTMLElement>("[data-row]");
+  if (!el || !row) return null;
+  const text = el.closest<HTMLElement>("[data-text]");
+  if (!text) return { row: Number(row.dataset.row), offset: isEnd ? Infinity : 0 };
+  const before = document.createRange();
+  before.selectNodeContents(text);
+  before.setEnd(node, offset);
+  return { row: Number(row.dataset.row), offset: before.toString().length };
+};
+
 const lineBg = (l: Line, selected: boolean) =>
   selected
     ? "bg-sky-500/25"
@@ -544,6 +691,7 @@ const emphasisClass = (l: Line) =>
 function Sign({ l, selected, selectable }: { l: Line; selected: boolean; selectable: boolean }) {
   return (
     <span
+      data-gutter
       className={cn(
         "w-4 shrink-0 text-center select-none",
         l.kind === "add" && "text-emerald-500",
@@ -566,10 +714,12 @@ function Text({ l, ctx }: { l: Line; ctx: CellContext }) {
 
 function UnifiedLine({
   id,
+  row,
   style,
   ctx,
 }: {
   id: number;
+  row: number;
   style: React.CSSProperties;
   ctx: CellContext;
 }) {
@@ -579,6 +729,7 @@ function UnifiedLine({
   return (
     <div
       data-line={id}
+      data-row={row}
       style={style}
       className={cn(
         "group/line absolute top-0 left-0 flex w-full items-center leading-5 whitespace-pre",
@@ -586,14 +737,14 @@ function UnifiedLine({
         ctx.selectable && isChange(l) && "cursor-pointer",
       )}
     >
-      <span className="text-muted-foreground/70 shrink-0 pr-2 text-right" style={gutter}>
+      <span data-gutter className={GUTTER} style={gutter}>
         {l.oldNo ?? ""}
       </span>
-      <span className="text-muted-foreground/70 shrink-0 pr-2 text-right" style={gutter}>
+      <span data-gutter className={GUTTER} style={gutter}>
         {l.newNo ?? ""}
       </span>
       <Sign l={l} selected={selected} selectable={ctx.selectable} />
-      <span className="pr-4">
+      <span data-text className="pr-4 select-text">
         <Text l={l} ctx={ctx} />
       </span>
     </div>
@@ -608,21 +759,22 @@ function SplitCell({ id, side, ctx }: { id: number; side: 0 | 1; ctx: CellContex
   return (
     <div
       data-line={id}
+      data-side={side}
       className={cn(
         "group/line flex min-w-0 flex-1 items-center leading-5 whitespace-pre",
         lineBg(l, selected),
         ctx.selectable && isChange(l) && "cursor-pointer",
       )}
     >
-      <span
-        className="text-muted-foreground/70 shrink-0 pr-2 text-right"
-        style={{ width: `${ctx.model.gutter + 2}ch` }}
-      >
+      <span data-gutter className={GUTTER} style={{ width: `${ctx.model.gutter + 2}ch` }}>
         {no ?? ""}
       </span>
       <Sign l={l} selected={selected} selectable={ctx.selectable} />
       <span className="min-w-0 flex-1 overflow-hidden">
-        <span className="block pr-4 [transform:translateX(calc(-1*var(--sx,0px)))]">
+        <span
+          data-text
+          className="block pr-4 select-text [transform:translateX(calc(-1*var(--sx,0px)))]"
+        >
           <Text l={l} ctx={ctx} />
         </span>
       </span>

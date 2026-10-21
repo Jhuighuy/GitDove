@@ -127,10 +127,13 @@ async function render(target: DiffTarget = { kind: "unstaged", path: "src/a.ts" 
 }
 
 const line = (id: number) => container.querySelector<HTMLElement>(`[data-line="${id}"]`)!;
+/** Presses on a line's numbers, which select lines. */
 const mouse = (id: number, type: string, init: MouseEventInit = {}) =>
   act(async () => {
-    line(id).dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, ...init }));
+    const gutter = line(id).querySelector("[data-gutter]")!;
+    gutter.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, ...init }));
   });
+const textOf = (id: number) => line(id).querySelector<HTMLElement>("[data-text]")!;
 const buttonByText = (label: string) => {
   const el = [...container.querySelectorAll("button")].find((b) => b.textContent === label);
   if (!el) throw new Error(`No "${label}" button`);
@@ -327,4 +330,125 @@ it("reports binary, truncated and failed diffs", async () => {
   expect(container.textContent).toContain("Diff truncated — file is too large.");
   await render({ kind: "unstaged", path: "bad.txt" });
   expect(container.querySelector(".text-destructive")?.textContent).toBe("diff failed");
+});
+
+it("selects a line on a click on its text, but not after dragging over text", async () => {
+  await render();
+  const click = (id: number, up: { on?: number; dx?: number; detail?: number } = {}) =>
+    act(async () => {
+      const at = { bubbles: true, button: 0, clientX: 10, clientY: 10, detail: up.detail ?? 1 };
+      textOf(id).dispatchEvent(new MouseEvent("mousedown", at));
+      const release = { ...at, clientX: 10 + (up.dx ?? 0) };
+      textOf(up.on ?? id).dispatchEvent(new MouseEvent("mouseup", release));
+    });
+  await click(1);
+  expect(selectedIds()).toEqual([1]);
+
+  // A click inside selected text selects the line: the text selection collapses only later.
+  vi.spyOn(window, "getSelection").mockReturnValue({ isCollapsed: false } as Selection);
+  await click(3, { dx: 2 });
+  expect(selectedIds()).toEqual([3]);
+
+  // A release on another line, or after a drag, is not a click.
+  await click(2, { on: 1 });
+  await click(2, { dx: 6 });
+  expect(selectedIds()).toEqual([3]);
+
+  // The second press of a double click selects a word and leaves the line alone.
+  await click(3, { detail: 2 });
+  expect(selectedIds()).toEqual([3]);
+});
+
+/** Selects text from `start` in one line's text to `end` in another's, and copies it. */
+const copy = async (from: [number, number], to: [number, number]) => {
+  const point = (id: number, offset: number): [Node, number] => {
+    const walker = document.createTreeWalker(textOf(id), NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node && offset > node.textContent!.length) {
+      offset -= node.textContent!.length;
+      node = walker.nextNode();
+    }
+    return [node!, offset];
+  };
+  const range = document.createRange();
+  range.setStart(...point(...from));
+  range.setEnd(...point(...to));
+  const sel = window.getSelection()!;
+  sel.removeAllRanges();
+  sel.addRange(range);
+  const setData = vi.fn();
+  const event = new Event("copy", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", { value: { setData } });
+  await act(async () => textOf(from[0]).dispatchEvent(event));
+  return setData.mock.calls.at(-1)?.[1] as string | undefined;
+};
+
+it("copies the selected text of the lines, without numbers and signs", async () => {
+  await render();
+  expect(await copy([1, 6], [3, 5])).toBe("a = 1;\nold b\nconst");
+});
+
+/** The elements the scroller's `[&…]:select-none` classes match, as CSS would apply them. */
+const unselectable = (scroller: HTMLElement) =>
+  scroller.className.split(/\s+/).flatMap((c) => {
+    const variant = /^\[&(.+)\]:select-none$/.exec(c)?.[1];
+    if (!variant) return [];
+    return [...scroller.querySelectorAll(`:scope${variant.replaceAll("_", " ")}`)];
+  });
+
+it("selects and copies text within one column in split view", async () => {
+  await render();
+  await act(async () => container.querySelector<HTMLElement>("[aria-label='Split view']")!.click());
+  await settle();
+  const scroller = container.querySelector<HTMLElement>(".overflow-y-auto.font-mono")!;
+  // Pressing on the right column makes the left one unselectable, and copies from the right.
+  await act(async () => {
+    textOf(3).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+  });
+  expect(scroller.dataset.selectSide).toBe("1");
+  expect(unselectable(scroller)).toEqual([
+    ...container.querySelectorAll("[data-side='0'] [data-text]"),
+  ]);
+  // Context lines sit in both columns; the right one has the replacement and no extra deletion.
+  expect(await copy([3, 0], [4, 4])).toBe("const a = 2;\ntail");
+  // And the other way around.
+  await act(async () => {
+    textOf(1).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+  });
+  expect(scroller.dataset.selectSide).toBe("0");
+  expect(unselectable(scroller)).toEqual([
+    ...container.querySelectorAll("[data-side='1'] [data-text]"),
+  ]);
+});
+
+it("keeps the rows a text selection ends in mounted while scrolling, until it collapses", async () => {
+  const lines = Array.from({ length: 300 }, (_, i) => ctx(i + 1, i + 1, `line ${i}`));
+  const hunk = { header: "@@ -1,300 +1,300 @@", oldStart: 1, oldLines: 300, newStart: 1 };
+  mocks.diffs.set("long.txt", { ...diff("long.txt"), hunks: [{ ...hunk, newLines: 300, lines }] });
+  await render({ kind: "unstaged", path: "long.txt" });
+  const scroller = container.querySelector<HTMLElement>(".overflow-auto.font-mono")!;
+  const mounted = (id: number) => container.querySelector(`[data-line="${id}"]`) !== null;
+  const scrollTo = async (top: number) => {
+    await act(async () => {
+      scroller.scrollTop = top;
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+    await settle();
+  };
+
+  const range = document.createRange();
+  range.setStart(textOf(2), 0);
+  range.setEnd(textOf(5), 1);
+  const sel = window.getSelection()!;
+  sel.removeAllRanges();
+  sel.addRange(range);
+  mocks.ensured = [];
+  await scrollTo(4000);
+  expect([mounted(2), mounted(5), mounted(10)]).toEqual([true, true, false]);
+  // Only the rows on screen are highlighted, not the ones kept for the selection.
+  expect(mocks.ensured.at(-1)![2]).toBeGreaterThan(100);
+
+  sel.removeAllRanges();
+  await scrollTo(4020);
+  expect(mounted(2)).toBe(false);
 });

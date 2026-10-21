@@ -1,4 +1,4 @@
-import { type FileChange, type RepoId, renameSource } from "@shared/domain";
+import type { FileChange, RepoId } from "@shared/domain";
 import {
   IconChevronDown,
   IconMinus,
@@ -23,9 +23,8 @@ import { BusyHint } from "@/components/busy";
 import { busyReason, useBusy } from "@/stores/busy";
 import { useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
+import { fileTarget, MAX_LISTED_FILES } from "../diff/targets";
 import { FileList } from "./FileList";
-
-const MAX_FILES = 3000;
 
 interface Draft {
   readonly summary: string;
@@ -61,8 +60,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
   const total = staged.length + unstaged.length + conflicted.length;
   const selected = (kind: "staged" | "unstaged") => (diff?.kind === kind ? diff.path : null);
 
-  const openUnstaged = (f: FileChange) =>
-    openDiff(repo, { kind: "unstaged", path: f.path, untracked: f.kind === "untracked" });
+  const openUnstaged = (f: FileChange) => openDiff(repo, fileTarget({ kind: "unstaged" }, f));
 
   const stage = (paths: string[]) => runAction(repo, "Stage", () => api("repo.stage", repo, paths));
   const unstage = (paths: string[]) =>
@@ -145,7 +143,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
           }
         >
           <FileList
-            files={unstaged.slice(0, MAX_FILES)}
+            files={unstaged.slice(0, MAX_LISTED_FILES)}
             selectedPath={selected("unstaged")}
             onOpen={openUnstaged}
             renderActions={(f) => (
@@ -197,9 +195,9 @@ export function WipPanel({ repo }: { repo: RepoId }) {
           }
         >
           <FileList
-            files={staged.slice(0, MAX_FILES)}
+            files={staged.slice(0, MAX_LISTED_FILES)}
             selectedPath={selected("staged")}
-            onOpen={(f) => openDiff(repo, { kind: "staged", path: f.path, ...renameSource(f) })}
+            onOpen={(f) => openDiff(repo, fileTarget({ kind: "staged" }, f))}
             renderActions={(f) => (
               <RowAction
                 blocked={blocked}
@@ -220,10 +218,10 @@ export function WipPanel({ repo }: { repo: RepoId }) {
 }
 
 function Overflow({ count, truncated }: { count: number; truncated: boolean }) {
-  if (count <= MAX_FILES && !truncated) return null;
+  if (count <= MAX_LISTED_FILES && !truncated) return null;
   return (
     <p className="text-muted-foreground px-3 py-1 text-[11px]">
-      {truncated ? "Too many changes to list them all." : `…and ${count - MAX_FILES} more`}
+      {truncated ? "Too many changes to list them all." : `…and ${count - MAX_LISTED_FILES} more`}
     </p>
   );
 }
