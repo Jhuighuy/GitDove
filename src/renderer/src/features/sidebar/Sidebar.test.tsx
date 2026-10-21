@@ -66,6 +66,7 @@ const base: RefsSnapshot = {
   remotes: [{ name: "origin", fetchUrl: "git@example.com:repo", pushUrl: "" }],
   worktrees: [],
   submodules: [],
+  owners: { byRef: {}, names: {}, me: null },
 };
 let snapshot = base;
 

@@ -44,6 +44,11 @@ const snapshot = {
     { name: "refs/remotes/origin/main", short: "origin/main" },
   ],
   stashes: [{ hash: "s1" }],
+  owners: {
+    byRef: { "refs/heads/main": ["ann@x"], "refs/remotes/origin/main": ["ann@x", "bob@x"] },
+    names: { "ann@x": "Ann" },
+    me: "bob@x",
+  },
 } as unknown as RefsSnapshot;
 
 let root: Root | undefined;
@@ -150,4 +155,33 @@ it("reports a failed save and reloads the saved state", async () => {
   // The optimistic update is rolled back from the main process.
   await act(() => vi.waitFor(() => expect(probe.vis.hidden).toEqual(["refs/heads/main"])));
   expect(mocks.calls.filter((c) => c === "repo.hiddenRefs")).toHaveLength(2);
+});
+
+it("filters branches by contributor, with exceptions", async () => {
+  await render();
+  expect(probe.vis.contributors).toEqual([
+    { email: "bob@x", name: "bob@x", branches: 1, isMe: true },
+    { email: "ann@x", name: "Ann", branches: 2, isMe: false },
+  ]);
+  const step = async (action: () => void, hidden: string[]) => {
+    await act(async () => action());
+    await settle();
+    expect(probe.vis.hidden).toEqual(hidden);
+  };
+  await step(() => probe.vis.toggleAuthor("ann@x"), ["author:ann@x"]);
+  expect(probe.vis.isFiltered("refs/heads/main")).toBe(true);
+  expect(probe.vis.isHidden("refs/heads/main")).toBe(true);
+  // A branch someone else works on too stays visible.
+  expect(probe.vis.isHidden("refs/remotes/origin/main")).toBe(false);
+  expect(probe.vis.anyHidden).toBe(true);
+  // The eye of a filtered branch makes an exception, and then hides it for real.
+  await step(() => probe.vis.toggle("refs/heads/main"), ["author:ann@x", "show:refs/heads/main"]);
+  expect(probe.vis.isHidden("refs/heads/main")).toBe(false);
+  await step(() => probe.vis.toggle("refs/heads/main"), ["author:ann@x", "refs/heads/main"]);
+  expect(probe.vis.isFiltered("refs/heads/main")).toBe(false);
+  await step(() => probe.vis.toggle("refs/heads/main"), ["author:ann@x", "show:refs/heads/main"]);
+  // Showing the contributor again drops the exception.
+  await step(() => probe.vis.toggleAuthor("ann@x"), []);
+  await step(() => probe.vis.soloAuthors(["bob@x"]), ["author:ann@x"]);
+  await step(() => probe.vis.showAllAuthors(), []);
 });

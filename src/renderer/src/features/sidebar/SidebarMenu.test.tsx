@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { Ref, RefsSnapshot } from "@shared/domain";
-import { stashKey } from "@shared/visibility";
+import { authorKey, exceptionKey, stashKey } from "@shared/visibility";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -84,6 +84,11 @@ const base: RefsSnapshot = {
     { path: "libs/a", hash: "a", status: "ok" },
     { path: "libs/b", hash: "b", status: "uninitialized" },
   ],
+  owners: {
+    byRef: { "refs/heads/feature": ["ann@x"], "refs/remotes/origin/feature": ["bob@x"] },
+    names: { "ann@x": "Ann", "bob@x": "Bob" },
+    me: "ann@x",
+  },
 };
 let snapshot = base;
 
@@ -457,4 +462,28 @@ it("filters worktrees, stashes and submodules", async () => {
   expect(document.querySelector('[title="libs/a"]')).toBeNull();
   expect(document.querySelector('[title="/repo"]')).toBeNull();
   expect(document.querySelector('[title="stash@{0}: WIP on main"]')).toBeNull();
+});
+
+it("filters branches by contributor", async () => {
+  await render();
+  expect(row("ann@x").textContent).toContain("you");
+  await menu(row("bob@x"), "Hide Bob's branches");
+  await menu(header("Contributors"), "Show only my branches");
+  await menu(row("ann@x"), "Copy email");
+  expect(mocks.setHidden).toEqual([[authorKey("bob@x")], [authorKey("bob@x")]]);
+  expect(mocks.commands).toEqual([["copy", "ann@x", "Email copied"]]);
+});
+
+it("grays out branches of hidden contributors and shows them on request", async () => {
+  await render(base, [authorKey("bob@x")]);
+  expect(document.body.textContent).toContain("Viewing 5/6");
+  const toggle = row("origin/feature").querySelector<HTMLElement>(
+    '[title="Hidden with its contributors (click to show anyway)"]',
+  )!;
+  await act(async () => toggle.click());
+  await menu(row("bob@x"), "Show all contributors");
+  expect(mocks.setHidden).toEqual([
+    [authorKey("bob@x"), exceptionKey("refs/remotes/origin/feature")],
+    [],
+  ]);
 });

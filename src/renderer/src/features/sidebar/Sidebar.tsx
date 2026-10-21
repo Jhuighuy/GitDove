@@ -1,3 +1,4 @@
+import type { AvatarProvider } from "@shared/avatars";
 import type { Ref, Remote, RepoId, Stash, Submodule, Worktree } from "@shared/domain";
 import { stashKey } from "@shared/visibility";
 import {
@@ -17,10 +18,13 @@ import {
   IconSearch,
   IconSquareCheckFilled,
   IconTag,
+  IconUserOff,
+  IconUsers,
 } from "@tabler/icons-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { useRefs, useRepoInfo } from "@/lib/queries";
@@ -29,9 +33,10 @@ import { commands } from "../commands";
 import { SectionStack } from "./SectionStack";
 import { SidebarMenu, type SidebarTarget } from "./SidebarMenu";
 import { buildTree, type TreeNode } from "./tree";
-import { useVisibility } from "./visibility";
+import { type Contributor, useVisibility } from "./visibility";
 
-type Visibility = "visible" | "hidden" | "partial" | "head" | "none";
+/** `filtered`: hidden by the contributor filter rather than its own eye. */
+type Visibility = "visible" | "hidden" | "filtered" | "partial" | "head" | "none";
 
 interface FolderState {
   /** Collapsed branch folders, keyed by `folderKey` (default: expanded). */
@@ -59,6 +64,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
   const { data } = useRefs(repo);
   const { data: info } = useRepoInfo(repo);
   const vis = useVisibility(repo);
+  const providers = useAvatarProviders(repo);
   const [filter, setFilter] = useState("");
   const [menu, setMenu] = useState<SidebarTarget | null>(null);
   const collapsed = useFolderStore((s) => s.collapsed);
@@ -97,9 +103,18 @@ export function Sidebar({ repo }: { repo: RepoId }) {
   const reveal = (hash: string) => commands.selectCommit(repo, hash);
 
   const refVisibility = (r: Ref): Visibility =>
-    r.isHead ? "head" : vis.isHidden(r.name) ? "hidden" : "visible";
-  const count = (names: readonly string[]) => {
-    const shown = names.filter((n) => !vis.isHidden(n)).length;
+    r.isHead
+      ? "head"
+      : vis.isFiltered(r.name)
+        ? "filtered"
+        : vis.isHidden(r.name)
+          ? "hidden"
+          : "visible";
+  const contributors = vis.contributors;
+  const byEmail = useMemo(() => new Map(contributors.map((c) => [c.email, c])), [contributors]);
+  const ownersOf = (r: Ref) => (vis.owners[r.name] ?? []).flatMap((e) => byEmail.get(e) ?? []);
+  const count = (names: readonly string[], hidden = vis.isHidden) => {
+    const shown = names.filter((n) => !hidden(n)).length;
     return shown === names.length ? (
       <span>{names.length}</span>
     ) : (
@@ -194,6 +209,8 @@ export function Sidebar({ repo }: { repo: RepoId }) {
           label={label}
           title={r.short}
           icon={<IconGitBranch />}
+          owners={ownersOf(r)}
+          providers={providers}
           visibility={refVisibility(r)}
           onToggle={() => vis.toggle(r.name)}
           onClick={() => reveal(r.hash)}
@@ -234,6 +251,8 @@ export function Sidebar({ repo }: { repo: RepoId }) {
                 label={label}
                 title={r.short}
                 icon={<IconGitBranch />}
+                owners={ownersOf(r)}
+                providers={providers}
                 visibility={refVisibility(r)}
                 onToggle={() => vis.toggle(r.name)}
                 onClick={() => reveal(r.hash)}
@@ -244,6 +263,28 @@ export function Sidebar({ repo }: { repo: RepoId }) {
           </div>
         );
       }),
+    },
+    {
+      id: "contributors",
+      title: "Contributors",
+      icon: <IconUsers />,
+      count: count(
+        contributors.map((c) => c.email),
+        vis.isAuthorHidden,
+      ),
+      onHeaderContextMenu: () => setMenu({ kind: "section", section: "contributors" }),
+      children: contributors
+        .filter((c) => match(c.name) || match(c.email))
+        .map((c) => (
+          <ContributorItem
+            key={c.email}
+            contributor={c}
+            providers={providers}
+            visibility={vis.isAuthorHidden(c.email) ? "hidden" : "visible"}
+            onToggle={() => vis.toggleAuthor(c.email)}
+            onContextMenu={() => setMenu({ kind: "contributor", contributor: c })}
+          />
+        )),
     },
     {
       id: "worktrees",
@@ -406,7 +447,7 @@ function Item({
   onDoubleClick,
   onContextMenu,
 }: ItemProps) {
-  const dim = visibility === "hidden";
+  const dim = visibility === "hidden" || visibility === "filtered";
   return (
     <div
       className={cn(
@@ -452,6 +493,22 @@ function VisibilityToggle({
     );
   }
   const off = visibility === "hidden" || visibility === "partial";
+  if (visibility === "filtered") {
+    return (
+      <button
+        type="button"
+        title="Hidden with its contributors (click to show anyway)"
+        className="text-muted-foreground hover:text-foreground flex w-5 shrink-0 justify-center"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle?.();
+        }}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        <IconUserOff />
+      </button>
+    );
+  }
   return (
     <button
       type="button"
@@ -474,20 +531,73 @@ function VisibilityToggle({
 function RefItem({
   refItem: r,
   label,
+  owners = [],
+  providers = [],
   ...rest
-}: Omit<ItemProps, "label" | "active" | "trailing"> & { refItem: Ref; label?: string }) {
+}: Omit<ItemProps, "label" | "active" | "trailing"> & {
+  refItem: Ref;
+  label?: string;
+  /** Who works on the branch, most commits first. */
+  owners?: readonly Contributor[];
+  providers?: readonly AvatarProvider[];
+}) {
   const track = r.upstreamGone
     ? "gone"
     : [r.ahead ? r.ahead + "↑" : "", r.behind ? r.behind + "↓" : ""].join(" ").trim();
+  const owner = owners[0];
   return (
     <Item
       {...rest}
       label={label ?? r.short}
       active={r.isHead}
       trailing={
-        track && (
-          <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">{track}</span>
-        )
+        <>
+          {track && (
+            <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">{track}</span>
+          )}
+          {owner && (
+            <span
+              className={cn("flex shrink-0", rest.visibility === "filtered" && "opacity-50")}
+              title={`By ${owners.map((o) => o.name).join(", ")}`}
+            >
+              <Avatar name={owner.name} email={owner.email} providers={providers} size={14} />
+            </span>
+          )}
+        </>
+      }
+    />
+  );
+}
+
+function ContributorItem({
+  contributor: c,
+  providers,
+  ...rest
+}: Omit<ItemProps, "label" | "icon" | "trailing"> & {
+  contributor: Contributor;
+  providers: readonly AvatarProvider[];
+}) {
+  const dim = rest.visibility === "hidden";
+  return (
+    <Item
+      {...rest}
+      icon={
+        <span className={cn("flex", dim && "grayscale")}>
+          <Avatar name={c.name} email={c.email} providers={providers} size={14} />
+        </span>
+      }
+      label={c.name}
+      title={c.email}
+      trailing={
+        <>
+          {c.isMe && <span className="text-muted-foreground shrink-0 text-[10px]">you</span>}
+          <span
+            className="text-muted-foreground shrink-0 text-[10px] tabular-nums"
+            title={`${c.branches} ${c.branches === 1 ? "branch" : "branches"}`}
+          >
+            {c.branches}
+          </span>
+        </>
       }
     />
   );

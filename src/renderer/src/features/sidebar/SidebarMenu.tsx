@@ -13,7 +13,7 @@ import {
 import { useRefs, useRepoInfo } from "@/lib/queries";
 import { WriteMenuItem } from "@/components/busy";
 import { commands } from "../commands";
-import type { useVisibility } from "./visibility";
+import type { Contributor, useVisibility } from "./visibility";
 
 export type SidebarTarget =
   | { readonly kind: "branch"; readonly ref: Ref }
@@ -33,7 +33,11 @@ export type SidebarTarget =
   | { readonly kind: "stash"; readonly stash: Stash }
   | { readonly kind: "worktree"; readonly worktree: Worktree }
   | { readonly kind: "submodule"; readonly submodule: Submodule }
-  | { readonly kind: "section"; readonly section: "local" | "remote" | "tags" | "worktrees" };
+  | { readonly kind: "contributor"; readonly contributor: Contributor }
+  | {
+      readonly kind: "section";
+      readonly section: "local" | "remote" | "tags" | "worktrees" | "contributors";
+    };
 
 interface Props {
   readonly repo: RepoId;
@@ -127,6 +131,38 @@ function RemoteMenu({
         Remove {r.name}
       </WriteMenuItem>
     </Menu>
+  );
+}
+
+/** Contributor filter entries; `who` is the contributor the menu is for, if any. */
+function ContributorItems({
+  who,
+  vis,
+}: {
+  readonly who?: Contributor;
+  readonly vis: Props["vis"];
+}) {
+  const me = vis.contributors.find((c) => c.isMe);
+  const anyHidden = vis.contributors.some((c) => vis.isAuthorHidden(c.email));
+  return (
+    <>
+      {who && (
+        <>
+          <Item onClick={() => vis.toggleAuthor(who.email)}>
+            {vis.isAuthorHidden(who.email)
+              ? `Show ${who.name}'s branches`
+              : `Hide ${who.name}'s branches`}
+          </Item>
+          <Item onClick={() => vis.soloAuthors([who.email])}>
+            Show only {who.isMe ? "my" : `${who.name}'s`} branches
+          </Item>
+        </>
+      )}
+      {me && me !== who && (
+        <Item onClick={() => vis.soloAuthors([me.email])}>Show only my branches</Item>
+      )}
+      {anyHidden && <Item onClick={vis.showAllAuthors}>Show all contributors</Item>}
+    </>
   );
 }
 
@@ -389,6 +425,17 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       );
     }
 
+    case "contributor": {
+      const c = target.contributor;
+      return (
+        <Menu>
+          <ContributorItems who={c} vis={vis} />
+          <Sep />
+          <Item onClick={() => commands.copy(c.email, "Email copied")}>Copy email</Item>
+        </Menu>
+      );
+    }
+
     case "section": {
       const names = (prefix: string) =>
         (refs?.refs ?? [])
@@ -483,6 +530,13 @@ export function SidebarMenu({ repo, target, vis }: Props) {
               </WriteMenuItem>
               <Sep />
               {groupItems("refs/tags/")}
+            </Menu>
+          );
+        case "contributors":
+          return (
+            <Menu>
+              <ContributorItems vis={vis} />
+              {vis.contributors.length === 0 && <Item disabled>No contributors</Item>}
             </Menu>
           );
         case "worktrees":

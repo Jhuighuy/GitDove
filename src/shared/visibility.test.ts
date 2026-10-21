@@ -60,9 +60,9 @@ describe("visibility", () => {
     expect(isFilteredOut(hidden, "refs/heads/a", ["ann@x", "bob@x"])).toBe(true);
     expect(isFilteredOut(hidden, "refs/heads/a", ["ann@x", "cid@x"])).toBe(false);
     expect(isFilteredOut(hidden, "refs/heads/main", undefined)).toBe(false);
-    expect(isFilteredOut([...hidden, exceptionKey("refs/heads/a")], "refs/heads/a", ["ann@x"])).toBe(
-      false,
-    );
+    expect(
+      isFilteredOut([...hidden, exceptionKey("refs/heads/a")], "refs/heads/a", ["ann@x"]),
+    ).toBe(false);
   });
 
   it("sets hidden contributors and drops stale exceptions", () => {

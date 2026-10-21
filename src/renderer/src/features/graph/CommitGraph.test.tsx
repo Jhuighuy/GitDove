@@ -102,6 +102,7 @@ const snapshot: RefsSnapshot = {
   remotes: [],
   worktrees: [],
   submodules: [],
+  owners: { byRef: {}, names: {}, me: null },
 };
 
 let root: Root;
