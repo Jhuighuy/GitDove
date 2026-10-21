@@ -179,7 +179,7 @@ it("lists commits with their refs, author, date and short hash", async () => {
   expect(rowOf("Commit 3").querySelector(".italic")?.textContent).toBe("Commit 3");
   expect(rowOf("Commit 2").textContent).toContain("feature");
   expect(container.textContent).not.toContain("WIP");
-  expect(mocks.api).toContainEqual(["repo.graphRows", 1, 0, 256]);
+  expect(mocks.api).toContainEqual(["repo.graphRows", 1, 0, 5]);
 });
 
 it("shows a WIP row above HEAD when there are changes", async () => {
