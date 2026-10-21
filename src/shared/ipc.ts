@@ -71,6 +71,8 @@ export interface Api {
   "repo.unstage": (repo: RepoId, paths: string[]) => void;
   "repo.unstageAll": (repo: RepoId) => void;
   "repo.discard": (repo: RepoId, paths: string[], untracked: string[]) => void;
+  /** Discards every staged and unstaged change and deletes untracked (not ignored) files. */
+  "repo.discardAll": (repo: RepoId) => void;
   "repo.applyPatch": (
     repo: RepoId,
     patch: string,

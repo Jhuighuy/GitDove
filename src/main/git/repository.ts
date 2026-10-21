@@ -926,6 +926,18 @@ export class Repository {
     );
   }
 
+  discardAll() {
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        // Without commits, everything is new: unstage it so that `clean` deletes it.
+        yield* (yield* this.hasHead())
+          ? this.run(["reset", "--hard", "-q"])
+          : this.run(["rm", "--cached", "-r", "-q", "--ignore-unmatch", "."]);
+        yield* this.run(["clean", "-f", "-d", "-q"]);
+      }),
+    );
+  }
+
   applyPatch(patch: string, opts: { cached: boolean; reverse: boolean }) {
     return this.write(
       this.run(

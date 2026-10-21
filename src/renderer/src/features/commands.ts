@@ -316,6 +316,22 @@ export const commands = {
     }
   },
 
+  discardAll: async (repo: RepoId) => {
+    if (refuseWhileBusy(repo, "Discard all")) return;
+    const ok = await confirm({
+      title: "Discard all changes?",
+      description:
+        "Staged and unstaged changes are discarded and untracked files are deleted. This cannot be undone.",
+      confirmLabel: "Discard All",
+      destructive: true,
+    });
+    if (ok) {
+      await runAction(repo, "Discard all", () => api("repo.discardAll", repo), {
+        status: "Discarding all changes…",
+      });
+    }
+  },
+
   pushBranch: (repo: RepoId, ref: Ref) =>
     ref.isHead
       ? commands.push(repo)

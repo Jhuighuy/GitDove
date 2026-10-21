@@ -81,6 +81,15 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             yield* repo.stashPop(0);
             expect((yield* repo.status()).unstaged.map((f) => f.path)).toEqual(["f.txt"]);
             yield* repo.discard(["f.txt"], []);
+
+            // Discard all: staged, unstaged and untracked changes.
+            yield* host.sh(
+              "echo y >> f.txt && echo n > new.txt && git add new.txt && mkdir -p u && echo u > u/u.txt",
+              { cwd: dir },
+            );
+            yield* repo.discardAll();
+            const clean = yield* repo.status();
+            expect([...clean.staged, ...clean.unstaged, ...clean.conflicted]).toEqual([]);
             yield* repo.checkout("main");
             yield* repo.reset("HEAD~1", "hard");
             expect((yield* repo.info()).head.hash).toBe(

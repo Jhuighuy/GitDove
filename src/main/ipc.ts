@@ -181,6 +181,7 @@ export const handlers: Handlers = {
   "repo.unstage": (id, paths) => withRepo(id, (r) => r.unstage(paths)),
   "repo.unstageAll": (id) => withRepo(id, (r) => r.unstageAll()),
   "repo.discard": (id, paths, untracked) => withRepo(id, (r) => r.discard(paths, untracked)),
+  "repo.discardAll": (id) => withRepo(id, (r) => r.discardAll()),
   "repo.applyPatch": (id, patch, opts) => withRepo(id, (r) => r.applyPatch(patch, opts)),
   "repo.commit": (id, message, opts) => withRepo(id, (r) => r.commit(message, opts)),
   "repo.lastCommitMessage": (id) => withRepo(id, (r) => r.lastCommitMessage()),
