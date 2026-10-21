@@ -37,6 +37,8 @@ export const keys = {
   graphPage: (repo: RepoId, version: number, page: number, size: number) =>
     [...keys.graphPages(repo, version, page), size] as const,
   commit: (repo: RepoId, hash: string) => ["repo", repo, "commit", hash] as const,
+  compare: (repo: RepoId, base: string | null, tip: string) =>
+    ["repo", repo, "compare", base, tip] as const,
   diff: (repo: RepoId, target: DiffTarget) => ["repo", repo, "diff", target] as const,
   // Under "diff" so that it goes stale together with diffs.
   fileVersions: (repo: RepoId, target: DiffTarget) =>
@@ -77,6 +79,16 @@ export const useCommitDetails = (repo: RepoId, hash: string | null) =>
     gcTime: 60 * 1000,
   });
 
+/** The changes from `base` (the empty tree when null) to `tip`; null `tip` fetches nothing. */
+export const useCompare = (repo: RepoId, base: string | null, tip: string | null) =>
+  useQuery({
+    queryKey: keys.compare(repo, base, tip ?? ""),
+    queryFn: () => api("repo.compare", repo, base, tip!),
+    enabled: tip !== null,
+    // Commits are immutable.
+    gcTime: 60 * 1000,
+  });
+
 export const useDiff = (repo: RepoId, target: DiffTarget | null) =>
   useQuery({
     queryKey: target ? keys.diff(repo, target) : ["none"],
@@ -99,7 +111,8 @@ export const GRAPH_PAGE = 256;
 /**
  * Returns the graph rows in `[start, end)`, fetching pages on demand. While the graph streams
  * in, a page that gains rows is fetched again. While a page loads, the rows it had before (or
- * rows from the previous graph version) are kept on screen.
+ * rows from the previous graph version) are kept on screen: `rows` has them too, `current`
+ * only the rows of loaded pages, at their indexes in graph `info.version`.
  */
 export const useGraphRows = (
   repo: RepoId,
@@ -133,11 +146,15 @@ export const useGraphRows = (
 
   return useMemo(() => {
     const rows = new Map<number, GraphRow>();
+    const current = new Map<number, GraphRow>();
     results.forEach((r, i) => {
       const base = pages[i]!.page * GRAPH_PAGE;
-      r.data?.forEach((row, j) => rows.set(base + j, row));
+      r.data?.forEach((row, j) => {
+        rows.set(base + j, row);
+        if (!r.isPlaceholderData) current.set(base + j, row);
+      });
     });
-    return rows;
+    return { rows, current };
   }, [results, pages]);
 };
 

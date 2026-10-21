@@ -7,7 +7,7 @@ import type { AvatarProvider } from "@shared/avatars";
 import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Spinner } from "@/components/ui/spinner";
-import { api } from "@/lib/api";
+import { api, isMac } from "@/lib/api";
 import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
 import {
   useGraphInfo,
@@ -19,7 +19,13 @@ import {
 } from "@/lib/queries";
 import { laneColor } from "@/lib/graph-colors";
 import { cn } from "@/lib/utils";
-import { type Selection, useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
+import {
+  type PickedCommit,
+  type Selection,
+  selectedHashes,
+  useRepoUi,
+  useRepoUiStore,
+} from "@/stores/repo-ui";
 import { commands } from "../commands";
 import { CommitContextMenu, type MenuTarget } from "./CommitContextMenu";
 import {
@@ -31,6 +37,7 @@ import {
   WipGraphCell,
 } from "./GraphCell";
 import { RefPills } from "./RefPills";
+import { rangeIndexes, selectionOf, toggled } from "./selection";
 
 interface ColumnsState {
   readonly refs: number;
@@ -70,6 +77,14 @@ const useColumns = create<ColumnsState>()(
 
 const EMPTY_REFS: readonly Ref[] = [];
 
+/** The commit last clicked in `selection`, where ranges and arrow keys start. */
+const anchorOf = (selection: Selection | null) =>
+  selection?.kind === "commit"
+    ? selection.hash
+    : selection?.kind === "commits"
+      ? selection.anchor
+      : null;
+
 export function CommitGraph({ repo }: { repo: RepoId }) {
   const { data: info, isPending, error } = useGraphInfo(repo);
   const { data: status } = useStatus(repo);
@@ -99,7 +114,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   const items = virtualizer.getVirtualItems();
   const firstIndex = Math.max(0, (items[0]?.index ?? 0) - offset);
   const lastIndex = Math.max(0, (items.at(-1)?.index ?? 0) - offset + 1);
-  const rows = useGraphRows(repo, info, firstIndex, lastIndex);
+  const { rows, current } = useGraphRows(repo, info, firstIndex, lastIndex);
   const headRow = rows.get(0);
 
   // Fit the lanes on screen. The width only grows while scrolling, so the columns don't jump
@@ -143,12 +158,107 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealToken]);
 
+  const hashes = useMemo(() => selectedHashes(selection), [selection]);
+  // Arrows move on from the commit last clicked.
+  const anchor = anchorOf(selection);
   const selectedIndex = useMemo(() => {
     if (selection?.kind === "wip") return 0;
-    if (selection?.kind !== "commit") return -1;
-    for (const [i, r] of rows) if (r.hash === selection.hash) return i + offset;
+    if (anchor === null) return -1;
+    for (const [i, r] of rows) if (r.hash === anchor) return i + offset;
     return -1;
-  }, [selection, rows, offset]);
+  }, [selection, anchor, rows, offset]);
+
+  // The platform key adds or removes a commit, Shift selects a range from the last clicked.
+  // Rows may have to be fetched first, so these presses run one after another, each from the
+  // selection the one before left; a selection made any other way drops those still pending.
+  const presses = useRef({ tail: Promise.resolve(), epoch: 0, owned: null as Selection | null });
+  const press = (row: GraphRow, index: number, e: React.MouseEvent) => {
+    const toggle = isMac ? e.metaKey : e.ctrlKey;
+    if (!toggle && !e.shiftKey) return select(repo, { kind: "commit", hash: row.hash });
+    const selected = () => useRepoUiStore.getState().byRepo[repo]?.selection ?? null;
+    const q = presses.current;
+    if (selected() !== q.owned) {
+      q.epoch++;
+      q.owned = selected();
+    }
+    const epoch = q.epoch;
+    const live = () => q.epoch === epoch && selected() === q.owned;
+    q.tail = q.tail.then(async () => {
+      if (!live()) return;
+      const next = await extendRef.current(selected(), row, index, toggle);
+      if (!live()) return;
+      select(repo, next);
+      q.owned = selected();
+    });
+  };
+  /** The selection `base` becomes with the commit at `index` toggled, or the range up to it. */
+  const extend = async (
+    base: Selection | null,
+    row: GraphRow,
+    index: number,
+    toggle: boolean,
+  ): Promise<Selection> => {
+    const single = { kind: "commit", hash: row.hash } as const;
+    const start = anchorOf(base);
+    if (!info || start === null) return single;
+    // Only rows loaded for this graph version are where they show: rows of a previous version
+    // shown while the graph reloads, or commits far off screen, are asked for.
+    const fetchRows = async (from: number, to: number) => {
+      const out = new Map<number, GraphRow>();
+      let missing = false;
+      for (let i = from; i <= to; i++) {
+        const r = current.get(i);
+        if (r) out.set(i, r);
+        else missing = true;
+      }
+      if (missing) {
+        const fetched = await api("repo.graphRows", repo, info.version, from, to + 1);
+        fetched.forEach((r, j) => out.set(from + j, r));
+      }
+      return out;
+    };
+    const loadedAt = new Map([...current].map(([i, r]) => [r.hash, i]));
+    const indexOf = async (hash: string) =>
+      loadedAt.get(hash) ?? api("repo.findCommit", repo, info.version, hash);
+    // After a reload, commits picked before may have moved, or gone.
+    const reindexed = async (picked: readonly PickedCommit[]) => {
+      const moved = await Promise.all(
+        picked.map(async (p) => ({ ...p, index: await indexOf(p.row.hash) })),
+      );
+      return moved.filter((p) => p.index >= 0);
+    };
+    try {
+      const at = current.get(index)?.hash === row.hash ? index : await indexOf(row.hash);
+      if (at < 0) return single;
+      if (toggle) {
+        let picked: readonly PickedCommit[] = [];
+        if (base?.kind === "commits")
+          picked = base.version === info.version ? base.commits : await reindexed(base.commits);
+        else if (base?.kind === "commit") {
+          const i = await indexOf(base.hash);
+          const r = i >= 0 ? (await fetchRows(i, i)).get(i) : undefined;
+          if (r) picked = [{ index: i, row: r }];
+        }
+        return selectionOf(toggled(picked, { index: at, row }), row.hash, info.version) ?? single;
+      }
+      const a = await indexOf(start);
+      if (a < 0) return single;
+      const [from, to] = rangeIndexes(a, at);
+      const range = [...(await fetchRows(from, to))].map(([i, r]) => ({ index: i, row: r }));
+      return selectionOf(range, start, info.version) ?? single;
+    } catch {
+      return single;
+    }
+  };
+  // Queued presses use the rows and graph version of the latest render.
+  const extendRef = useRef(extend);
+  extendRef.current = extend;
+  const pressRef = useRef(press);
+  pressRef.current = press;
+  const onPress = useCallback(
+    (row: GraphRow, index: number, e: React.MouseEvent) => pressRef.current(row, index, e),
+    [],
+  );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -234,8 +344,9 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
                   isHead={row.hash === headHash}
                   isStash={stashes.has(row.hash)}
                   wipAbove={offset > 0 && index === 0 && row.hash === headHash}
-                  selected={selection?.kind === "commit" && selection.hash === row.hash}
-                  onSelect={select}
+                  index={index}
+                  selected={hashes.has(row.hash)}
+                  onPress={onPress}
                   onContextMenu={onRowContextMenu}
                   avatarProviders={avatarProviders}
                 />
@@ -362,8 +473,9 @@ interface CommitRowProps {
   readonly isHead: boolean;
   readonly isStash: boolean;
   readonly wipAbove: boolean;
+  readonly index: number;
   readonly selected: boolean;
-  readonly onSelect: (repo: RepoId, selection: Selection) => void;
+  readonly onPress: (row: GraphRow, index: number, e: React.MouseEvent) => void;
   readonly onContextMenu: (row: GraphRow) => void;
   readonly avatarProviders: readonly AvatarProvider[];
 }
@@ -378,7 +490,7 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
       className={rowClass(p.selected)}
       style={p.style}
       onMouseDown={(e) => {
-        if (e.button === 0) p.onSelect(p.repo, { kind: "commit", hash: row.hash });
+        if (e.button === 0) p.onPress(row, p.index, e);
       }}
       onContextMenu={() => p.onContextMenu(row)}
     >

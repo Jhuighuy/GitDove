@@ -152,7 +152,11 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
           <span className="font-medium">{basename(target.path)}</span>
         </span>
         <span className="text-muted-foreground bg-muted shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase">
-          {target.kind === "commit" ? shortHash(target.hash) : target.kind}
+          {target.kind !== "commit"
+            ? target.kind
+            : target.base === undefined
+              ? shortHash(target.hash)
+              : `${shortHash(target.base)}..${shortHash(target.hash)}`}
         </span>
         {textual && (isPending || isPlaceholderData) && <Spinner className="size-3.5" />}
         <span className="ml-auto flex shrink-0 items-center gap-1">

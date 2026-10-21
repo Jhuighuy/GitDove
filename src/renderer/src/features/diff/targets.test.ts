@@ -22,6 +22,12 @@ it("builds the diff of a file in its list", () => {
     path: "b",
     oldPath: "a",
   });
+  expect(fileTarget({ kind: "commit", hash: "h", base: "b" }, file("f"))).toEqual({
+    kind: "commit",
+    hash: "h",
+    base: "b",
+    path: "f",
+  });
   expect(fileTarget({ kind: "staged" }, renamed)).toEqual({
     kind: "staged",
     path: "b",

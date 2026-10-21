@@ -214,6 +214,14 @@ export interface CommitDetails {
   readonly files: readonly FileChange[];
 }
 
+/** The changes between two commits, e.g. over a selection of commits. */
+export interface Comparison {
+  /** The revision compared with: the given base, or the empty tree when there is none. */
+  readonly base: string;
+  readonly tip: string;
+  readonly files: readonly FileChange[];
+}
+
 // ---------------------------------------------------------------------------
 // Diffs
 // ---------------------------------------------------------------------------
@@ -225,6 +233,8 @@ export type DiffTarget =
   | {
       readonly kind: "commit";
       readonly hash: string;
+      /** Compare with this revision instead of the commit's first parent (see `Comparison`). */
+      readonly base?: string;
       readonly path: string;
       readonly oldPath?: string;
     };

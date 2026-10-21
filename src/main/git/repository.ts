@@ -1,5 +1,7 @@
 import type {
   CommitDetails,
+  Comparison,
+  FileChange,
   DiffTarget,
   FileDiff,
   FileVersions,
@@ -199,7 +201,7 @@ const versionSources = (target: DiffTarget): [VersionSource, VersionSource] => {
     case "commit":
       // The first parent, like `diff`; a root commit has none and reads as missing.
       return [
-        { kind: "tree", rev: `${target.hash}^`, path: target.oldPath ?? path },
+        { kind: "tree", rev: target.base ?? `${target.hash}^`, path: target.oldPath ?? path },
         { kind: "tree", rev: target.hash, path },
       ];
   }
@@ -422,29 +424,7 @@ export class Repository {
       const [h, parents, an, ae, at, cn, ce, ct, ...body] = raw.split("\0");
       const parentList = parents ? parents.split(" ") : [];
       const base = parentList[0];
-      const range = base ? [base, h!] : ["--root", h!];
-      const [nameStatus, numstat] = yield* Effect.all(
-        [
-          this.gitText([
-            "diff-tree",
-            "-r",
-            "-z",
-            "-M",
-            "--no-commit-id",
-            "--name-status",
-            ...range,
-          ]),
-          this.gitText(["diff-tree", "-r", "-z", "-M", "--no-commit-id", "--numstat", ...range]),
-        ],
-        { concurrency: 2 },
-      );
-      const stats = parseNumstat(numstat);
-      const files = parseNameStatus(nameStatus).map((f) => {
-        const s = stats.get(f.path);
-        return s
-          ? { ...f, additions: s.additions, deletions: s.deletions, binary: s.additions === null }
-          : f;
-      });
+      const files = yield* this.changedFiles(base ? [base, h!] : ["--root", h!]);
       const message = trimTrailingNewlines(body.join("\0"));
       const nl = message.indexOf("\n");
       return {
@@ -457,6 +437,36 @@ export class Repository {
         files,
       };
     });
+  }
+
+  compare(
+    base: string | null,
+    tip: string,
+  ): Effect.Effect<Comparison, GitError | InvalidInputError> {
+    return Effect.gen({ self: this }, function* () {
+      yield* validateRev(tip);
+      if (base !== null) yield* validateRev(base);
+      // The oldest of a selection may be a root commit: compare with nothing then.
+      const from = base ?? (yield* this.gitText(["hash-object", "-t", "tree", "/dev/null"])).trim();
+      return { base: from, tip, files: yield* this.changedFiles([from, tip]) };
+    });
+  }
+
+  /** Files changed between two trees (`diff-tree` arguments), with their line counts. */
+  private changedFiles(range: readonly string[]): Effect.Effect<FileChange[], GitError> {
+    const tree = (format: string) =>
+      this.gitText(["diff-tree", "-r", "-z", "-M", "--no-commit-id", format, ...range]);
+    return Effect.all([tree("--name-status"), tree("--numstat")], { concurrency: 2 }).pipe(
+      Effect.map(([nameStatus, numstat]) => {
+        const stats = parseNumstat(numstat);
+        return parseNameStatus(nameStatus).map((f) => {
+          const s = stats.get(f.path);
+          return s
+            ? { ...f, additions: s.additions, deletions: s.deletions, binary: s.additions === null }
+            : f;
+        });
+      }),
+    );
   }
 
   diff(target: DiffTarget): Effect.Effect<FileDiff, GitError | InvalidInputError> {
@@ -480,6 +490,11 @@ export class Repository {
         case "commit": {
           yield* validateRev(target.hash);
           yield* validateOptionalPath(target.oldPath);
+          if (target.base !== undefined) {
+            yield* validateRev(target.base);
+            args = ["diff", ...common, target.base, target.hash, "--", ...diffPaths(target)];
+            break;
+          }
           const parents = (yield* this.gitText(["rev-list", "--parents", "-n1", target.hash]))
             .trim()
             .split(" ")
@@ -508,6 +523,9 @@ export class Repository {
       validatePath(target.path),
       target.kind === "unstaged" ? Effect.void : validateOptionalPath(target.oldPath),
       target.kind === "commit" ? validateRev(target.hash) : Effect.void,
+      target.kind === "commit" && target.base !== undefined
+        ? validateRev(target.base)
+        : Effect.void,
     ]).pipe(
       Effect.andThen(
         this.host.sh(script, {

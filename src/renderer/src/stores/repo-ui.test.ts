@@ -2,7 +2,8 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, expect, it } from "vitest";
-import { useLayout, useRepoUi, useRepoUiStore } from "./repo-ui";
+import type { GraphRow } from "@shared/domain";
+import { type Selection, selectedHashes, useLayout, useRepoUi, useRepoUiStore } from "./repo-ui";
 
 const A = "local:/a";
 const B = "local:/b";
@@ -81,4 +82,24 @@ it("toggles and persists the layout", () => {
     sidebar: true,
     diffMode: "split",
   });
+});
+
+it("keeps the diff of several commits while the same ones stay selected", () => {
+  const commits = (...hashes: string[]): Selection => ({
+    kind: "commits",
+    commits: hashes.map((hash, index) => ({ index, row: { hash } as GraphRow })),
+    anchor: hashes[0]!,
+    version: 1,
+  });
+  const diff = { kind: "commit", hash: "a", base: "c", path: "f" } as const;
+  const { select, openDiff } = useRepoUiStore.getState();
+  select(A, commits("a", "b"));
+  openDiff(A, diff);
+  select(A, commits("a", "b"));
+  expect(ui(A)?.diff).toEqual(diff);
+  select(A, commits("a", "c"));
+  expect(ui(A)?.diff).toBeNull();
+  expect([...selectedHashes(ui(A)!.selection)]).toEqual(["a", "c"]);
+  expect([...selectedHashes({ kind: "commit", hash: "x" })]).toEqual(["x"]);
+  expect(selectedHashes({ kind: "wip" }).size).toBe(0);
 });

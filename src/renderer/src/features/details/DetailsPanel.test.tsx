@@ -8,6 +8,10 @@ import { DetailsPanel } from "./DetailsPanel";
 vi.mock("./CommitPanel", () => ({
   CommitPanel: ({ repo, hash }: { repo: string; hash: string }) => `commit ${repo} ${hash}`,
 }));
+vi.mock("./CommitsPanel", () => ({
+  CommitsPanel: ({ commits }: { commits: { row: { hash: string } }[] }) =>
+    `commits ${commits.map((c) => c.row.hash).join(" ")}`,
+}));
 vi.mock("./WipPanel", () => ({ WipPanel: ({ repo }: { repo: string }) => `wip ${repo}` }));
 
 it("shows the selected commit, or the working tree otherwise", async () => {
