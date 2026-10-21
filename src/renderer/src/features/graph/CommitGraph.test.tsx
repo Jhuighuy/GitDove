@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   status: null as unknown,
   refs: null as unknown,
   found: 0,
+  /** Holds `repo.findCommit` answers back until it settles. */
+  gate: null as Promise<void> | null,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -40,6 +42,7 @@ vi.mock("@/lib/api", () => ({
       case "repo.hiddenRefs":
         return [];
       case "repo.findCommit":
+        await mocks.gate;
         return mocks.found;
     }
     throw new Error(`unexpected ${method}`);
@@ -111,6 +114,7 @@ beforeEach(() => {
   mocks.status = clean;
   mocks.refs = snapshot;
   mocks.found = 0;
+  mocks.gate = null;
   repo = `local:/graph${++n}`;
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
@@ -444,4 +448,21 @@ it("selects several commits with the platform key and Shift", async () => {
   await click("Commit 4", { metaKey: true });
   await click("Commit 0");
   expect(selection()).toEqual({ kind: "commit", hash: "c0" });
+});
+
+it("drops a multi-selection that comes back after the selection moved on", async () => {
+  await render();
+  const click = (text: string, init: MouseEventInit = {}) =>
+    act(async () => {
+      rowOf(text).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, ...init }));
+    });
+  // A commit that is not loaded has to be looked up first.
+  let release = () => {};
+  mocks.gate = new Promise((r) => (release = r));
+  act(() => useRepoUiStore.getState().select(repo, { kind: "commit", hash: "far" }));
+  await click("Commit 1", { metaKey: true });
+  await click("Commit 3");
+  await act(async () => release());
+  await settle();
+  expect(selection()).toEqual({ kind: "commit", hash: "c3" });
 });

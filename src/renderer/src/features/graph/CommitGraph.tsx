@@ -19,7 +19,13 @@ import {
 } from "@/lib/queries";
 import { laneColor } from "@/lib/graph-colors";
 import { cn } from "@/lib/utils";
-import { type PickedCommit, selectedHashes, useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
+import {
+  type PickedCommit,
+  type Selection,
+  selectedHashes,
+  useRepoUi,
+  useRepoUiStore,
+} from "@/stores/repo-ui";
 import { commands } from "../commands";
 import { CommitContextMenu, type MenuTarget } from "./CommitContextMenu";
 import {
@@ -160,10 +166,18 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   }, [selection, anchor, rows, offset]);
 
   // The platform key adds or removes a commit, Shift selects a range from the last clicked.
+  const pressCount = useRef(0);
   const press = async (row: GraphRow, index: number, e: React.MouseEvent) => {
     const single = { kind: "commit", hash: row.hash } as const;
     const toggle = isMac ? e.metaKey : e.ctrlKey;
     if (!info || !(toggle || e.shiftKey) || anchor === null) return select(repo, single);
+    // Rows may have to be fetched first: drop the result if the selection changed meanwhile.
+    const seq = ++pressCount.current;
+    const current = () => useRepoUiStore.getState().byRepo[repo]?.selection ?? null;
+    const before = current();
+    const finish = (next: Selection) => {
+      if (pressCount.current === seq && current() === before) select(repo, next);
+    };
     // A commit far off screen may not be loaded: ask for it.
     const loaded = (i: number) => rows.get(i);
     const fetchRows = async (from: number, to: number) => {
@@ -193,16 +207,16 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
           const r = i >= 0 ? (await fetchRows(i, i)).get(i) : undefined;
           if (r) picked = [{ index: i, row: r }];
         }
-        select(repo, selectionOf(toggled(picked, { index, row }), row.hash) ?? single);
+        finish(selectionOf(toggled(picked, { index, row }), row.hash) ?? single);
       } else {
         const a = await indexOf(anchor);
-        if (a < 0) return select(repo, single);
+        if (a < 0) return finish(single);
         const [from, to] = rangeIndexes(a, index);
         const range = [...(await fetchRows(from, to))].map(([i, r]) => ({ index: i, row: r }));
-        select(repo, selectionOf(range, anchor) ?? single);
+        finish(selectionOf(range, anchor) ?? single);
       }
     } catch {
-      select(repo, single);
+      finish(single);
     }
   };
   const pressRef = useRef(press);
