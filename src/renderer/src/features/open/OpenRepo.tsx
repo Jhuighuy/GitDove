@@ -27,24 +27,27 @@ import { toast } from "sonner";
 import logo from "@/assets/icon.svg";
 import { api, ApiError, modKey, useEvent } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useStatusStore } from "@/stores/status";
 import { useTabs } from "@/stores/tabs";
 
 /** Opens a repository location in the active tab, reporting failures. */
 export const openLocation = async (location: RepoLocation, tabKey?: string): Promise<boolean> => {
-  const id = toast.loading(
+  // Opening first gives the tab the repository's own id (e.g. for a subdirectory).
+  const status = useStatusStore.getState();
+  status.setActivity(
     location.kind === "ssh" ? `Connecting to ${location.host}…` : "Opening repository…",
   );
   try {
     const info = await api("repo.open", location);
-    toast.dismiss(id);
     useTabs.getState().openRepo(info.id, tabKey);
     return true;
   } catch (e) {
     toast.error("Could not open repository", {
-      id,
       description: e instanceof ApiError ? e.message : String(e),
     });
     return false;
+  } finally {
+    status.setActivity(null);
   }
 };
 

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useStatusStore } from "@/stores/status";
 import { useTabs } from "@/stores/tabs";
 import {
   OpenRepoPage,
@@ -132,14 +133,17 @@ const listDirCalls = () =>
   mocks.api.mock.calls.filter(([m]) => m === "ssh.listDir").map(([, ...a]) => a);
 const tabRepos = () => useTabs.getState().tabs.map((t) => t.repo);
 
-it("opens locations in a tab", async () => {
+it("opens locations in a tab, showing progress in the status bar", async () => {
+  // The status bar shows what is happening while the repository opens.
+  const seen: (string | null)[] = [];
+  const unsubscribe = useStatusStore.subscribe((s) => seen.push(s.activity));
   await expect(openLocation({ kind: "local", path: "/r" })).resolves.toBe(true);
-  expect(mocks.toast.loading).toHaveBeenCalledWith("Opening repository…");
-  expect(mocks.toast.dismiss).toHaveBeenCalledWith("toast-id");
   expect(tabRepos()).toEqual(["local:/r"]);
 
   await openLocation({ kind: "ssh", host: "box", path: "/s" }, "blank");
-  expect(mocks.toast.loading).toHaveBeenCalledWith("Connecting to box…");
+  unsubscribe();
+  expect(seen).toEqual(["Opening repository…", null, "Connecting to box…", null]);
+  expect(mocks.toast.loading).not.toHaveBeenCalled();
   // The given tab got a repository meanwhile: it is kept, and a new tab opens.
   expect(tabRepos()).toEqual(["local:/r", "ssh://box/s"]);
 });
@@ -147,9 +151,9 @@ it("opens locations in a tab", async () => {
 it("reports locations that fail to open", async () => {
   await expect(openLocation({ kind: "local", path: "/broken" })).resolves.toBe(false);
   expect(mocks.toast.error).toHaveBeenCalledWith("Could not open repository", {
-    id: "toast-id",
     description: "not a git repository",
   });
+  expect(useStatusStore.getState().activity).toBeNull();
   await openLocation({ kind: "local", path: "/weird" });
   expect(mocks.toast.error).toHaveBeenLastCalledWith(
     "Could not open repository",

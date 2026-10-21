@@ -12,6 +12,7 @@ import { keys, queryClient } from "@/lib/queries";
 import { useRepoUiStore } from "@/stores/repo-ui";
 import { confirm, prompt, validateRefName } from "./dialogs/dialogs";
 import { openLocation } from "./open/OpenRepo";
+import { APP, notify } from "@/stores/status";
 
 const refs = (repo: RepoId) => queryClient.getQueryData<RefsSnapshot>(keys.refs(repo));
 const headBranch = (repo: RepoId) => refs(repo)?.refs.find((r) => r.kind === "branch" && r.isHead);
@@ -499,7 +500,7 @@ export const commands = {
   },
 
   copy: (text: string, what = "Copied") => {
-    void navigator.clipboard.writeText(text).then(() => toast.success(what, { duration: 1500 }));
+    void navigator.clipboard.writeText(text).then(() => notify(APP, what));
   },
 
   selectCommit: (repo: RepoId, hash: string) =>

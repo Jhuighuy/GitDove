@@ -1,12 +1,14 @@
 import type { RepoId } from "@shared/domain";
 import { toast } from "sonner";
 import { busyOf, busyReason, useBusyStore } from "@/stores/busy";
+import { notify } from "@/stores/status";
 import { ApiError } from "./api";
 import { keys, queryClient } from "./queries";
 
 interface RunOptions {
-  /** Shows a progress toast while running (for slow, network-bound operations). */
+  /** What is running, for the status bar (for slow, network-bound operations). */
   readonly progress?: string;
+  /** Shown in the status bar once it succeeded. */
   readonly success?: string;
   /** What is running, for the busy indicator; defaults to `progress`, then `label`. */
   readonly status?: string;
@@ -25,8 +27,8 @@ export const refuseWhileBusy = (repo: RepoId, label: string): boolean => {
 };
 
 /**
- * Runs a repository-mutating action, reporting failures as toasts and
- * refreshing the repository's data afterwards. Actions run one at a time per
+ * Runs a repository-mutating action, reporting failures as toasts (progress and
+ * results go to the status bar) and refreshing the repository's data afterwards. Actions run one at a time per
  * repository: while one runs, the repository is busy (see `stores/busy.ts`)
  * and starting another is refused.
  */
@@ -42,21 +44,18 @@ export const runAction = async <A>(
     label: options.status ?? options.progress ?? `${label}…`,
     cancellable: options.cancellable ?? false,
   });
-  const id = options.progress ? toast.loading(options.progress) : undefined;
   try {
     const result = await fn();
-    if (options.success) toast.success(options.success, { id });
-    else if (id !== undefined) toast.dismiss(id);
+    if (options.success) notify(repo, options.success);
     return result;
   } catch (e) {
     if (e instanceof ApiError && e.tag === "CancelledError") {
-      toast.info(`${label} cancelled`, { id });
+      notify(repo, `${label} cancelled`, "info");
       return undefined;
     }
     const message = e instanceof Error ? e.message : String(e);
     const detail = e instanceof ApiError ? e.detail : undefined;
     toast.error(`${label} failed`, {
-      id,
       description: detail && detail !== message ? `${message}\n\n${detail}` : message,
       duration: 10000,
     });

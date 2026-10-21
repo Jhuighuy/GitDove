@@ -1,24 +1,29 @@
 // @vitest-environment happy-dom
-import type { GraphInfo, RepoInfo } from "@shared/domain";
+import type { GraphInfo, UpdaterStatus } from "@shared/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { keys } from "@/lib/queries";
 import { useBusyStore } from "@/stores/busy";
+import { APP, notify, useStatusStore } from "@/stores/status";
 import { StatusBar } from "./StatusBar";
 
 const mocks = vi.hoisted(() => ({
+  api: [] as unknown[][],
   commands: [] as unknown[][],
-  info: null as unknown,
-  graph: null as unknown,
+  updater: { kind: "idle" } as UpdaterStatus,
+  listeners: new Map<string, (payload: never) => void>(),
 }));
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
-  useEvent: () => {},
-  api: async (method: string) => {
-    if (method === "repo.info") return mocks.info;
-    if (method === "repo.graphInfo") return mocks.graph;
+  useEvent: (event: string, listener: (payload: never) => void) =>
+    mocks.listeners.set(event, listener),
+  api: async (method: string, ...args: unknown[]) => {
+    mocks.api.push([method, ...args]);
+    if (method === "updater.status") return mocks.updater;
+    if (method === "updater.install") return undefined;
     throw new Error(`unexpected ${method}`);
   },
 }));
@@ -26,38 +31,22 @@ vi.mock("../commands", () => ({
   commands: { cancel: (...args: unknown[]) => void mocks.commands.push(["cancel", ...args]) },
 }));
 
-const REPO = "ssh://fedora.lab.example.com/home/me/project";
-
-const info = (extra: Partial<RepoInfo> = {}): RepoInfo =>
-  ({
-    id: REPO,
-    location: { kind: "ssh", host: "fedora.lab.example.com", path: "/home/me/project" },
-    name: "project",
-    workTree: "/home/me/project",
-    gitDir: "/home/me/project/.git",
-    bare: false,
-    head: { branch: "main", hash: "0123456789abcdef", detached: false },
-    state: "clean",
-    ...extra,
-  }) as RepoInfo;
-
-const graph = (extra: Partial<GraphInfo> = {}): GraphInfo => ({
-  version: 1,
-  count: 10,
-  complete: true,
-  maxLanes: 1,
-  ...extra,
-});
+const SSH = "ssh://fedora.lab.example.com/home/me/project";
+const LOCAL = "local:/work/project";
 
 let root: Root;
 let container: HTMLElement;
+let client: QueryClient;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  mocks.api = [];
   mocks.commands = [];
-  mocks.info = info();
-  mocks.graph = graph();
+  mocks.updater = { kind: "idle" };
+  mocks.listeners.clear();
   useBusyStore.setState({ byRepo: {} });
+  useStatusStore.setState({ notices: {}, activity: null });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -68,60 +57,110 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-/** Renders the status bar and waits until `text` shows. */
-async function render(text = "/home/me/project") {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  await act(async () =>
+const render = (repo: string | null) =>
+  act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <StatusBar repo={REPO} />
+        <StatusBar repo={repo} />
       </QueryClientProvider>,
     ),
   );
-  await act(() =>
-    vi.waitFor(() => {
-      if (!container.textContent?.includes(text)) throw new Error(`no ${text}`);
-    }),
-  );
-}
+const text = () => container.textContent ?? "";
+/** Sets cached query data; the query delivers updates on the next tick. */
+const setCached = (key: readonly unknown[], data: unknown) =>
+  act(async () => {
+    client.setQueryData(key, data);
+    await new Promise((r) => setTimeout(r, 0));
+  });
 
-it("shows the SSH host and the repository path", async () => {
-  await render();
+it("shows where the active repository lives", async () => {
+  await render(SSH);
   const host = container.querySelector<HTMLElement>("[title='fedora.lab.example.com']")!;
   expect(host.textContent).toBe("fedora.lab.example.com");
   expect(container.querySelector("[title='/home/me/project']")).not.toBeNull();
-  expect(container.textContent).not.toContain("Local");
+  expect(text()).not.toContain("Local");
+
+  await render(LOCAL);
+  expect(text()).toContain("Local");
+  expect(text()).toContain("/work/project");
+
+  // A blank tab has no repository.
+  await render(null);
+  expect(text()).toBe("");
 });
 
-it("says Local for a local repository", async () => {
-  mocks.info = info({
-    location: { kind: "local", path: "/work/project" },
-    workTree: "/work/project",
-  });
-  await render("/work/project");
-  expect(container.textContent).toContain("Local");
-});
-
-it("shows history still loading", async () => {
-  mocks.graph = graph({ count: 1234, complete: false });
-  await render("1,234");
-  expect(container.textContent).toContain("Loading history… 1,234 commits");
+it("shows history still loading, without asking an unopened repository", async () => {
+  await render(LOCAL);
+  expect(mocks.api.filter(([m]) => m === "repo.graphInfo")).toEqual([]);
+  const info: GraphInfo = { version: 1, count: 1234, complete: false, maxLanes: 2 };
+  await setCached(keys.graphInfo(LOCAL), info);
+  expect(text()).toContain("Loading history… 1,234 commits");
+  await setCached(keys.graphInfo(LOCAL), { ...info, complete: true });
+  expect(text()).not.toContain("Loading history");
 });
 
 it("shows the running operation, with a cancel button for network operations", async () => {
-  await render();
-  expect(container.querySelector("output")).toBeNull();
+  await render(SSH);
   await act(async () =>
-    useBusyStore.getState().start(REPO, { label: "Checking out feature…", cancellable: false }),
+    useBusyStore.getState().start(SSH, { label: "Checking out feature…", cancellable: false }),
   );
   expect(container.querySelector("output")?.textContent).toBe("Checking out feature…");
   expect(container.querySelector("[aria-label='Cancel']")).toBeNull();
-  await act(async () => useBusyStore.getState().finish(REPO));
+  await act(async () => useBusyStore.getState().finish(SSH));
   expect(container.querySelector("output")).toBeNull();
 
   await act(async () =>
-    useBusyStore.getState().start(REPO, { label: "Pulling…", cancellable: true }),
+    useBusyStore.getState().start(SSH, { label: "Pulling…", cancellable: true }),
   );
   await act(async () => container.querySelector<HTMLElement>("[aria-label='Cancel']")!.click());
-  expect(mocks.commands).toEqual([["cancel", REPO]]);
+  expect(mocks.commands).toEqual([["cancel", SSH]]);
+  // Another tab's operation is not shown.
+  await render(LOCAL);
+  expect(text()).not.toContain("Pulling…");
+});
+
+it("shows results of the active repository and of the app", async () => {
+  await render(LOCAL);
+  await act(async () => notify(LOCAL, "Pushed main"));
+  expect(text()).toContain("Pushed main");
+  await act(async () => notify(SSH, "Fetched"));
+  expect(text()).not.toContain("Fetched");
+  await act(async () => notify(APP, "Commit SHA copied", "info"));
+  expect(text()).toContain("Commit SHA copied");
+  // A running operation takes the result's place.
+  await act(async () =>
+    useBusyStore.getState().start(LOCAL, { label: "Pulling…", cancellable: false }),
+  );
+  expect(text()).not.toContain("Pushed main");
+  expect(text()).toContain("Pulling…");
+});
+
+it("shows app-wide activity, e.g. while a repository opens", async () => {
+  await render(null);
+  await act(async () => useStatusStore.getState().setActivity("Connecting to fedora…"));
+  expect(container.querySelector("output")?.textContent).toBe("Connecting to fedora…");
+});
+
+it("offers to restart for a downloaded update", async () => {
+  mocks.updater = { kind: "ready", version: "0.1.45" };
+  await render(null);
+  expect(text()).toContain("GitDove 0.1.45 is ready");
+  const restart = [...container.querySelectorAll("button")].find(
+    (b) => b.textContent === "Restart",
+  )!;
+  await act(async () => restart.click());
+  expect(mocks.api).toContainEqual(["updater.install"]);
+});
+
+it("shows an update that arrives later", async () => {
+  await render(LOCAL);
+  expect(text()).not.toContain("is ready");
+  await act(async () =>
+    mocks.listeners.get("updater.status")!({ kind: "downloading", percent: 50 } as never),
+  );
+  expect(text()).not.toContain("is ready");
+  await act(async () =>
+    mocks.listeners.get("updater.status")!({ kind: "ready", version: "0.1.46" } as never),
+  );
+  expect(text()).toContain("GitDove 0.1.46 is ready");
 });
