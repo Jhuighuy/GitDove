@@ -207,6 +207,24 @@ describe.skipIf(process.platform === "win32").each(shells)("runner script under 
     );
   });
 
+  it("waits for an interrupted command to exit on the host", async () => {
+    await withRunner((runner) =>
+      Effect.gen(function* () {
+        const marker = join(mkdtempSync(join(tmpdir(), "gitdove-runner-")), "cleaned-up");
+        const fiber = yield* Effect.forkChild(
+          run(
+            runner,
+            `trap 'sleep 0.4; touch "${marker}"; exit 1' TERM; while :; do sleep 0.05; done`,
+          ),
+        );
+        yield* Effect.sleep("200 millis");
+        yield* Fiber.interrupt(fiber);
+        expect(existsSync(marker)).toBe(true);
+        expect((yield* run(runner, "echo ok")).stdout.toString()).toBe("ok\n");
+      }),
+    );
+  });
+
   it("fails pending commands when the runner dies", async () => {
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {

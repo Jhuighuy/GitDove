@@ -35,6 +35,9 @@ const MAX_STDERR = 64 * 1024;
  * Spawns a process and collects its output. Interrupting the returned effect
  * kills the process.
  */
+/** How long an interrupted process gets to exit after each signal. */
+const KILL_GRACE_MS = 3000;
+
 export const spawn = (
   file: string,
   args: readonly string[],
@@ -55,6 +58,25 @@ export const spawn = (
     let truncated = false;
     let stderr = "";
     let done = false;
+    let exited = false;
+    const onExit: (() => void)[] = [];
+    child.on("exit", () => {
+      exited = true;
+      for (const f of onExit.splice(0)) f();
+    });
+    /** Waits for the process to exit, for at most `ms`; true if it did. */
+    const waitExit = (ms: number) =>
+      Effect.callback<boolean>((resumeWait) => {
+        if (exited || child.exitCode !== null || child.signalCode !== null) {
+          resumeWait(Effect.succeed(true));
+          return;
+        }
+        const timer = setTimeout(() => resumeWait(Effect.succeed(false)), ms);
+        onExit.push(() => {
+          clearTimeout(timer);
+          resumeWait(Effect.succeed(true));
+        });
+      });
 
     const finish = (effect: Effect.Effect<SpawnResult, CommandError>) => {
       if (done) return;
@@ -113,8 +135,22 @@ export const spawn = (
     if (options.stdin !== undefined) child.stdin.end(options.stdin);
     else child.stdin.end();
 
-    return Effect.sync(() => {
-      if (!done && child.exitCode === null) child.kill();
+    // Interrupting waits until the process has exited, so that callers holding a lock (see
+    // Repository.write) don't release it while git still runs. A process that ignores SIGTERM
+    // gets SIGKILL.
+    return Effect.suspend(() => {
+      if (done || exited || child.exitCode !== null) return Effect.void;
+      child.kill();
+      return waitExit(KILL_GRACE_MS).pipe(
+        Effect.flatMap((ok) =>
+          ok
+            ? Effect.void
+            : Effect.sync(() => child.kill("SIGKILL")).pipe(
+                Effect.andThen(waitExit(KILL_GRACE_MS)),
+              ),
+        ),
+        Effect.asVoid,
+      );
     });
   });
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Exit, Fiber } from "effect";
@@ -125,6 +125,28 @@ describe.skipIf(process.platform === "win32")("spawn", () => {
     await run(Fiber.interrupt(fiber));
     await new Promise((r) => setTimeout(r, 800));
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it("waits for an interrupted process to exit", async () => {
+    // Exiting takes a while (like git cleaning up its locks): the interrupt waits for it.
+    const marker = join(dir, "cleaned-up");
+    const fiber = Effect.runFork(
+      sh(`trap 'sleep 0.4; touch "${marker}"; exit 1' TERM; while :; do sleep 0.05; done`),
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    await run(Fiber.interrupt(fiber));
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it("kills a process that ignores SIGTERM", async () => {
+    const pidFile = join(dir, "stubborn.pid");
+    const fiber = Effect.runFork(
+      sh(`echo $$ > "${pidFile}"; trap '' TERM; while :; do sleep 0.05; done`),
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    await run(Fiber.interrupt(fiber));
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 });
 

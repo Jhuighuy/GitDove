@@ -67,6 +67,9 @@ for p in *.p; do read -r k 2>/dev/null <"$p" && kill "$k" 2>/dev/null; done
 wait
 `;
 
+/** How long an interrupted command gets to exit on the host before we stop waiting. */
+const KILL_WAIT_MS = 5000;
+
 /** Largest stdin payload sent through the runner (encoding costs up to 4x). */
 export const MAX_RUNNER_STDIN = 16 * 1024;
 
@@ -282,9 +285,16 @@ export class Runner {
     return id;
   }
 
-  /** Kills a running command; its callback is not called anymore. */
-  cancel(id: number): void {
-    if (!this.pending.delete(id) || this.error) return;
+  /**
+   * Kills a running command; its callback is not called anymore. `onSettled` runs once the
+   * command has exited (the runner still reports killed commands) or the runner is gone.
+   */
+  cancel(id: number, onSettled?: () => void): void {
+    if (!this.pending.has(id) || this.error) {
+      onSettled?.();
+      return;
+    }
+    this.pending.set(id, () => onSettled?.());
     this.child.stdin!.write(`K ${id}\n`);
   }
 
@@ -357,5 +367,12 @@ export const runOnRunner = (
     });
     // `run` reports a dead runner synchronously; otherwise the request is on its way.
     sent = true;
-    return Effect.sync(() => runner.cancel(id));
+    // Interrupting waits until the killed command has exited on the host (see spawn).
+    return Effect.callback<void>((settled) => {
+      const timer = setTimeout(() => settled(Effect.void), KILL_WAIT_MS);
+      runner.cancel(id, () => {
+        clearTimeout(timer);
+        settled(Effect.void);
+      });
+    });
   });
