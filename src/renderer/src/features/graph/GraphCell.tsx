@@ -36,10 +36,19 @@ interface Props {
   readonly isStash: boolean;
   /** Draw a dashed line up to the WIP row above. */
   readonly wipAbove: boolean;
+  /** Draw a line from the left edge to the dot, continuing the line from the row's ref pills. */
+  readonly refLine?: boolean;
 }
 
 /** Draws one row of the commit graph. */
-export const GraphCell = memo(function GraphCell({ row, width, isHead, isStash, wipAbove }: Props) {
+export const GraphCell = memo(function GraphCell({
+  row,
+  width,
+  isHead,
+  isStash,
+  wipAbove,
+  refLine = false,
+}: Props) {
   const e = row.edges;
   const paths = [];
   for (let i = 0; i < e.length; i += 5) {
@@ -70,6 +79,7 @@ export const GraphCell = memo(function GraphCell({ row, width, isHead, isStash, 
         />
       )}
       {paths}
+      {refLine && <path d={`M0 ${cy}H${cx}`} stroke={color} strokeWidth={2} fill="none" />}
       {isStash ? (
         <rect
           x={cx - 5}

@@ -106,3 +106,28 @@ it("shows a lone tag or remote pill with its icon", () => {
   // Without a handler a double click is harmless.
   act(() => pill.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
 });
+
+it("expands the other pills in place, and checks them out on double click", async () => {
+  const onDoubleClick = vi.fn();
+  const dev = ref("refs/heads/dev");
+  act(() =>
+    root.render(
+      <RefPills
+        refs={[ref("refs/heads/main", { isHead: true }), dev, ref("refs/tags/v1")]}
+        color={1}
+        onDoubleClick={onDoubleClick}
+      />,
+    ),
+  );
+  const more = [...container.querySelectorAll("span")].find((s) => s.textContent === "+2")!;
+  await act(async () => more.click());
+  const popup = document.querySelector<HTMLElement>("[aria-label='Branches and tags']")!;
+  // Many refs scroll inside the window instead of running off it.
+  expect(popup.className).toContain("max-h-(--available-height)");
+  expect(popup.className).toContain("overflow-y-auto");
+  const pills = [...popup.querySelectorAll<HTMLElement>("[title]")];
+  // All of them, the first one again on top.
+  expect(pills.map((p) => p.textContent)).toEqual(["main", "dev", "v1"]);
+  act(() => pills[1]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(onDoubleClick).toHaveBeenCalledWith(dev);
+});

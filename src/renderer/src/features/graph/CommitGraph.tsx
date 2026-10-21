@@ -17,6 +17,7 @@ import {
   useRepoInfo,
   useStatus,
 } from "@/lib/queries";
+import { laneColor } from "@/lib/graph-colors";
 import { cn } from "@/lib/utils";
 import { type Selection, useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
@@ -370,6 +371,8 @@ interface CommitRowProps {
 const CommitRow = memo(function CommitRow(p: CommitRowProps) {
   const columns = useColumns();
   const { row } = p;
+  // Stashes have no pill.
+  const hasPills = p.refs.some((r) => r.kind !== "stash");
   return (
     <div
       className={rowClass(p.selected)}
@@ -380,7 +383,7 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
       onContextMenu={() => p.onContextMenu(row)}
     >
       <div
-        className="flex shrink-0 items-center overflow-hidden px-2"
+        className="flex shrink-0 items-center overflow-hidden pl-2"
         style={{ width: columns.refs }}
       >
         <RefPills
@@ -388,6 +391,9 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
           color={row.color}
           onDoubleClick={(r) => void commands.checkoutRef(p.repo, r)}
         />
+        {hasPills && (
+          <div className="h-0.5 min-w-2 flex-1" style={{ backgroundColor: laneColor(row.color) }} />
+        )}
       </div>
       <div
         className={cn("relative shrink-0 overflow-hidden", p.clipped && CLIPPED)}
@@ -399,6 +405,7 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
           isHead={p.isHead}
           isStash={p.isStash}
           wipAbove={p.wipAbove}
+          refLine={hasPills}
         />
       </div>
       <div

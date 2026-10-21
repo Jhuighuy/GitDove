@@ -1,7 +1,7 @@
 import type { Ref } from "@shared/domain";
 import { IconCheck, IconCloud, IconDeviceLaptop, IconTag } from "@tabler/icons-react";
-import { memo } from "react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover } from "@base-ui/react/popover";
+import { memo, useRef } from "react";
 import { laneColor } from "@/lib/graph-colors";
 import { cn } from "@/lib/utils";
 
@@ -43,32 +43,58 @@ interface Props {
 }
 
 export const RefPills = memo(function RefPills({ refs, color, onDoubleClick }: Props) {
+  const anchor = useRef<HTMLDivElement>(null);
   const pills = groupRefs(refs);
   if (pills.length === 0) return null;
   const [first, ...rest] = pills;
   const c = laneColor(color);
   return (
-    <div className="flex min-w-0 items-center gap-1">
+    <div ref={anchor} className="flex min-w-0 items-center gap-1">
       <PillView pill={first!} color={c} onDoubleClick={onDoubleClick} />
       {rest.length > 0 && (
-        <Tooltip>
-          <TooltipTrigger
+        <Popover.Root>
+          <Popover.Trigger
+            openOnHover
+            delay={100}
+            closeDelay={150}
+            nativeButton={false}
             render={
-              <span className="bg-muted text-muted-foreground shrink-0 rounded px-1 text-[10px] leading-4 font-medium tabular-nums" />
+              <span
+                className="flex h-5 shrink-0 items-center rounded-md px-1 text-[10px] font-medium tabular-nums"
+                style={{ backgroundColor: `color-mix(in oklch, ${c} 22%, transparent)` }}
+              />
             }
           >
             +{rest.length}
-          </TooltipTrigger>
-          <TooltipContent side="right" className="flex flex-col items-start gap-1">
-            {rest.map((p) => (
-              <span key={p.label}>{p.label}</span>
-            ))}
-          </TooltipContent>
-        </Tooltip>
+          </Popover.Trigger>
+          <Popover.Portal>
+            {/* Expands in place: the first pill stays where it was, the others below it. */}
+            <Popover.Positioner
+              anchor={anchor}
+              side="bottom"
+              align="start"
+              sideOffset={({ anchor: a }) => -a.height - POPUP_PAD}
+              alignOffset={-POPUP_PAD}
+              className="isolate z-50"
+            >
+              <Popover.Popup
+                className="bg-popover ring-foreground/10 flex max-h-(--available-height) max-w-80 min-w-[calc(var(--anchor-width)+4px)] flex-col gap-0.5 overflow-y-auto overscroll-contain rounded-lg p-0.5 shadow-lg ring-1 outline-hidden *:shrink-0"
+                aria-label="Branches and tags"
+              >
+                {pills.map((p) => (
+                  <PillView key={p.label} pill={p} color={c} onDoubleClick={onDoubleClick} />
+                ))}
+              </Popover.Popup>
+            </Popover.Positioner>
+          </Popover.Portal>
+        </Popover.Root>
       )}
     </div>
   );
 });
+
+/** Padding around the expanded pills, in pixels (`p-0.5`). */
+const POPUP_PAD = 2;
 
 function PillView({
   pill,

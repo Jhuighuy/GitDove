@@ -119,3 +119,21 @@ it("renders hover actions per file", async () => {
     rows()[0]!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
   });
 });
+
+it("keeps line counts next to the hover actions", async () => {
+  await act(async () =>
+    root.render(
+      <FileList
+        files={[file("a.ts", { additions: 3, deletions: 1 })]}
+        selectedPath={null}
+        onOpen={() => {}}
+        renderActions={() => <button type="button">act</button>}
+      />,
+    ),
+  );
+  const row = rows()[0]!;
+  const stats = [...row.querySelectorAll("span")].find((s) => s.textContent === "+3 -1")!;
+  expect(stats.className).not.toContain("hidden");
+  // Actions come first, so the counts stay put at the row's end.
+  expect(row.lastElementChild).toBe(stats);
+});
