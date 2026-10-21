@@ -498,9 +498,9 @@ function DiffBody({
   const onMouseUp = (e: React.MouseEvent) => {
     const press = pending.current;
     pending.current = null;
-    if (e.button !== 0 || e.detail !== 1 || !press || lineAt(e) !== press.id) return;
+    if (e.button !== 0 || e.detail !== 1 || !press) return;
     const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
-    if (moved < CLICK_SLOP) pressLine(e, press.id);
+    if (lineAt(e) === press.id && moved < CLICK_SLOP) pressLine(e, press.id);
   };
   const dragging = useRef(false);
   useEffect(() => {
