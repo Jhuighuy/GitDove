@@ -7,6 +7,7 @@ import { useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
 import { fileTarget } from "../diff/targets";
 import { Avatar, useAvatarProviders } from "@/components/Avatar";
+import { LinkedText } from "@/components/LinkedText";
 import { FileList } from "./FileList";
 
 export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
@@ -67,11 +68,11 @@ export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
 
       <div className="max-h-[45%] shrink-0 overflow-y-auto border-b px-3 py-3">
         <h2 className="text-[14px] leading-snug font-semibold break-words select-text">
-          {data.subject}
+          <LinkedText repo={repo} text={data.subject} />
         </h2>
         {data.body && (
           <pre className="text-muted-foreground mt-2 font-sans text-[12px] leading-relaxed break-words whitespace-pre-wrap select-text">
-            {data.body}
+            <LinkedText repo={repo} text={data.body} />
           </pre>
         )}
         <div className="mt-3 flex items-center gap-2">

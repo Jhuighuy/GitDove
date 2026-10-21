@@ -190,3 +190,22 @@ it("opens file diffs and highlights the open one", async () => {
   );
   expect(rows().some((r) => r.className.includes("bg-primary/25"))).toBe(false);
 });
+
+it("links pull requests and URLs in the message", async () => {
+  mocks.refs = {
+    ...snapshot(),
+    remotes: [{ name: "origin", fetchUrl: "git@github.com:ada/engine.git", pushUrl: "" }],
+  };
+  mocks.commit = details({
+    subject: "Add the engine (#29)",
+    body: "See https://example.com/notes.",
+  });
+  await render();
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+  const links = [...container.querySelectorAll("a")].map((a) => [a.textContent, a.href]);
+  expect(links).toEqual([
+    ["#29", "https://github.com/ada/engine/issues/29"],
+    ["https://example.com/notes", "https://example.com/notes"],
+  ]);
+  expect(container.querySelector("h2")!.textContent).toBe("Add the engine (#29)");
+});
