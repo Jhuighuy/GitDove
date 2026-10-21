@@ -69,6 +69,14 @@ it("leaves out hidden sections", () => {
   expect(useSectionStack.getState().hidden).toEqual({});
 });
 
+it("shows every section rather than none", () => {
+  // E.g. all but Submodules hidden, in a repository without submodules.
+  useSectionStack.setState({ hidden: { a: true, b: true, sub: true } });
+  render([section("a"), section("b")]);
+  expect(body("a")).not.toBeNull();
+  expect(body("b")).not.toBeNull();
+});
+
 it("forwards header context menus", () => {
   const onHeaderContextMenu = vi.fn();
   render([section("a", { onHeaderContextMenu })]);

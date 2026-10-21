@@ -16,7 +16,14 @@ it("finds the web page of a remote", () => {
   expect(webRepo("https://codeberg.org/ada/engine")?.forge).toBe("other");
   expect(webRepo("http://git.lan:8080/ada/engine")?.origin).toBe("http://git.lan:8080");
   // Local paths, ssh aliases and odd URLs have no web page.
-  for (const url of ["/srv/repo.git", "file:///srv/repo", "fedora:repos/x.git", "github.com:x"])
+  for (const url of [
+    "/srv/repo.git",
+    "file:///srv/repo",
+    "fedora:repos/x.git",
+    "github.com:x",
+    "git@[2001:db8::1]:owner/repo.git",
+    "ssh://git@[2001:db8::1]/owner/repo.git",
+  ])
     expect(webRepo(url)).toBeNull();
 });
 

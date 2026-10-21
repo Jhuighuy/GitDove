@@ -929,10 +929,11 @@ export class Repository {
   discardAll() {
     return this.write(
       Effect.gen({ self: this }, function* () {
-        // Without commits, everything is new: unstage it so that `clean` deletes it.
+        // Without commits, everything is new: unstage it so that `clean` deletes it (forced:
+        // a staged file edited since differs from both the index and the work tree).
         yield* (yield* this.hasHead())
           ? this.run(["reset", "--hard", "-q"])
-          : this.run(["rm", "--cached", "-r", "-q", "--ignore-unmatch", "."]);
+          : this.run(["rm", "--cached", "-r", "-q", "-f", "--ignore-unmatch", "."]);
         yield* this.run(["clean", "-f", "-d", "-q"]);
       }),
     );

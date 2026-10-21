@@ -139,5 +139,34 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
         }),
       );
     });
+
+    it(`discards everything in a repository without commits on ${name}`, async () => {
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const host = (yield* Hosts).get(hostId);
+          const dir = (yield* host.sh("mktemp -d /tmp/gitdove-test.XXXXXX")).stdout
+            .toString()
+            .trim();
+          try {
+            // A staged file edited since differs from both the index and the work tree.
+            yield* host.sh(
+              "git init -q -b main . && echo a > a.txt && git add a.txt && echo b >> a.txt && " +
+                "echo u > u.txt",
+              { cwd: dir },
+            );
+            const location: RepoLocation =
+              hostId === LOCAL_HOST
+                ? { kind: "local", path: dir }
+                : { kind: "ssh", host: hostId, path: dir };
+            const repo = yield* Repository.open(host, location, { onGraphProgress: () => {} });
+            yield* repo.discardAll();
+            const st = yield* repo.status();
+            expect([...st.staged, ...st.unstaged, ...st.conflicted]).toEqual([]);
+          } finally {
+            yield* host.sh(`rm -rf -- '${dir}'`).pipe(Effect.ignore);
+          }
+        }),
+      );
+    });
   }
 });

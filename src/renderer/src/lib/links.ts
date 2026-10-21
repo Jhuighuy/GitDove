@@ -16,6 +16,7 @@ export interface WebRepo {
 /** The web page of a remote (`https://…`, `ssh://…` or scp-like `git@host:path`), if it has one. */
 export const webRepo = (url: string): WebRepo | null => {
   let origin: string;
+  let host: string;
   let path: string;
   const http = /^https?:\/\//i.test(url);
   const m = http
@@ -26,18 +27,20 @@ export const webRepo = (url: string): WebRepo | null => {
     try {
       const u = new URL(url);
       origin = u.origin;
+      host = u.hostname;
       path = u.pathname.slice(1);
     } catch {
       return null;
     }
-  } else if (m) {
-    origin = `https://${m[1]!.toLowerCase()}`;
+  } else if (m && /^[a-z0-9.-]+$/i.test(m[1]!)) {
+    // Bracketed IPv6 hosts and the like are left out: they have no web page worth linking.
+    host = m[1]!.toLowerCase();
+    origin = `https://${host}`;
     path = m[2]!;
   } else {
     return null;
   }
   path = path.replace(/\/+$/, "").replace(/\.git$/, "");
-  const host = new URL(origin).hostname;
   // Dot-less names are LAN/ssh aliases (e.g. "fedora"), with no web page to link to.
   if (!host.includes(".") || !/^[\w.-]+(\/[\w.-]+)+$/.test(path)) return null;
   const forge: Forge =

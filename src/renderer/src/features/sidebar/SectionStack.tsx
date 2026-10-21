@@ -55,7 +55,9 @@ export interface SectionDef {
  */
 export function SectionStack({ sections: all }: { sections: readonly SectionDef[] }) {
   const { open, weights, hidden, setOpen, setWeights } = useSectionStack();
-  const sections = all.filter((s) => !hidden[s.id]);
+  const shown = all.filter((s) => !hidden[s.id]);
+  // Hiding is global: a repository may lack every section left shown (e.g. Submodules).
+  const sections = shown.length > 0 ? shown : all;
   const refs = useRef(new Map<string, HTMLDivElement>());
   const isOpen = (s: SectionDef) => open[s.id] ?? s.defaultOpen ?? true;
 
