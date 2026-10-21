@@ -87,9 +87,16 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
               "echo y >> f.txt && echo n > new.txt && git add new.txt && mkdir -p u && echo u > u/u.txt",
               { cwd: dir },
             );
+            // Ignored files stay, even when the ignore rule is itself discarded.
+            yield* host.sh("echo .env > .gitignore && git add .gitignore && echo s > .env", {
+              cwd: dir,
+            });
             yield* repo.discardAll();
             const clean = yield* repo.status();
-            expect([...clean.staged, ...clean.unstaged, ...clean.conflicted]).toEqual([]);
+            expect(clean.staged).toEqual([]);
+            expect(clean.conflicted).toEqual([]);
+            expect(clean.unstaged.map((f) => [f.path, f.kind])).toEqual([[".env", "untracked"]]);
+            yield* host.sh("rm .env", { cwd: dir });
             yield* repo.checkout("main");
             yield* repo.reset("HEAD~1", "hard");
             expect((yield* repo.info()).head.hash).toBe(

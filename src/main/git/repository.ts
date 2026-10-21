@@ -936,22 +936,29 @@ export class Repository {
             message: `Abort or finish the ${state.replace("-", " ")} first`,
           });
         }
-        // Without commits, everything is new: unstage it so that `clean` deletes it (forced:
-        // a staged file edited since differs from both the index and the work tree).
-        yield* (yield* this.hasHead())
-          ? this.run(["reset", "--hard", "-q"])
-          : this.run(["rm", "--cached", "-r", "-q", "-f", "--ignore-unmatch", "."]);
-        yield* this.run(["clean", "-f", "-d", "-q"]);
-        // `clean` keeps untracked nested repositories (unless forced twice): say so.
-        const kept = (yield* this.gitText([
+        const untracked = this.gitText([
           "ls-files",
           "--others",
           "--exclude-standard",
           "--directory",
           "-z",
-        ]))
-          .split("\0")
-          .filter(Boolean);
+        ]).pipe(Effect.map((s) => s.split("\0").filter(Boolean)));
+        const before = yield* untracked;
+        // Clean before resetting: a reset may undo ignore rules (an edited .gitignore) that keep
+        // ignored files out of `clean`. The reset then deletes new files that are staged.
+        const clean = this.run(["clean", "-f", "-d", "-q"]);
+        if (yield* this.hasHead()) {
+          yield* clean;
+          yield* this.run(["reset", "--hard", "-q"]);
+        } else {
+          // Without commits, everything is new: unstage it so that `clean` deletes it (forced:
+          // a staged file edited since differs from both the index and the work tree).
+          yield* this.run(["rm", "--cached", "-r", "-q", "-f", "--ignore-unmatch", "."]);
+          yield* clean;
+        }
+        // `clean` keeps untracked nested repositories (unless forced twice): say so. Files that
+        // were ignored before the reset are kept on purpose.
+        const kept = (yield* untracked).filter((p) => before.includes(p));
         if (kept.length > 0) {
           return yield* new InvalidInputError({
             message: `Discarded the other changes, but kept nested repositories: ${kept.join(", ")}`,
