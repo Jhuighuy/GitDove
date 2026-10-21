@@ -639,6 +639,15 @@ it("copies text to the clipboard", async () => {
   expect(mocks.toast.success).not.toHaveBeenCalled();
 });
 
+it("runs edit commands, and reports their failures", async () => {
+  await commands.edit("paste");
+  expect(apiCalls("app.edit")).toEqual([["paste"]]);
+  expect(mocks.toast.error).not.toHaveBeenCalled();
+  mocks.api.mockRejectedValueOnce(new Error("window is gone"));
+  await commands.edit("cut");
+  expect(mocks.toast.error).toHaveBeenCalledWith("Edit failed", { description: "window is gone" });
+});
+
 it("selects and reveals commits", () => {
   commands.selectCommit(repo, "c1");
   commands.selectCommit(repo, "c2");

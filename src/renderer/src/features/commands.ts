@@ -3,7 +3,7 @@
  */
 import type { Ref, RefsSnapshot, RepoId, RepoInfo, RepoLocation } from "@shared/domain";
 import { repoLocationOf } from "@shared/domain";
-import type { ResetMode } from "@shared/ipc";
+import type { EditCommand, ResetMode } from "@shared/ipc";
 import { toast } from "sonner";
 import { refuseWhileBusy, runAction } from "@/lib/actions";
 import { ApiError, api } from "@/lib/api";
@@ -498,6 +498,12 @@ export const commands = {
     });
     if (ok) await runAction(repo, "Remove remote", () => api("repo.removeRemote", repo, name));
   },
+
+  /** Runs an Edit menu command (cut, paste and the like) on the focused field or selection. */
+  edit: (command: EditCommand) =>
+    api("app.edit", command).catch((e: unknown) => {
+      toast.error("Edit failed", { description: e instanceof Error ? e.message : String(e) });
+    }),
 
   copy: (text: string, what = "Copied") => {
     void navigator.clipboard.writeText(text).then(() => notify(APP, what));

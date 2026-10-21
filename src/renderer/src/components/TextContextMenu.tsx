@@ -6,7 +6,8 @@ import {
   ContextMenuSeparator,
   ContextMenuShortcut,
 } from "@/components/ui/context-menu";
-import { api, isMac, modKey } from "@/lib/api";
+import { commands } from "@/features/commands";
+import { isMac, modKey } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type Field = HTMLInputElement | HTMLTextAreaElement;
@@ -112,7 +113,7 @@ export function TextContextMenu() {
     pending.current = null;
     if (isOpen || !target) return;
     if (command || (target.field && !clickedAway.current)) target.restore();
-    if (command) void api("app.edit", command).catch(() => {});
+    if (command) void commands.edit(command);
   };
 
   const anchor = target && {
