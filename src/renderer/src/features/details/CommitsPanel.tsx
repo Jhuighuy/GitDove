@@ -43,29 +43,31 @@ export function CommitsPanel({
 
       <ul className="max-h-[40%] shrink-0 overflow-y-auto border-b py-1">
         {commits.map(({ row }) => (
-          <li
-            key={row.hash}
-            className="hover:bg-muted/60 flex cursor-default items-center gap-2.5 px-3 py-1.5"
-            title="Show this commit only"
-            onClick={() => select(repo, { kind: "commit", hash: row.hash })}
-          >
-            <Avatar
-              name={row.authorName}
-              email={row.authorEmail}
-              providers={avatarProviders}
-              size={24}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[12px] font-medium">{row.subject}</div>
-              <div className="text-muted-foreground truncate text-[11px]">
-                <span title={absoluteTime(row.authorTime)}>{relativeTime(row.authorTime)}</span>
-                {" · "}
-                {row.authorName}
+          <li key={row.hash}>
+            <button
+              type="button"
+              className="hover:bg-muted/60 flex w-full cursor-default items-center gap-2.5 px-3 py-1.5 text-left"
+              title="Show this commit only"
+              onClick={() => select(repo, { kind: "commit", hash: row.hash })}
+            >
+              <Avatar
+                name={row.authorName}
+                email={row.authorEmail}
+                providers={avatarProviders}
+                size={24}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[12px] font-medium">{row.subject}</div>
+                <div className="text-muted-foreground truncate text-[11px]">
+                  <span title={absoluteTime(row.authorTime)}>{relativeTime(row.authorTime)}</span>
+                  {" · "}
+                  {row.authorName}
+                </div>
               </div>
-            </div>
-            <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
-              {shortHash(row.hash)}
-            </span>
+              <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
+                {shortHash(row.hash)}
+              </span>
+            </button>
           </li>
         ))}
       </ul>

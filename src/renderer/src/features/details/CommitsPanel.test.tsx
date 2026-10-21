@@ -105,8 +105,8 @@ it("lists the commits and the changes from the oldest one's parent to the newest
     base: "p4",
     path: "b.ts",
   });
-  const commit = [...container.querySelectorAll("li")].find((li) =>
-    li.textContent?.includes("Commit 4"),
+  const commit = [...container.querySelectorAll<HTMLElement>("li button")].find((b) =>
+    b.textContent?.includes("Commit 4"),
   )!;
   await act(async () => commit.click());
   expect(useRepoUiStore.getState().byRepo[repo]?.selection).toEqual({
