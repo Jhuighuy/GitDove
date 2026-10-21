@@ -435,7 +435,8 @@ it("creates worktrees next to the main checkout", async () => {
 });
 
 /** A failure the way the api reports a main-process error. */
-const apiError = (tag: string, message: string) => Object.assign(new Error(message), { tag });
+const apiError = (errorTag: string, message: string) =>
+  Object.assign(new Error(message), { tag: errorTag });
 
 it("removes worktrees, offering to force only when the main process says it helps", async () => {
   mocks.confirm.mockResolvedValueOnce(false);

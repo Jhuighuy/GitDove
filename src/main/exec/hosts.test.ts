@@ -402,10 +402,10 @@ describe("getOrRetry", () => {
         Effect.gen(function* () {
           const failNow = yield* Deferred.make<void>();
           const map = yield* RcMap.make({
-            lookup: (_: string) =>
+            lookup: (key: string) =>
               attempts++ === 0
                 ? Deferred.await(failNow).pipe(Effect.andThen(Effect.fail("down")))
-                : Effect.yieldNow.pipe(Effect.as(attempts)),
+                : Effect.yieldNow.pipe(Effect.as(`${key}${attempts}`)),
             // Like the hosts' maps, keep entries after their last user is done.
             idleTimeToLive: "1 minute",
           });
@@ -416,10 +416,10 @@ describe("getOrRetry", () => {
           const second = yield* Effect.forkChild(Effect.scoped(getOrRetry(map, "h")));
           yield* Effect.yieldNow;
           yield* Deferred.succeed(failNow, undefined);
-          expect(yield* Fiber.join(first)).toBe(2);
+          expect(yield* Fiber.join(first)).toBe("h2");
           expect(yield* Effect.flip(Fiber.join(second))).toBe("down");
           // The retry's entry survived the second caller's failure: no third lookup.
-          expect(yield* Effect.scoped(getOrRetry(map, "h"))).toBe(2);
+          expect(yield* Effect.scoped(getOrRetry(map, "h"))).toBe("h2");
         }),
       ),
     );
