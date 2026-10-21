@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { FileDiff } from "@shared/domain";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import type { HighlightRequest, HighlightResponse } from "./highlight-protocol";
@@ -64,7 +64,11 @@ function Probe({
   model: ReturnType<typeof buildModel>;
   onValue: (v: DocHighlighter | null) => void;
 }) {
-  onValue(useHighlighter(model));
+  const value = useHighlighter(model);
+  // Report after commit: renders can be replayed or dropped.
+  useEffect(() => {
+    onValue(value);
+  });
   return null;
 }
 

@@ -140,8 +140,8 @@ it("opens locations in a tab", async () => {
 
   await openLocation({ kind: "ssh", host: "box", path: "/s" }, "blank");
   expect(mocks.toast.loading).toHaveBeenCalledWith("Connecting to box…");
-  // The given tab is reused, even though it now has a repository.
-  expect(tabRepos()).toEqual(["ssh://box/s"]);
+  // The given tab got a repository meanwhile: it is kept, and a new tab opens.
+  expect(tabRepos()).toEqual(["local:/r", "ssh://box/s"]);
 });
 
 it("reports locations that fail to open", async () => {

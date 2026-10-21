@@ -75,9 +75,9 @@ const base: RefsSnapshot = {
   stashes: [stash],
   remotes: [origin],
   worktrees: [
-    { path: "/repo", hash: "h0", branch: "main", isMain: true },
-    { path: "/wt/feature", hash: "h1", branch: "feature", isMain: false },
-    { path: "/wt/loose", hash: "h2", branch: null, isMain: false },
+    { path: "/repo", hash: "h0", branch: "main", isMain: true, locked: false },
+    { path: "/wt/feature", hash: "h1", branch: "feature", isMain: false, locked: false },
+    { path: "/wt/loose", hash: "h2", branch: null, isMain: false, locked: false },
   ],
   submodules: [
     { path: "libs/a", hash: "a", status: "ok" },

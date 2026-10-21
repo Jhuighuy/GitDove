@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import type { RefsSnapshot } from "@shared/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { allVisibilityNames, useVisibility } from "./visibility";
@@ -64,7 +64,11 @@ afterEach(async () => {
 
 /** Reports the visibility state of the repository. */
 function Probe({ onValue }: { onValue: (v: ReturnType<typeof useVisibility>) => void }) {
-  onValue(useVisibility("local:/repo"));
+  const value = useVisibility("local:/repo");
+  // Report after commit: renders can be replayed or dropped.
+  useEffect(() => {
+    onValue(value);
+  });
   return null;
 }
 

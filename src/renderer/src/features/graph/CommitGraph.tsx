@@ -1,6 +1,6 @@
 import type { GraphRow, Ref, RepoId } from "@shared/domain";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { AvatarProvider } from "@shared/avatars";
@@ -21,7 +21,14 @@ import { cn } from "@/lib/utils";
 import { type Selection, useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
 import { CommitContextMenu, type MenuTarget } from "./CommitContextMenu";
-import { GraphCell, graphWidthFor, LANE_WIDTH, ROW_HEIGHT, WipGraphCell } from "./GraphCell";
+import {
+  GraphCell,
+  graphWidthFor,
+  LANE_WIDTH,
+  ROW_HEIGHT,
+  rowGraphWidth,
+  WipGraphCell,
+} from "./GraphCell";
 import { RefPills } from "./RefPills";
 
 interface ColumnsState {
@@ -29,8 +36,23 @@ interface ColumnsState {
   readonly graph: number | null;
   readonly author: number;
   readonly date: number;
-  set(col: "refs" | "graph" | "author" | "date", width: number): void;
+  /** Sets a column's width; `null` sizes the graph column to fit its lanes again. */
+  set(col: "refs" | "graph" | "author" | "date", width: number | null): void;
 }
+
+/**
+ * Unless resized, the graph column fits the lanes of the rows on screen, between these many
+ * lanes; wider rows are cut off (and shaded).
+ */
+const MIN_AUTO_LANES = 3;
+const MAX_AUTO_LANES = 12;
+
+/**
+ * A shadow over the graph column's right edge (above the lanes) while it cuts off rows on
+ * screen. Every row's cell gets it, so it reads as one edge rather than per-row marks.
+ */
+const CLIPPED =
+  "after:pointer-events-none after:absolute after:inset-y-0 after:right-0 after:w-3 after:bg-linear-to-l after:from-black/10 after:to-transparent dark:after:from-black/80";
 
 const useColumns = create<ColumnsState>()(
   persist(
@@ -66,8 +88,6 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   const headHash = repoInfo?.head.hash ?? null;
   const stashes = useMemo(() => new Set(refsData?.stashes.map((s) => s.hash) ?? []), [refsData]);
 
-  const graphWidth = columns.graph ?? graphWidthFor(Math.min(info?.maxLanes ?? 1, 6));
-
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: total,
@@ -80,6 +100,30 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   const lastIndex = Math.max(0, (items.at(-1)?.index ?? 0) - offset + 1);
   const rows = useGraphRows(repo, info, firstIndex, lastIndex);
   const headRow = rows.get(0);
+
+  // Fit the lanes on screen. The width only grows while scrolling, so the columns don't jump
+  // back and forth; double-clicking the column border fits it to the rows on screen again.
+  // Only rows in the viewport count, not the overscan rendered around it.
+  const top = virtualizer.scrollOffset ?? 0;
+  const bottom = top + (virtualizer.scrollRect?.height ?? Infinity);
+  let widestRow = 0;
+  for (const item of items) {
+    if (item.end <= top || item.start >= bottom) continue;
+    const row = rows.get(item.index - offset);
+    if (row) widestRow = Math.max(widestRow, rowGraphWidth(row));
+  }
+  const visibleWidth = Math.max(widestRow, graphWidthFor(MIN_AUTO_LANES));
+  const [fitWidth, setFitWidth] = useState(0);
+  useLayoutEffect(() => {
+    if (visibleWidth > fitWidth) setFitWidth(visibleWidth);
+  }, [visibleWidth, fitWidth]);
+  const graphWidth =
+    columns.graph ?? Math.min(Math.max(fitWidth, visibleWidth), graphWidthFor(MAX_AUTO_LANES));
+  const clipped = widestRow > graphWidth;
+  const refit = () => {
+    columns.set("graph", null);
+    setFitWidth(0);
+  };
 
   // Scroll the selected commit into view when asked to (e.g. from the sidebar).
   useEffect(() => {
@@ -143,7 +187,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
 
   return (
     <div className="flex h-full min-w-0 flex-col">
-      <Header graphWidth={graphWidth} />
+      <Header graphWidth={graphWidth} onFitGraph={refit} />
       <ContextMenu>
         <ContextMenuTrigger
           render={
@@ -168,6 +212,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
                     lane={headRow?.hash === headHash ? (headRow?.lane ?? 0) : 0}
                     color={headRow?.hash === headHash ? (headRow?.color ?? 0) : 0}
                     graphWidth={graphWidth}
+                    clipped={clipped}
                     selected={selection?.kind === "wip"}
                     onSelect={() => select(repo, { kind: "wip" })}
                     onContextMenu={() => onRowContextMenu(null)}
@@ -184,6 +229,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
                   row={row}
                   refs={refsByHash.get(row.hash) ?? EMPTY_REFS}
                   graphWidth={graphWidth}
+                  clipped={clipped}
                   isHead={row.hash === headHash}
                   isStash={stashes.has(row.hash)}
                   wipAbove={offset > 0 && index === 0 && row.hash === headHash}
@@ -221,25 +267,31 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
 // Header with resizable columns
 // ---------------------------------------------------------------------------
 
-function Header({ graphWidth }: { graphWidth: number }) {
+function Header({ graphWidth, onFitGraph }: { graphWidth: number; onFitGraph: () => void }) {
   const columns = useColumns();
   return (
     <div className="text-muted-foreground bg-background flex h-7 shrink-0 items-center border-b text-[10px] font-semibold tracking-wider uppercase select-none">
       <div className="relative shrink-0 truncate px-3" style={{ width: columns.refs }}>
         Branch / Tag
-        <Resizer onResize={(d) => columns.set("refs", Math.max(60, columns.refs + d))} />
+        <Resizer width={columns.refs} min={60} onResize={(w) => columns.set("refs", w)} />
       </div>
       <div className="relative shrink-0 truncate px-2" style={{ width: graphWidth }}>
         Graph
-        <Resizer onResize={(d) => columns.set("graph", Math.max(LANE_WIDTH * 2, graphWidth + d))} />
+        <Resizer
+          width={graphWidth}
+          min={LANE_WIDTH * 2}
+          onResize={(w) => columns.set("graph", w)}
+          onReset={onFitGraph}
+          title="Drag to resize, double-click to fit the lanes"
+        />
       </div>
       <div className="min-w-0 flex-1 truncate px-2">Commit message</div>
       <div className="relative shrink-0 truncate px-2" style={{ width: columns.author }}>
-        <Resizer left onResize={(d) => columns.set("author", Math.max(40, columns.author - d))} />
+        <Resizer left width={columns.author} min={40} onResize={(w) => columns.set("author", w)} />
         Author
       </div>
       <div className="relative shrink-0 truncate px-2" style={{ width: columns.date }}>
-        <Resizer left onResize={(d) => columns.set("date", Math.max(40, columns.date - d))} />
+        <Resizer left width={columns.date} min={40} onResize={(w) => columns.set("date", w)} />
         Date
       </div>
       <div className="w-[76px] shrink-0 truncate px-2">SHA</div>
@@ -247,21 +299,40 @@ function Header({ graphWidth }: { graphWidth: number }) {
   );
 }
 
-function Resizer({ onResize, left }: { onResize: (delta: number) => void; left?: boolean }) {
+/** Drag handle on a column's edge; `left` handles grow the column when dragged left. */
+function Resizer({
+  width,
+  min,
+  onResize,
+  onReset,
+  left,
+  title,
+}: {
+  width: number;
+  min: number;
+  onResize: (width: number) => void;
+  onReset?: () => void;
+  left?: boolean;
+  title?: string;
+}) {
   return (
     <div
       className={cn(
         "hover:bg-primary/60 absolute top-0 z-10 h-full w-1 cursor-col-resize",
         left ? "left-0" : "right-0",
       )}
+      title={title}
+      onDoubleClick={onReset}
       onPointerDown={(e) => {
         e.preventDefault();
         const target = e.currentTarget;
         target.setPointerCapture(e.pointerId);
-        let last = e.clientX;
+        // Measure from where the drag started: this handler outlives the render it came from.
+        const start = width;
+        const x0 = e.clientX;
         const move = (ev: PointerEvent) => {
-          onResize(ev.clientX - last);
-          last = ev.clientX;
+          const delta = ev.clientX - x0;
+          onResize(Math.max(min, start + (left ? -delta : delta)));
         };
         const up = () => {
           target.removeEventListener("pointermove", move);
@@ -290,6 +361,8 @@ interface CommitRowProps {
   readonly row: GraphRow;
   readonly refs: readonly Ref[];
   readonly graphWidth: number;
+  /** The graph column cuts off rows on screen. */
+  readonly clipped: boolean;
   readonly isHead: boolean;
   readonly isStash: boolean;
   readonly wipAbove: boolean;
@@ -321,7 +394,10 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
           onDoubleClick={(r) => void commands.checkoutRef(p.repo, r)}
         />
       </div>
-      <div className="shrink-0 overflow-hidden" style={{ width: p.graphWidth }}>
+      <div
+        className={cn("relative shrink-0 overflow-hidden", p.clipped && CLIPPED)}
+        style={{ width: p.graphWidth }}
+      >
         <GraphCell
           row={row}
           width={p.graphWidth}
@@ -366,6 +442,7 @@ function WipRow(p: {
   lane: number;
   color: number;
   graphWidth: number;
+  clipped: boolean;
   selected: boolean;
   onSelect: () => void;
   onContextMenu: () => void;
@@ -379,7 +456,10 @@ function WipRow(p: {
       onContextMenu={p.onContextMenu}
     >
       <div className="shrink-0" style={{ width: columns.refs }} />
-      <div className="shrink-0 overflow-hidden" style={{ width: p.graphWidth }}>
+      <div
+        className={cn("relative shrink-0 overflow-hidden", p.clipped && CLIPPED)}
+        style={{ width: p.graphWidth }}
+      >
         <WipGraphCell lane={p.lane} color={p.color} width={p.graphWidth} />
       </div>
       <div className="text-muted-foreground flex min-w-0 flex-1 items-center gap-2 px-2 italic">

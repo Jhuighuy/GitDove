@@ -327,3 +327,76 @@ it("resizes columns by dragging the header borders", async () => {
   await drag(refs!, -30);
   await drag(author!, 40 - authorBefore);
 });
+
+/** Drags a header cell's resize handle through `xs`, re-rendering between moves. */
+const dragSteps = async (cell: HTMLElement, xs: number[]) => {
+  const handle = cell.querySelector<HTMLElement>(".cursor-col-resize")!;
+  handle.setPointerCapture = () => {};
+  const fire = (type: string, x: number) =>
+    handle.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, pointerId: 1 }));
+  await act(async () => fire("pointerdown", 100));
+  for (const x of xs) await act(async () => fire("pointermove", x));
+  await act(async () => fire("pointerup", xs.at(-1)!));
+};
+const headerCells = () =>
+  [...container.querySelector<HTMLElement>(".h-7")!.children] as HTMLElement[];
+const width = (el: HTMLElement) => Number.parseInt(el.style.width);
+
+it("follows the pointer through a drag instead of snapping back", async () => {
+  await render();
+  const refs = headerCells()[0]!;
+  const before = width(refs);
+  await dragSteps(refs, [110, 120, 130]);
+  expect(width(headerCells()[0]!)).toBe(before + 30);
+  await dragSteps(headerCells()[0]!, [90, 80, 70]);
+  expect(width(headerCells()[0]!)).toBe(before);
+});
+
+it("fits the graph column to the rows on screen, not the widest point in history", async () => {
+  // The history is 20 lanes wide somewhere, but the rows on screen use one lane.
+  mocks.info = { version: 1, count: 5, complete: true, maxLanes: 20 };
+  await render();
+  expect(width(headerCells()[1]!)).toBe(6 * 2 + 3 * 16);
+  // Nothing is cut: no shadow.
+  expect(container.querySelectorAll('[class*="after:bg-linear-to-l"]')).toHaveLength(0);
+});
+
+it("fits the graph column to the lanes, up to a limit, and shades its edge when cut", async () => {
+  // 20 lanes are more than the column grows to; one row uses lane 15.
+  mocks.info = { version: 1, count: 5, complete: true, maxLanes: 20 };
+  mocks.rows = Array.from({ length: 5 }, (_, i) =>
+    commit(i, i === 2 ? { lane: 15, edges: [15, 1, 15, 2, 3] } : {}),
+  );
+  await render();
+  const graph = () => headerCells()[1]!;
+  const fitted = width(graph());
+  expect(fitted).toBe(6 * 2 + 12 * 16);
+  const shaded = [...container.querySelectorAll(`svg[height="28"]`)].map((svg) =>
+    svg.parentElement!.className.includes("after:bg-linear-to-l"),
+  );
+  // One cut row shades the whole column's edge, but not the header.
+  expect(shaded).toEqual([true, true, true, true, true]);
+  expect(graph().className).not.toContain("after:bg-linear-to-l");
+
+  // A resized column keeps its width; double-clicking the handle fits the lanes again.
+  await dragSteps(graph(), [120, 140]);
+  expect(width(graph())).toBe(fitted + 40);
+  await act(async () => {
+    graph()
+      .querySelector(".cursor-col-resize")!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
+  expect(width(graph())).toBe(fitted);
+});
+
+it("ignores wide rows rendered below the viewport", async () => {
+  // 400px of viewport shows rows 0-14; row 20 is only rendered as overscan.
+  mocks.info = { version: 1, count: 40, complete: true, maxLanes: 20 };
+  mocks.rows = Array.from({ length: 40 }, (_, i) =>
+    commit(i, i === 20 ? { lane: 15, edges: [15, 1, 15, 2, 3] } : {}),
+  );
+  await render();
+  expect(container.textContent).toContain("Commit 20");
+  expect(width(headerCells()[1]!)).toBe(6 * 2 + 3 * 16);
+  expect(container.querySelectorAll('[class*="after:bg-linear-to-l"]')).toHaveLength(0);
+});

@@ -11,6 +11,14 @@ const ly = (y: number) => (y * ROW_HEIGHT) / 2;
 
 export const graphWidthFor = (lanes: number) => PAD * 2 + Math.max(1, lanes) * LANE_WIDTH;
 
+/** Width a row's lanes need, to tell whether a narrower column cuts them off. */
+export const rowGraphWidth = (row: GraphRow): number => {
+  let max = row.lane;
+  const e = row.edges;
+  for (let i = 0; i < e.length; i += 5) max = Math.max(max, e[i]!, e[i + 2]!);
+  return graphWidthFor(max + 1);
+};
+
 const edgePath = (x1: number, y1: number, x2: number, y2: number) => {
   const ax = lx(x1);
   const ay = ly(y1);

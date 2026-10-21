@@ -23,6 +23,7 @@ import {
   NotARepositoryError,
   type SshError,
   StaleGraphError,
+  WorktreeNeedsForceError,
 } from "../exec/errors";
 import type { ExecOptions, Host } from "../exec/hosts";
 import { shellQuote } from "../exec/shell";
@@ -1040,8 +1041,58 @@ export class Repository {
     );
   }
 
-  removeWorktree(path: string, force: boolean) {
-    return this.run(["worktree", "remove", ...(force ? ["--force"] : []), "--", path]);
+  removeWorktree(
+    path: string,
+    force: boolean,
+  ): Effect.Effect<void, GitError | WorktreeNeedsForceError> {
+    // Forcing twice also removes a locked worktree.
+    if (force) return this.run(["worktree", "remove", "--force", "--force", "--", path]);
+    return this.run(["worktree", "remove", "--", path]).pipe(
+      Effect.catchTag("CommandError", (e) =>
+        this.worktreeNeedsForce(path).pipe(
+          Effect.flatMap((needs) =>
+            Effect.fail(
+              needs ? new WorktreeNeedsForceError({ message: e.message, stderr: e.stderr }) : e,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /**
+   * Whether forcing would remove a worktree that git refused to: it is locked or has changes.
+   * Checked from git's porcelain output rather than its messages, which are translated. The
+   * lock is read from the main repository, since a locked worktree's folder may be gone.
+   */
+  private worktreeNeedsForce(path: string): Effect.Effect<boolean> {
+    // git lists worktrees by their resolved path; the folder, if it is still there, says its own.
+    const resolved = this.gitText(["-C", path, "rev-parse", "--show-toplevel"]).pipe(
+      Effect.map((s) => s.trim()),
+      Effect.orElseSucceed(() => path),
+    );
+    const locked = Effect.all([
+      this.gitText(["worktree", "list", "--porcelain"]).pipe(Effect.map(parseWorktrees)),
+      resolved,
+    ]).pipe(
+      Effect.map(([worktrees, top]) =>
+        worktrees.some((w) => w.locked && (w.path === path || w.path === top)),
+      ),
+    );
+    // `-C` takes the next argument as its value, so the path cannot be read as an option.
+    const dirty = this.gitText(["-C", path, "status", "--porcelain"]).pipe(
+      Effect.map((out) => out.length > 0),
+      Effect.orElseSucceed(() => false),
+    );
+    // Git also refuses worktrees with checked out submodules ("-" marks uninitialized ones).
+    const submodules = this.gitText(["-C", path, "submodule", "status"]).pipe(
+      Effect.map((out) => lines(out).some((l) => !l.startsWith("-"))),
+      Effect.orElseSucceed(() => false),
+    );
+    return Effect.all([locked, dirty, submodules], { concurrency: "unbounded" }).pipe(
+      Effect.map((reasons) => reasons.some(Boolean)),
+      Effect.orElseSucceed(() => false),
+    );
   }
 
   pruneWorktrees() {

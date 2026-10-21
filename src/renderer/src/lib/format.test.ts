@@ -24,6 +24,16 @@ it("formats relative times in the largest fitting unit", () => {
   expect(relativeTime(now + 3 * 3600, now)).toBe("in 3 hours");
 });
 
+it("rounds up to the next unit instead of showing its count in the smaller one", () => {
+  const day = 24 * 3600;
+  expect(relativeTime(now - 362 * day, now)).toBe("last year");
+  expect(relativeTime(now - 6.6 * day, now)).toBe("last week");
+  expect(relativeTime(now - 23.6 * 3600, now)).toBe("yesterday");
+  expect(relativeTime(now - 59.6 * 60, now)).toBe("1 hour ago");
+  expect(relativeTime(now + 362 * day, now)).toBe("next year");
+  expect(relativeTime(now - 11.4 * 30 * day, now)).toBe("11 months ago");
+});
+
 it("defaults relative times to the current clock", () => {
   expect(relativeTime(Date.now() / 1000)).toBe("just now");
 });

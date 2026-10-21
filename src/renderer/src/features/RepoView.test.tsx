@@ -221,3 +221,22 @@ it("closes the tab of a repository that fails to open", async () => {
   await act(async () => button("Close").click());
   expect(useTabs.getState().recent).toEqual([]);
 });
+
+it("gives each tab's panels their own ids", async () => {
+  // The panel library keys layout state by id; a shared one made a tab opened after a hidden
+  // one keep that tab's unmeasured layout.
+  const client = new QueryClient();
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <RepoView repo={repo} active={false} />
+        <RepoView repo={`${repo}-other`} active />
+      </QueryClientProvider>,
+    ),
+  );
+  await settle();
+  const ids = [...container.querySelectorAll("[id]")].map((el) => el.id);
+  const groups = [...container.querySelectorAll('[data-slot="resizable-panel-group"]')];
+  expect(groups).toHaveLength(2);
+  expect(new Set(ids).size).toBe(ids.length);
+});

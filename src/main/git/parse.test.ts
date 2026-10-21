@@ -6,6 +6,7 @@ import {
   parseNumstat,
   parseRefs,
   parseRemotes,
+  parseWorktrees,
   parseStatus,
 } from "./parse";
 
@@ -136,6 +137,23 @@ describe("parseRemotes", () => {
     expect(parseRemotes(out)).toEqual([
       { name: "origin", fetchUrl: "git@github.com:a/b.git", pushUrl: "git@github.com:a/b.git" },
       { name: "local", fetchUrl: "/srv/my repos/b.git", pushUrl: "ssh://host/b.git" },
+    ]);
+  });
+});
+
+describe("parseWorktrees", () => {
+  it("reads paths, heads, branches and locks", () => {
+    const out = [
+      "worktree /repo\nHEAD h0\nbranch refs/heads/main\n",
+      "worktree /wt/a\nHEAD h1\ndetached\nlocked\n",
+      "worktree /wt/b\nHEAD h2\nbranch refs/heads/b\nlocked moved to a USB drive\n",
+      "worktree /wt/c\nHEAD h3\nbranch refs/heads/c\nprunable gitdir file points to non-existent location\n",
+    ].join("\n");
+    expect(parseWorktrees(out)).toEqual([
+      { path: "/repo", hash: "h0", branch: "main", isMain: true, locked: false },
+      { path: "/wt/a", hash: "h1", branch: null, isMain: false, locked: true },
+      { path: "/wt/b", hash: "h2", branch: "b", isMain: false, locked: true },
+      { path: "/wt/c", hash: "h3", branch: "c", isMain: false, locked: false },
     ]);
   });
 });

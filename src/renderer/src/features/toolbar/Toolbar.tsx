@@ -27,6 +27,14 @@ import { cn } from "@/lib/utils";
 import { useLayout } from "@/stores/repo-ui";
 import { commands } from "../commands";
 
+/**
+ * A button with a menu beside it: two halves that meet at a seam, each with its own hover, and
+ * a lighter hover over both so they read as one control.
+ */
+const SPLIT = "hover:bg-muted/40 flex items-center rounded-lg";
+const SPLIT_MENU =
+  "text-muted-foreground hover:text-foreground hover:bg-muted data-[popup-open]:bg-muted flex h-11 w-4 items-center justify-center rounded-l-none rounded-r-lg";
+
 function ToolButton({
   label,
   icon,
@@ -34,6 +42,7 @@ function ToolButton({
   disabled,
   badge,
   tooltip,
+  className,
 }: {
   label: string;
   icon: React.ReactNode;
@@ -41,6 +50,7 @@ function ToolButton({
   disabled?: boolean;
   badge?: number;
   tooltip?: string;
+  className?: string;
 }) {
   return (
     <Tooltip>
@@ -50,7 +60,10 @@ function ToolButton({
             type="button"
             disabled={disabled}
             onClick={onClick}
-            className="text-muted-foreground hover:text-foreground hover:bg-muted relative flex h-11 w-14 flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] disabled:opacity-40 [&_svg]:size-[18px]"
+            className={cn(
+              "text-muted-foreground hover:text-foreground hover:bg-muted relative flex h-11 w-14 flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] disabled:opacity-40 [&_svg]:size-[18px]",
+              className,
+            )}
           />
         }
       >
@@ -107,8 +120,9 @@ export function Toolbar({ repo }: { repo: RepoId }) {
       </div>
 
       <div className="flex items-center gap-0.5">
-        <div className="flex items-center">
+        <div className={SPLIT}>
           <ToolButton
+            className="w-12 rounded-r-none"
             label="Pull"
             icon={<IconArrowDown />}
             badge={head?.behind}
@@ -117,12 +131,7 @@ export function Toolbar({ repo }: { repo: RepoId }) {
           />
           <DropdownMenu>
             <DropdownMenuTrigger
-              render={
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:bg-muted -ml-2 flex h-11 w-4 items-center justify-center rounded"
-                />
-              }
+              render={<button type="button" aria-label="More options" className={SPLIT_MENU} />}
             >
               <IconChevronDown className="size-3" />
             </DropdownMenuTrigger>
@@ -143,8 +152,9 @@ export function Toolbar({ repo }: { repo: RepoId }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <div className="flex items-center">
+        <div className={SPLIT}>
           <ToolButton
+            className="w-12 rounded-r-none"
             label="Push"
             icon={<IconArrowUp />}
             badge={head?.ahead}
@@ -152,12 +162,7 @@ export function Toolbar({ repo }: { repo: RepoId }) {
           />
           <DropdownMenu>
             <DropdownMenuTrigger
-              render={
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:bg-muted -ml-2 flex h-11 w-4 items-center justify-center rounded"
-                />
-              }
+              render={<button type="button" aria-label="More options" className={SPLIT_MENU} />}
             >
               <IconChevronDown className="size-3" />
             </DropdownMenuTrigger>

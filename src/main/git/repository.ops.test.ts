@@ -481,8 +481,28 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
 
     await run(repo.addWorktree(wt, "main~1", null));
     await sh(`echo dirty > '${wt}/f.txt'`);
-    expect((await fails(repo.removeWorktree(wt, false)))._tag).toBe("CommandError");
+    expect((await fails(repo.removeWorktree(wt, false)))._tag).toBe("WorktreeNeedsForceError");
     await run(repo.removeWorktree(wt, true));
+    // Forcing also removes a locked worktree.
+    await run(repo.addWorktree(wt, "main~1", null));
+    await sh(`git worktree lock '${wt}'`);
+    expect((await fails(repo.removeWorktree(wt, false)))._tag).toBe("WorktreeNeedsForceError");
+    await run(repo.removeWorktree(wt, true));
+    // A locked worktree whose folder is gone can still be forced.
+    await run(repo.addWorktree(wt, "main~1", null));
+    await sh(`git worktree lock '${wt}' && rm -rf -- '${wt}'`);
+    // The sidebar passes the path as git lists it (resolved, e.g. /private/tmp on macOS).
+    const [gone] = (await run(repo.refs())).worktrees.filter((w) => w.locked);
+    expect((await fails(repo.removeWorktree(gone!.path, false)))._tag).toBe(
+      "WorktreeNeedsForceError",
+    );
+    await run(repo.removeWorktree(gone!.path, true));
+    expect((await run(repo.refs())).worktrees).toHaveLength(1);
+    // Other failures are not something forcing fixes.
+    expect((await fails(repo.removeWorktree(`${root}/no-such-worktree`, false)))._tag).toBe(
+      "CommandError",
+    );
+    expect((await run(repo.refs())).worktrees).toHaveLength(1);
 
     await sh(
       `git -c protocol.file.allow=always submodule add -q '${origin}' sub && git commit -qm sub && ` +
@@ -492,6 +512,14 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     await sh("git config protocol.file.allow always");
     await run(repo.updateSubmodule("sub"));
     expect(await sh("cat sub/f.txt")).toBe("a\nb\nc\nd");
+
+    // A worktree with a checked out submodule is clean, but git removes it only by force.
+    const subWt = `${root}/subwt${n}`;
+    await run(repo.addWorktree(subWt, "HEAD", null));
+    await sh(`git -c protocol.file.allow=always -C '${subWt}' submodule update -q --init`);
+    expect(await sh(`git -C '${subWt}' status --porcelain`)).toBe("");
+    expect((await fails(repo.removeWorktree(subWt, false)))._tag).toBe("WorktreeNeedsForceError");
+    await run(repo.removeWorktree(subWt, true));
   });
 });
 
