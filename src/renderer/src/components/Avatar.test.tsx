@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import type { AvatarProvider } from "@shared/avatars";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Avatar, useAvatarProviders } from "./Avatar";
@@ -39,7 +39,11 @@ function Probe({
   repo: string;
   onValue: (v: readonly AvatarProvider[]) => void;
 }) {
-  onValue(useAvatarProviders(repo));
+  const value = useAvatarProviders(repo);
+  // Report after commit: renders can be replayed or dropped.
+  useEffect(() => {
+    onValue(value);
+  });
   return null;
 }
 
