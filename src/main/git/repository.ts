@@ -16,8 +16,9 @@ import type {
 import { repoDisplayName, repoIdOf } from "@shared/domain";
 import { isHidden, stashKey } from "@shared/visibility";
 import type { ResetMode } from "@shared/ipc";
-import { Deferred, Effect, Fiber } from "effect";
+import { Deferred, Effect, Fiber, Semaphore } from "effect";
 import {
+  CancelledError,
   CommandError,
   InvalidInputError,
   NotARepositoryError,
@@ -246,6 +247,8 @@ export class Repository {
   private graphReady: Deferred.Deferred<void, GitError> | null = null;
   private nextVersion = 1;
   private hiddenRefs: readonly string[] = [];
+  private readonly writes = Semaphore.makeUnsafe(1);
+  private cancelSignal: Deferred.Deferred<void> | null = null;
 
   private constructor(
     readonly id: RepoId,
@@ -294,8 +297,42 @@ export class Repository {
     return this.git(args, { idempotent: true, ...options }).pipe(Effect.map(text));
   }
 
+  /** Runs a git command for its effects; callers hold the write lock (see {@link write}). */
   private run(args: readonly string[], options: ExecOptions = {}): Effect.Effect<void, GitError> {
     return this.git(args, options).pipe(Effect.asVoid);
+  }
+
+  /**
+   * Runs a repository-changing operation once the previous one has finished, so
+   * that operations never collide on git's locks or interleave their steps.
+   * Queries do not take the lock: they run with `GIT_OPTIONAL_LOCKS=0`.
+   */
+  private write<A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> {
+    return this.writes.withPermits(1)(effect);
+  }
+
+  /** Like {@link write}, but {@link cancel} can stop it, killing its command. */
+  private cancellableWrite<A, E>(
+    effect: Effect.Effect<A, E>,
+  ): Effect.Effect<A, E | CancelledError> {
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        const cancelled = yield* Deferred.make<void>();
+        this.cancelSignal = cancelled;
+        return yield* Effect.raceFirst(
+          effect,
+          Deferred.await(cancelled).pipe(
+            Effect.andThen(Effect.fail(new CancelledError({ message: "Operation was cancelled" }))),
+          ),
+        ).pipe(Effect.ensuring(Effect.sync(() => (this.cancelSignal = null))));
+      }),
+    );
+  }
+
+  /** Cancels the running network operation (fetch, pull or push), if any. */
+  cancel(): Effect.Effect<void> {
+    const signal = this.cancelSignal;
+    return signal ? Deferred.succeed(signal, undefined).pipe(Effect.asVoid) : Effect.void;
   }
 
   // -------------------------------------------------------------------------
@@ -709,63 +746,73 @@ export class Repository {
   // -------------------------------------------------------------------------
 
   stage(paths: readonly string[]) {
-    return paths.length === 0
-      ? Effect.void
-      : this.run(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], {
-          stdin: paths.join("\0"),
-        });
+    return this.write(
+      paths.length === 0
+        ? Effect.void
+        : this.run(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], {
+            stdin: paths.join("\0"),
+          }),
+    );
   }
 
   stageAll() {
-    return this.run(["add", "-A"]);
+    return this.write(this.run(["add", "-A"]));
   }
 
   unstage(paths: readonly string[]) {
     if (paths.length === 0) return Effect.void;
-    return Effect.gen({ self: this }, function* () {
-      const hasHead = yield* this.hasHead();
-      yield* this.run(
-        hasHead
-          ? ["reset", "-q", "HEAD", "--pathspec-from-file=-", "--pathspec-file-nul"]
-          : ["rm", "--cached", "-r", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"],
-        { stdin: paths.join("\0"), okCodes: [0, 1] },
-      );
-    });
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        const hasHead = yield* this.hasHead();
+        yield* this.run(
+          hasHead
+            ? ["reset", "-q", "HEAD", "--pathspec-from-file=-", "--pathspec-file-nul"]
+            : ["rm", "--cached", "-r", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"],
+          { stdin: paths.join("\0"), okCodes: [0, 1] },
+        );
+      }),
+    );
   }
 
   unstageAll() {
-    return Effect.gen({ self: this }, function* () {
-      const hasHead = yield* this.hasHead();
-      yield* this.run(hasHead ? ["reset", "-q"] : ["rm", "--cached", "-r", "-q", "."], {
-        okCodes: [0, 1],
-      });
-    });
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        const hasHead = yield* this.hasHead();
+        yield* this.run(hasHead ? ["reset", "-q"] : ["rm", "--cached", "-r", "-q", "."], {
+          okCodes: [0, 1],
+        });
+      }),
+    );
   }
 
   discard(paths: readonly string[], untracked: readonly string[]) {
-    return Effect.gen({ self: this }, function* () {
-      if (paths.length > 0) {
-        yield* this.run(["checkout", "--pathspec-from-file=-", "--pathspec-file-nul", "--"], {
-          stdin: paths.join("\0"),
-        });
-      }
-      if (untracked.length > 0) {
-        yield* this.run(["clean", "-f", "-q", "--", ...untracked]);
-      }
-    });
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        if (paths.length > 0) {
+          yield* this.run(["checkout", "--pathspec-from-file=-", "--pathspec-file-nul", "--"], {
+            stdin: paths.join("\0"),
+          });
+        }
+        if (untracked.length > 0) {
+          yield* this.run(["clean", "-f", "-q", "--", ...untracked]);
+        }
+      }),
+    );
   }
 
   applyPatch(patch: string, opts: { cached: boolean; reverse: boolean }) {
-    return this.run(
-      [
-        "apply",
-        "--whitespace=nowarn",
-        "--recount",
-        ...(opts.cached ? ["--cached"] : []),
-        ...(opts.reverse ? ["--reverse"] : []),
-        "-",
-      ],
-      { stdin: patch },
+    return this.write(
+      this.run(
+        [
+          "apply",
+          "--whitespace=nowarn",
+          "--recount",
+          ...(opts.cached ? ["--cached"] : []),
+          ...(opts.reverse ? ["--reverse"] : []),
+          "-",
+        ],
+        { stdin: patch },
+      ),
     );
   }
 
@@ -776,136 +823,160 @@ export class Repository {
     if (!message.trim() && !opts.amend) {
       return Effect.fail(new InvalidInputError({ message: "Commit message is empty" }));
     }
-    return this.run(["commit", "--cleanup=strip", "-F", "-", ...(opts.amend ? ["--amend"] : [])], {
-      stdin: message,
-    });
+    return this.write(
+      this.run(["commit", "--cleanup=strip", "-F", "-", ...(opts.amend ? ["--amend"] : [])], {
+        stdin: message,
+      }),
+    );
   }
 
-  // -------------------------------------------------------------------------
-  // Branches, tags, history rewriting
-  // -------------------------------------------------------------------------
-
   checkout(ref: string) {
-    return validateRev(ref).pipe(Effect.andThen(this.run(["checkout", "-q", ref, "--"])));
+    return this.write(
+      validateRev(ref).pipe(Effect.andThen(this.run(["checkout", "-q", ref, "--"]))),
+    );
   }
 
   checkoutRemote(remoteRef: string, localName: string) {
-    return Effect.all([validateRev(remoteRef), validateBranchName(localName)]).pipe(
-      Effect.andThen(this.run(["checkout", "-q", "-b", localName, "--track", remoteRef])),
+    return this.write(
+      Effect.all([validateRev(remoteRef), validateBranchName(localName)]).pipe(
+        Effect.andThen(this.run(["checkout", "-q", "-b", localName, "--track", remoteRef])),
+      ),
     );
   }
 
   createBranch(name: string, at: string, checkout: boolean) {
-    return Effect.all([validateBranchName(name), validateRev(at)]).pipe(
-      Effect.andThen(
-        checkout ? this.run(["checkout", "-q", "-b", name, at]) : this.run(["branch", name, at]),
+    return this.write(
+      Effect.all([validateBranchName(name), validateRev(at)]).pipe(
+        Effect.andThen(
+          checkout ? this.run(["checkout", "-q", "-b", name, at]) : this.run(["branch", name, at]),
+        ),
       ),
     );
   }
 
   deleteBranch(name: string, force: boolean) {
-    return validateBranchName(name).pipe(
-      Effect.andThen(this.run(["branch", force ? "-D" : "-d", name])),
+    return this.write(
+      validateBranchName(name).pipe(
+        Effect.andThen(this.run(["branch", force ? "-D" : "-d", name])),
+      ),
     );
   }
 
   deleteRemoteBranch(remote: string, name: string) {
-    return this.run(["push", remote, "--delete", name]);
+    return this.cancellableWrite(this.run(["push", remote, "--delete", name]));
   }
 
   renameBranch(oldName: string, newName: string) {
-    return validateBranchName(newName).pipe(
-      Effect.andThen(this.run(["branch", "-m", oldName, newName])),
+    return this.write(
+      validateBranchName(newName).pipe(
+        Effect.andThen(this.run(["branch", "-m", oldName, newName])),
+      ),
     );
   }
 
   setUpstream(branch: string, upstream: string | null) {
-    return upstream
-      ? this.run(["branch", `--set-upstream-to=${upstream}`, branch])
-      : this.run(["branch", "--unset-upstream", branch]);
+    return this.write(
+      upstream
+        ? this.run(["branch", `--set-upstream-to=${upstream}`, branch])
+        : this.run(["branch", "--unset-upstream", branch]),
+    );
   }
 
   createTag(name: string, at: string, message: string | null) {
-    return validateRev(at).pipe(
-      Effect.andThen(
-        message
-          ? // Keep lines starting with "#" (the default cleanup strips them as comments).
-            this.run(["tag", "-a", "--cleanup=whitespace", name, at, "-F", "-"], { stdin: message })
-          : this.run(["tag", name, at]),
+    return this.write(
+      validateRev(at).pipe(
+        Effect.andThen(
+          message
+            ? // Keep lines starting with "#" (the default cleanup strips them as comments).
+              this.run(["tag", "-a", "--cleanup=whitespace", name, at, "-F", "-"], {
+                stdin: message,
+              })
+            : this.run(["tag", name, at]),
+        ),
       ),
     );
   }
 
   deleteTag(name: string) {
-    return this.run(["tag", "-d", name]);
+    return this.write(this.run(["tag", "-d", name]));
   }
 
   merge(ref: string, opts: { ffOnly?: boolean; noFf?: boolean }) {
-    return validateRev(ref).pipe(
-      Effect.andThen(
-        this.run([
-          "merge",
-          "--no-edit",
-          ...(opts.ffOnly ? ["--ff-only"] : []),
-          ...(opts.noFf ? ["--no-ff"] : []),
-          ref,
-        ]),
+    return this.write(
+      validateRev(ref).pipe(
+        Effect.andThen(
+          this.run([
+            "merge",
+            "--no-edit",
+            ...(opts.ffOnly ? ["--ff-only"] : []),
+            ...(opts.noFf ? ["--no-ff"] : []),
+            ref,
+          ]),
+        ),
       ),
     );
   }
 
   rebase(onto: string) {
-    return validateRev(onto).pipe(Effect.andThen(this.run(["rebase", onto])));
+    return this.write(validateRev(onto).pipe(Effect.andThen(this.run(["rebase", onto]))));
   }
 
   cherryPick(hash: string) {
-    return validateRev(hash).pipe(Effect.andThen(this.run(["cherry-pick", hash])));
+    return this.write(validateRev(hash).pipe(Effect.andThen(this.run(["cherry-pick", hash]))));
   }
 
   revert(hash: string) {
-    return validateRev(hash).pipe(Effect.andThen(this.run(["revert", "--no-edit", hash])));
+    return this.write(
+      validateRev(hash).pipe(Effect.andThen(this.run(["revert", "--no-edit", hash]))),
+    );
   }
 
   reset(hash: string, mode: ResetMode) {
-    return validateRev(hash).pipe(Effect.andThen(this.run(["reset", `--${mode}`, "-q", hash])));
+    return this.write(
+      validateRev(hash).pipe(Effect.andThen(this.run(["reset", `--${mode}`, "-q", hash]))),
+    );
   }
 
   abortOperation() {
-    return Effect.gen({ self: this }, function* () {
-      const info = yield* this.info();
-      switch (info.state) {
-        case "merging":
-          return yield* this.run(["merge", "--abort"]);
-        case "rebasing":
-          return yield* this.run(["rebase", "--abort"]);
-        case "cherry-picking":
-          return yield* this.run(["cherry-pick", "--abort"]);
-        case "reverting":
-          return yield* this.run(["revert", "--abort"]);
-        case "bisecting":
-          return yield* this.run(["bisect", "reset"]);
-        case "clean":
-          return;
-      }
-    });
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        const info = yield* this.info();
+        switch (info.state) {
+          case "merging":
+            return yield* this.run(["merge", "--abort"]);
+          case "rebasing":
+            return yield* this.run(["rebase", "--abort"]);
+          case "cherry-picking":
+            return yield* this.run(["cherry-pick", "--abort"]);
+          case "reverting":
+            return yield* this.run(["revert", "--abort"]);
+          case "bisecting":
+            return yield* this.run(["bisect", "reset"]);
+          case "clean":
+            return;
+        }
+      }),
+    );
   }
 
   continueOperation() {
-    return Effect.gen({ self: this }, function* () {
-      const info = yield* this.info();
-      switch (info.state) {
-        case "merging":
-          return yield* this.run(["commit", "--no-edit"]);
-        case "rebasing":
-          return yield* this.run(["rebase", "--continue"]);
-        case "cherry-picking":
-          return yield* this.run(["cherry-pick", "--continue"]);
-        case "reverting":
-          return yield* this.run(["revert", "--continue"]);
-        default:
-          return;
-      }
-    });
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        const info = yield* this.info();
+        switch (info.state) {
+          case "merging":
+            return yield* this.run(["commit", "--no-edit"]);
+          case "rebasing":
+            return yield* this.run(["rebase", "--continue"]);
+          case "cherry-picking":
+            return yield* this.run(["cherry-pick", "--continue"]);
+          case "reverting":
+            return yield* this.run(["revert", "--continue"]);
+          default:
+            return;
+        }
+      }),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -913,24 +984,26 @@ export class Repository {
   // -------------------------------------------------------------------------
 
   stash(message: string | null, includeUntracked: boolean) {
-    return this.run([
-      "stash",
-      "push",
-      ...(includeUntracked ? ["--include-untracked"] : []),
-      ...(message ? ["-m", message] : []),
-    ]);
+    return this.write(
+      this.run([
+        "stash",
+        "push",
+        ...(includeUntracked ? ["--include-untracked"] : []),
+        ...(message ? ["-m", message] : []),
+      ]),
+    );
   }
 
   stashPop(index: number) {
-    return this.stashRun("pop", "--index", index);
+    return this.write(this.stashRun("pop", "--index", index));
   }
 
   stashApply(index: number) {
-    return this.stashRun("apply", "--index", index);
+    return this.write(this.stashRun("apply", "--index", index));
   }
 
   stashDrop(index: number) {
-    return this.stashRun("drop", null, index);
+    return this.write(this.stashRun("drop", null, index));
   }
 
   /** Runs `git stash <command>` on `stash@{index}`, rejecting invalid indices up front. */
@@ -949,94 +1022,103 @@ export class Repository {
   // -------------------------------------------------------------------------
 
   fetch(remote: string | null) {
-    return this.run(["fetch", "--prune", "--tags", ...(remote ? [remote] : ["--all"])]);
+    return this.cancellableWrite(
+      this.run(["fetch", "--prune", "--tags", ...(remote ? [remote] : ["--all"])]),
+    );
   }
 
   pull(mode: "ff-only" | "merge" | "rebase") {
-    return this.run([
-      "pull",
-      mode === "ff-only" ? "--ff-only" : mode === "rebase" ? "--rebase" : "--no-rebase",
-    ]);
+    return this.cancellableWrite(
+      this.run([
+        "pull",
+        mode === "ff-only" ? "--ff-only" : mode === "rebase" ? "--rebase" : "--no-rebase",
+      ]),
+    );
   }
 
   push(opts: { force: boolean; setUpstream: boolean }) {
-    return Effect.gen({ self: this }, function* () {
-      const args = ["push", ...(opts.force ? ["--force-with-lease"] : [])];
-      if (opts.setUpstream) {
-        const info = yield* this.info();
-        if (!info.head.branch) {
-          return yield* Effect.fail(
-            new InvalidInputError({ message: "Cannot push a detached HEAD" }),
-          );
+    return this.cancellableWrite(
+      Effect.gen({ self: this }, function* () {
+        const args = ["push", ...(opts.force ? ["--force-with-lease"] : [])];
+        if (opts.setUpstream) {
+          const info = yield* this.info();
+          if (!info.head.branch) {
+            return yield* Effect.fail(
+              new InvalidInputError({ message: "Cannot push a detached HEAD" }),
+            );
+          }
+          const remotes = parseRemotes(yield* this.gitText(["remote", "-v"]));
+          const remote = remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name;
+          if (!remote)
+            return yield* Effect.fail(new InvalidInputError({ message: "No remotes configured" }));
+          args.push("-u", remote, info.head.branch);
         }
-        const remotes = parseRemotes(yield* this.gitText(["remote", "-v"]));
-        const remote = remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name;
-        if (!remote)
-          return yield* Effect.fail(new InvalidInputError({ message: "No remotes configured" }));
-        args.push("-u", remote, info.head.branch);
-      }
-      yield* this.run(args);
-    });
+        yield* this.run(args);
+      }),
+    );
   }
 
   /** Pushes a (not necessarily checked out) branch, setting its upstream if it has none. */
   pushBranch(branch: string, force: boolean) {
-    return Effect.gen({ self: this }, function* () {
-      yield* validateBranchName(branch);
-      const [remote = "", merge = ""] = (yield* this.gitText([
-        "for-each-ref",
-        "--format=%(upstream:remotename)%00%(upstream:remoteref)",
-        `refs/heads/${branch}`,
-      ]))
-        .trim()
-        .split("\0");
-      const lease = force ? ["--force-with-lease"] : [];
-      if (remote && merge) {
-        return yield* this.run(["push", ...lease, remote, `refs/heads/${branch}:${merge}`]);
-      }
-      const remotes = parseRemotes(yield* this.gitText(["remote", "-v"]));
-      const target = remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name;
-      if (!target)
-        return yield* Effect.fail(new InvalidInputError({ message: "No remotes configured" }));
-      yield* this.run(["push", ...lease, "-u", target, branch]);
-    });
+    return this.cancellableWrite(
+      Effect.gen({ self: this }, function* () {
+        yield* validateBranchName(branch);
+        const [remote = "", merge = ""] = (yield* this.gitText([
+          "for-each-ref",
+          "--format=%(upstream:remotename)%00%(upstream:remoteref)",
+          `refs/heads/${branch}`,
+        ]))
+          .trim()
+          .split("\0");
+        const lease = force ? ["--force-with-lease"] : [];
+        if (remote && merge) {
+          return yield* this.run(["push", ...lease, remote, `refs/heads/${branch}:${merge}`]);
+        }
+        const remotes = parseRemotes(yield* this.gitText(["remote", "-v"]));
+        const target = remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name;
+        if (!target)
+          return yield* Effect.fail(new InvalidInputError({ message: "No remotes configured" }));
+        yield* this.run(["push", ...lease, "-u", target, branch]);
+      }),
+    );
   }
 
   /** Fast-forwards a branch that is not checked out to its upstream. */
   fastForwardBranch(branch: string) {
-    return Effect.gen({ self: this }, function* () {
-      yield* validateBranchName(branch);
-      const [remote = "", merge = ""] = (yield* this.gitText([
-        "for-each-ref",
-        "--format=%(upstream:remotename)%00%(upstream:remoteref)",
-        `refs/heads/${branch}`,
-      ]))
-        .trim()
-        .split("\0");
-      if (!remote || !merge) {
-        return yield* Effect.fail(
-          new InvalidInputError({ message: `${branch} has no upstream branch` }),
-        );
-      }
-      yield* this.run(["fetch", remote, `${merge}:refs/heads/${branch}`]);
-    });
+    return this.cancellableWrite(
+      Effect.gen({ self: this }, function* () {
+        yield* validateBranchName(branch);
+        const [remote = "", merge = ""] = (yield* this.gitText([
+          "for-each-ref",
+          "--format=%(upstream:remotename)%00%(upstream:remoteref)",
+          `refs/heads/${branch}`,
+        ]))
+          .trim()
+          .split("\0");
+        if (!remote || !merge) {
+          return yield* Effect.fail(
+            new InvalidInputError({ message: `${branch} has no upstream branch` }),
+          );
+        }
+        yield* this.run(["fetch", remote, `${merge}:refs/heads/${branch}`]);
+      }),
+    );
   }
 
   pushTag(remote: string, tag: string) {
-    return this.run(["push", remote, `refs/tags/${tag}`]);
+    return this.cancellableWrite(this.run(["push", remote, `refs/tags/${tag}`]));
   }
 
   deleteRemoteTag(remote: string, tag: string) {
-    return this.run(["push", remote, "--delete", `refs/tags/${tag}`]);
+    return this.cancellableWrite(this.run(["push", remote, "--delete", `refs/tags/${tag}`]));
   }
 
   addWorktree(path: string, ref: string, newBranch: string | null) {
-    return Effect.all([
-      validateRev(ref),
-      newBranch ? validateBranchName(newBranch) : Effect.void,
-    ]).pipe(
-      Effect.andThen(
-        this.run(["worktree", "add", ...(newBranch ? ["-b", newBranch] : []), "--", path, ref]),
+    return this.write(
+      Effect.all([validateRev(ref), newBranch ? validateBranchName(newBranch) : Effect.void]).pipe(
+        Effect.andThen(
+          this.run(["worktree", "add", ...(newBranch ? ["-b", newBranch] : []), "--", path, ref]),
+        ),
       ),
     );
   }
@@ -1045,18 +1127,22 @@ export class Repository {
     path: string,
     force: boolean,
   ): Effect.Effect<void, GitError | WorktreeNeedsForceError> {
-    // Forcing twice also removes a locked worktree.
-    if (force) return this.run(["worktree", "remove", "--force", "--force", "--", path]);
-    return this.run(["worktree", "remove", "--", path]).pipe(
-      Effect.catchTag("CommandError", (e) =>
-        this.worktreeNeedsForce(path).pipe(
-          Effect.flatMap((needs) =>
-            Effect.fail(
-              needs ? new WorktreeNeedsForceError({ message: e.message, stderr: e.stderr }) : e,
+    return this.write(
+      Effect.suspend(() => {
+        // Forcing twice also removes a locked worktree.
+        if (force) return this.run(["worktree", "remove", "--force", "--force", "--", path]);
+        return this.run(["worktree", "remove", "--", path]).pipe(
+          Effect.catchTag("CommandError", (e) =>
+            this.worktreeNeedsForce(path).pipe(
+              Effect.flatMap((needs) =>
+                Effect.fail(
+                  needs ? new WorktreeNeedsForceError({ message: e.message, stderr: e.stderr }) : e,
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      }),
     );
   }
 
@@ -1096,23 +1182,23 @@ export class Repository {
   }
 
   pruneWorktrees() {
-    return this.run(["worktree", "prune"]);
+    return this.write(this.run(["worktree", "prune"]));
   }
 
   updateSubmodule(path: string) {
-    return this.run(["submodule", "update", "--init", "--recursive", "--", path]);
+    return this.write(this.run(["submodule", "update", "--init", "--recursive", "--", path]));
   }
 
   setRemoteUrl(name: string, url: string) {
-    return this.run(["remote", "set-url", "--", name, url]);
+    return this.write(this.run(["remote", "set-url", "--", name, url]));
   }
 
   addRemote(name: string, url: string) {
-    return this.run(["remote", "add", "--", name, url]);
+    return this.write(this.run(["remote", "add", "--", name, url]));
   }
 
   removeRemote(name: string) {
-    return this.run(["remote", "remove", name]);
+    return this.write(this.run(["remote", "remove", name]));
   }
 
   private hasHead() {
