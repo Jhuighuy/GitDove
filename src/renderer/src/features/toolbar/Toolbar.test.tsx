@@ -242,12 +242,12 @@ it("shows the running operation and disables write actions meanwhile", async () 
     stashes: [{ index: 0, name: "stash@{0}", hash: "s", message: "m", time: 0 }],
   });
   await render();
-  expect(container.querySelector("[role='status']")).toBeNull();
+  expect(container.querySelector("output")).toBeNull();
 
   await act(async () =>
     useBusyStore.getState().start(REPO, { label: "Checking out feature…", cancellable: false }),
   );
-  expect(container.querySelector("[role='status']")?.textContent).toBe("Checking out feature…");
+  expect(container.querySelector("output")?.textContent).toBe("Checking out feature…");
   expect(container.querySelector("[aria-label='Cancel']")).toBeNull();
   for (const label of ["Pull", "Push", "Fetch", "Branch", "Stash", "Pop"]) {
     expect(tool(label).disabled).toBe(true);
@@ -260,7 +260,7 @@ it("shows the running operation and disables write actions meanwhile", async () 
   expect(tool("Terminal").disabled).toBe(false);
 
   await act(async () => useBusyStore.getState().finish(REPO));
-  expect(container.querySelector("[role='status']")).toBeNull();
+  expect(container.querySelector("output")).toBeNull();
   expect(tool("Pull").disabled).toBe(false);
 });
 

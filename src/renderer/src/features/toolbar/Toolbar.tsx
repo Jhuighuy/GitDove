@@ -85,8 +85,7 @@ function ToolButton({
 /** The running repository-changing operation, with a cancel button for network operations. */
 function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
   return (
-    <div
-      role="status"
+    <output
       className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs"
       title={busy.label}
     >
@@ -103,7 +102,7 @@ function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
           <IconX />
         </Button>
       )}
-    </div>
+    </output>
   );
 }
 

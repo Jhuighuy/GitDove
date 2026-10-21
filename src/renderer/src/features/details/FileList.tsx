@@ -55,7 +55,10 @@ export const FileList = memo(function FileList({
               selectedPath === f.path ? "bg-primary/25" : "hover:bg-muted/60",
             )}
             title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
-            onClick={() => onOpen(f)}
+            onClick={(e) => {
+              // Clicking an action (even a disabled one) doesn't open the file.
+              if (!(e.target as Element).closest("[data-row-actions]")) onOpen(f);
+            }}
             onContextMenu={() => onContextMenu?.(f)}
           >
             <ChangeBadge kind={f.kind} />
@@ -72,7 +75,10 @@ export const FileList = memo(function FileList({
               </span>
             )}
             {renderActions && (
-              <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+              <span
+                data-row-actions
+                className="hidden shrink-0 items-center gap-0.5 group-hover:flex"
+              >
                 {renderActions(f)}
               </span>
             )}

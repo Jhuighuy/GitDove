@@ -207,6 +207,9 @@ it("disables staging, discarding and committing while another operation runs", a
     // Disabled buttons get no pointer events: a wrapper explains why.
     expect(button(label).parentElement!.title).toBe(reason);
   }
+  // Clicking a disabled action (its tooltip wrapper gets the click) doesn't open the file.
+  await click(rowAction("staged.ts", 0).parentElement!);
+  expect(ui()?.diff ?? null).toBeNull();
   // Browsing still works.
   await click(row("src/edit.ts"));
   expect(ui()?.diff).toEqual({ kind: "unstaged", path: "src/edit.ts", untracked: false });

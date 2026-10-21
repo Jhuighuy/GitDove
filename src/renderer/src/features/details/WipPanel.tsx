@@ -269,7 +269,7 @@ function RowAction({
   return (
     <Tooltip>
       {/* A wrapper triggers the tooltip: disabled buttons get no pointer events. */}
-      <TooltipTrigger render={<span className="flex" onClick={(e) => e.stopPropagation()} />}>
+      <TooltipTrigger render={<span className="flex" />}>
         <button
           type="button"
           aria-label={label}

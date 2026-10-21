@@ -191,6 +191,8 @@ it("disables changing actions while another operation runs", async () => {
     ]) {
       expect(disabled(label)).toBe(true);
       expect(find(label).title).toBe("Checking out feature… Wait for it to finish.");
+      // Hovering shows the title: disabled items keep their pointer events.
+      expect(find(label).className).toContain("data-disabled:pointer-events-auto");
     }
     expect(disabled("Copy commit SHA")).toBe(false);
     await click("Cherry-pick commit");
