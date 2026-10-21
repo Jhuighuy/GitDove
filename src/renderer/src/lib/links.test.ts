@@ -85,6 +85,9 @@ it("keeps all of the text", () => {
   const text = "Fix (#12): see https://x.org/y, and #3.";
   const segments = linkify(text, webRepo("https://github.com/a/b"));
   expect(segments.map((s) => s.text).join("")).toBe(text);
+  expect(segments.map((s) => text.slice(s.start, s.start + s.text.length))).toEqual(
+    segments.map((s) => s.text),
+  );
   expect(segments.map((s) => s.href ?? null)).toEqual([
     null,
     "https://github.com/a/b/issues/12",

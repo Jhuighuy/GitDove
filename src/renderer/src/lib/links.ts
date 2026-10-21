@@ -85,16 +85,17 @@ const referenceUrl = (repo: WebRepo, path: string, sigil: string, n: string) => 
   }
 };
 
-export type Segment = { readonly text: string; readonly href?: string };
+/** A piece of a message, `start` being where it starts in the message. */
+export type Segment = { readonly text: string; readonly href?: string; readonly start: number };
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+/g;
 /** Punctuation that ends a sentence rather than a URL. */
-const TRAILING = new Set([...".,;:!?)]}"]);
+const TRAILING = new Set(".,;:!?)]}");
 const REF_RE = /(^|[^\w/&#!-])(?:([\w.-]+\/[\w.-]+))?([#!])(\d+)\b/g;
 
 /** Splits a message into plain text and links. */
 export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
-  const out: Segment[] = [];
+  const out: Omit<Segment, "start">[] = [];
   const plain = (s: string) => {
     if (!s) return;
     if (!repo) return void out.push({ text: s });
@@ -123,5 +124,10 @@ export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
     last = m.index + url.length;
   }
   plain(text.slice(last));
-  return out;
+  let start = 0;
+  return out.map((s) => {
+    const segment = { ...s, start };
+    start += s.text.length;
+    return segment;
+  });
 };

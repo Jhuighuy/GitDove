@@ -12,13 +12,10 @@ export function LinkedText({ repo, text }: { repo: RepoId; text: string }) {
   const remotes = data?.remotes;
   const segments = useMemo(() => linkify(text, referenceRepo(remotes ?? [])), [text, remotes]);
   // Segments are keyed by where they start in the text.
-  let offset = 0;
-  return segments.map((s) => {
-    const key = offset;
-    offset += s.text.length;
-    return s.href ? (
+  return segments.map((s) =>
+    s.href ? (
       <a
-        key={key}
+        key={s.start}
         href={s.href}
         target="_blank"
         rel="noreferrer"
@@ -28,7 +25,7 @@ export function LinkedText({ repo, text }: { repo: RepoId; text: string }) {
         {s.text}
       </a>
     ) : (
-      <Fragment key={key}>{s.text}</Fragment>
-    );
-  });
+      <Fragment key={s.start}>{s.text}</Fragment>
+    ),
+  );
 }
