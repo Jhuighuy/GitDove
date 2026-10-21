@@ -204,20 +204,21 @@ it("fetches the graph pages covering a range of rows", async () => {
     start: GRAPH_PAGE - 2,
     end: GRAPH_PAGE + 2,
   });
-  await until(() => expect(result.current.size).toBe(2 * GRAPH_PAGE));
+  await until(() => expect(result.current.rows.size).toBe(2 * GRAPH_PAGE));
   expect(calls()).toEqual([
     ["repo.graphRows", repo, 1, 0, GRAPH_PAGE],
     ["repo.graphRows", repo, 1, GRAPH_PAGE, 2 * GRAPH_PAGE],
   ]);
-  expect(result.current.get(GRAPH_PAGE + 1)?.hash).toBe(`v1:${GRAPH_PAGE + 1}`);
-  expect(result.current.get(0)?.hash).toBe("v1:0");
+  expect(result.current.rows.get(GRAPH_PAGE + 1)?.hash).toBe(`v1:${GRAPH_PAGE + 1}`);
+  expect(result.current.rows.get(0)?.hash).toBe("v1:0");
+  expect(result.current.current).toEqual(result.current.rows);
 });
 
 it("fetches nothing without graph info or for an empty range", async () => {
   const { result, rerender } = await renderHook(useRows, { info: undefined, start: 0, end: 10 });
-  expect(result.current.size).toBe(0);
+  expect(result.current.rows.size).toBe(0);
   await rerender({ info: graphInfo(), start: 10, end: 10 });
-  expect(result.current.size).toBe(0);
+  expect(result.current.rows.size).toBe(0);
   expect(calls()).toEqual([]);
 });
 
@@ -230,26 +231,28 @@ it("refetches the growing last page while the graph streams in", async () => {
     end: GRAPH_PAGE + 1,
   });
   const { result, rerender } = await renderHook(useRows, props(false));
-  await until(() => expect(result.current.size).toBe(10));
+  await until(() => expect(result.current.rows.size).toBe(10));
 
   built = GRAPH_PAGE + 100;
   await rerender(props(false));
-  await until(() => expect(result.current.size).toBe(100));
+  await until(() => expect(result.current.rows.size).toBe(100));
 
   built = 2 * GRAPH_PAGE + 5;
   await rerender(props(true));
-  await until(() => expect(result.current.size).toBe(GRAPH_PAGE));
-  expect(result.current.get(2 * GRAPH_PAGE - 1)?.hash).toBe(`v1:${2 * GRAPH_PAGE - 1}`);
+  await until(() => expect(result.current.rows.size).toBe(GRAPH_PAGE));
+  expect(result.current.rows.get(2 * GRAPH_PAGE - 1)?.hash).toBe(`v1:${2 * GRAPH_PAGE - 1}`);
 });
 
 it("keeps the shorter page on screen while the grown page loads", async () => {
   mocks.api.mockImplementation(builtRows(() => 10));
   const info = (count: number) => graphInfo({ complete: false, count });
   const { result, rerender } = await renderHook(useRows, { info: info(10), start: 0, end: 1 });
-  await until(() => expect(result.current.size).toBe(10));
+  await until(() => expect(result.current.rows.size).toBe(10));
   mocks.api.mockReturnValue(new Promise(() => {}));
   await rerender({ info: info(20), start: 0, end: 1 });
-  expect(result.current.size).toBe(10);
+  expect(result.current.rows.size).toBe(10);
+  // Shown, but not loaded for this graph.
+  expect(result.current.current.size).toBe(0);
 });
 
 it("keeps rows of a previous graph version while the new version loads", async () => {
@@ -260,12 +263,13 @@ it("keeps rows of a previous graph version while the new version loads", async (
     start: 0,
     end: 1,
   });
-  expect(result.current.get(0)?.hash).toBe("old");
+  expect(result.current.rows.get(0)?.hash).toBe("old");
+  expect(result.current.current.size).toBe(0);
   // Versions too far back are not used.
   client.clear();
   client.setQueryData(keys.graphPage(repo, 1, 0, 1), [row("ancient")]);
   const r2 = await renderHook(useRows, { info: graphInfo({ version: 7 }), start: 0, end: 1 });
-  expect(r2.result.current.size).toBe(0);
+  expect(r2.result.current.rows.size).toBe(0);
 });
 
 const ref = (name: string, hash: string): Ref => ({

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { keys } from "@/lib/queries";
 import { useRepoUiStore } from "@/stores/repo-ui";
 import { CommitGraph } from "./CommitGraph";
 
@@ -15,9 +16,12 @@ const mocks = vi.hoisted(() => ({
   rows: [] as unknown[],
   status: null as unknown,
   refs: null as unknown,
-  found: 0,
+  /** The index `repo.findCommit` answers, or `null` to look the commit up in `rows`. */
+  found: 0 as number | null,
   /** Holds `repo.findCommit` answers back until it settles. */
   gate: null as Promise<void> | null,
+  /** Holds `repo.graphRows` answers back until it settles. */
+  rowsGate: null as Promise<void> | null,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -31,6 +35,7 @@ vi.mock("@/lib/api", () => ({
         return mocks.info;
       case "repo.graphRows": {
         const [, , start, end] = args as [string, number, number, number];
+        await mocks.rowsGate;
         return mocks.rows.slice(start, end);
       }
       case "repo.status":
@@ -43,7 +48,7 @@ vi.mock("@/lib/api", () => ({
         return [];
       case "repo.findCommit":
         await mocks.gate;
-        return mocks.found;
+        return mocks.found ?? mocks.rows.findIndex((r) => (r as GraphRow).hash === args[2]);
     }
     throw new Error(`unexpected ${method}`);
   },
@@ -100,6 +105,7 @@ const snapshot: RefsSnapshot = {
 };
 
 let root: Root;
+let client: QueryClient;
 let container: HTMLElement;
 let n = 0;
 let repo = "";
@@ -115,6 +121,7 @@ beforeEach(() => {
   mocks.refs = snapshot;
   mocks.found = 0;
   mocks.gate = null;
+  mocks.rowsGate = null;
   repo = `local:/graph${++n}`;
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
@@ -132,7 +139,7 @@ afterEach(async () => {
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)));
 
 async function render(wait: string | null = "Commit 0") {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -530,4 +537,43 @@ it("finds commits picked before the graph reloaded where they are now", async ()
     anchor: "c0",
     version: 1,
   });
+});
+
+it("does not take indexes from rows of the graph before it reloaded", async () => {
+  await render();
+  const at = (...hashes: string[]) =>
+    hashes.map((h) => ({
+      index: mocks.rows.findIndex((r) => (r as GraphRow).hash === h),
+      row: commit(Number(h.slice(1))),
+    }));
+  act(() =>
+    useRepoUiStore.getState().select(repo, {
+      kind: "commits",
+      commits: at("c1", "c2"),
+      anchor: "c1",
+      version: 1,
+    }),
+  );
+  // A new commit on top: until its rows arrive, the graph shows the previous ones.
+  let release = () => {};
+  mocks.rowsGate = new Promise((r) => (release = r));
+  mocks.rows = [{ ...commit(9), hash: "x", subject: "New commit" }, ...mocks.rows];
+  mocks.info = { version: 2, count: 6, complete: true, maxLanes: 1 };
+  mocks.found = null;
+  await act(() => client.invalidateQueries({ queryKey: keys.graphInfo(repo) }));
+  await act(() => vi.waitFor(() => expect(mocks.api).toContainEqual(["repo.graphRows", 2, 0, 6])));
+  expect(container.textContent).not.toContain("New commit");
+  await act(async () => {
+    rowOf("Commit 3").dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0, metaKey: true }),
+    );
+  });
+  await settle();
+  expect(selection()).toEqual({
+    kind: "commits",
+    commits: at("c1", "c2", "c3"),
+    anchor: "c3",
+    version: 2,
+  });
+  await act(async () => release());
 });

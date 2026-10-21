@@ -114,7 +114,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   const items = virtualizer.getVirtualItems();
   const firstIndex = Math.max(0, (items[0]?.index ?? 0) - offset);
   const lastIndex = Math.max(0, (items.at(-1)?.index ?? 0) - offset + 1);
-  const rows = useGraphRows(repo, info, firstIndex, lastIndex);
+  const { rows, current } = useGraphRows(repo, info, firstIndex, lastIndex);
   const headRow = rows.get(0);
 
   // Fit the lanes on screen. The width only grows while scrolling, so the columns don't jump
@@ -175,20 +175,20 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   const press = (row: GraphRow, index: number, e: React.MouseEvent) => {
     const toggle = isMac ? e.metaKey : e.ctrlKey;
     if (!toggle && !e.shiftKey) return select(repo, { kind: "commit", hash: row.hash });
-    const current = () => useRepoUiStore.getState().byRepo[repo]?.selection ?? null;
+    const selected = () => useRepoUiStore.getState().byRepo[repo]?.selection ?? null;
     const q = presses.current;
-    if (current() !== q.owned) {
+    if (selected() !== q.owned) {
       q.epoch++;
-      q.owned = current();
+      q.owned = selected();
     }
     const epoch = q.epoch;
-    const live = () => q.epoch === epoch && current() === q.owned;
+    const live = () => q.epoch === epoch && selected() === q.owned;
     q.tail = q.tail.then(async () => {
       if (!live()) return;
-      const next = await extendRef.current(current(), row, index, toggle);
+      const next = await extendRef.current(selected(), row, index, toggle);
       if (!live()) return;
       select(repo, next);
-      q.owned = current();
+      q.owned = selected();
     });
   };
   /** The selection `base` becomes with the commit at `index` toggled, or the range up to it. */
@@ -201,13 +201,13 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     const single = { kind: "commit", hash: row.hash } as const;
     const start = anchorOf(base);
     if (!info || start === null) return single;
-    // A commit far off screen may not be loaded: ask for it.
-    const loaded = (i: number) => rows.get(i);
+    // Only rows loaded for this graph version are where they show: rows of a previous version
+    // shown while the graph reloads, or commits far off screen, are asked for.
     const fetchRows = async (from: number, to: number) => {
       const out = new Map<number, GraphRow>();
       let missing = false;
       for (let i = from; i <= to; i++) {
-        const r = loaded(i);
+        const r = current.get(i);
         if (r) out.set(i, r);
         else missing = true;
       }
@@ -217,24 +217,19 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
       }
       return out;
     };
-    const indexOf = async (hash: string) => {
-      for (const [i, r] of rows) if (r.hash === hash) return i;
-      return api("repo.findCommit", repo, info.version, hash);
-    };
+    const loadedAt = new Map([...current].map(([i, r]) => [r.hash, i]));
+    const indexOf = async (hash: string) =>
+      loadedAt.get(hash) ?? api("repo.findCommit", repo, info.version, hash);
     // After a reload, commits picked before may have moved, or gone.
     const reindexed = async (picked: readonly PickedCommit[]) => {
-      const loadedAt = new Map([...rows].map(([i, r]) => [r.hash, i]));
       const moved = await Promise.all(
-        picked.map(async (p) => ({
-          ...p,
-          index:
-            loadedAt.get(p.row.hash) ??
-            (await api("repo.findCommit", repo, info.version, p.row.hash)),
-        })),
+        picked.map(async (p) => ({ ...p, index: await indexOf(p.row.hash) })),
       );
       return moved.filter((p) => p.index >= 0);
     };
     try {
+      const at = current.get(index)?.hash === row.hash ? index : await indexOf(row.hash);
+      if (at < 0) return single;
       if (toggle) {
         let picked: readonly PickedCommit[] = [];
         if (base?.kind === "commits")
@@ -244,11 +239,11 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
           const r = i >= 0 ? (await fetchRows(i, i)).get(i) : undefined;
           if (r) picked = [{ index: i, row: r }];
         }
-        return selectionOf(toggled(picked, { index, row }), row.hash, info.version) ?? single;
+        return selectionOf(toggled(picked, { index: at, row }), row.hash, info.version) ?? single;
       }
       const a = await indexOf(start);
       if (a < 0) return single;
-      const [from, to] = rangeIndexes(a, index);
+      const [from, to] = rangeIndexes(a, at);
       const range = [...(await fetchRows(from, to))].map(([i, r]) => ({ index: i, row: r }));
       return selectionOf(range, start, info.version) ?? single;
     } catch {

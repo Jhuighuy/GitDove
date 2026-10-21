@@ -111,7 +111,8 @@ export const GRAPH_PAGE = 256;
 /**
  * Returns the graph rows in `[start, end)`, fetching pages on demand. While the graph streams
  * in, a page that gains rows is fetched again. While a page loads, the rows it had before (or
- * rows from the previous graph version) are kept on screen.
+ * rows from the previous graph version) are kept on screen: `rows` has them too, `current`
+ * only the rows of loaded pages, at their indexes in graph `info.version`.
  */
 export const useGraphRows = (
   repo: RepoId,
@@ -145,11 +146,15 @@ export const useGraphRows = (
 
   return useMemo(() => {
     const rows = new Map<number, GraphRow>();
+    const current = new Map<number, GraphRow>();
     results.forEach((r, i) => {
       const base = pages[i]!.page * GRAPH_PAGE;
-      r.data?.forEach((row, j) => rows.set(base + j, row));
+      r.data?.forEach((row, j) => {
+        rows.set(base + j, row);
+        if (!r.isPlaceholderData) current.set(base + j, row);
+      });
     });
-    return rows;
+    return { rows, current };
   }, [results, pages]);
 };
 
