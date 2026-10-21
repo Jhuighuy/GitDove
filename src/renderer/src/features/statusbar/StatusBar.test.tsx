@@ -130,6 +130,31 @@ it("says why the history is cut off or outdated, and retries on request", async 
   expect(text()).not.toContain("History");
 });
 
+it("offers to retry when the history never loaded", async () => {
+  await render(LOCAL);
+  // The graph view's first request failed: the shared query has an error and no data.
+  await act(async () => {
+    await client
+      .query({
+        queryKey: keys.graphInfo(LOCAL),
+        queryFn: () => Promise.reject(new Error("Lost connection")),
+      })
+      .catch(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(text()).toContain("Couldn't load history: Lost connection");
+
+  mocks.graphInfo = { version: 1, count: 3000, complete: false, maxLanes: 2 };
+  const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
+  await act(async () => {
+    retry.click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(mocks.api).toContainEqual(["repo.graphInfo", LOCAL]);
+  expect(text()).toContain("Loading history… 3,000 commits");
+  expect(text()).not.toContain("Couldn't load");
+});
+
 it("shows the running operation, with a cancel button for network operations", async () => {
   await render(SSH);
   await act(async () =>
