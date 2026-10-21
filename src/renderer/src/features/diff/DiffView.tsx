@@ -55,9 +55,10 @@ const EMPTY_SELECTION: ReadonlySet<number> = new Set();
 const isTextEntry = (el: EventTarget | null) =>
   el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && el.type !== "range");
 
-/** Whether a key press belongs to a menu, dialog or other popup, which handles arrows itself. */
-const inPopup = (el: EventTarget | null) =>
-  el instanceof Element && el.closest("[role=menu],[role=dialog],[role=listbox]") !== null;
+/** Whether a key press belongs to a slider, menu, dialog or popup, which handles arrows itself. */
+const ownsArrows = (el: EventTarget | null) =>
+  el instanceof HTMLInputElement ||
+  (el instanceof Element && el.closest("[role=menu],[role=dialog],[role=listbox]") !== null);
 
 export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget }) {
   const kind = useMemo(() => fileKind(target.path), [target.path]);
@@ -95,7 +96,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
         (e.key === "ArrowDown" || e.key === "ArrowUp") &&
         !e.defaultPrevented &&
         !(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) &&
-        !inPopup(e.target)
+        !ownsArrows(e.target)
       ) {
         e.preventDefault();
         stepRef.current(e.key === "ArrowDown" ? 1 : -1);

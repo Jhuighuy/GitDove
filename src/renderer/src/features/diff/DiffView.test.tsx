@@ -195,5 +195,10 @@ it("steps through the files of its list with the up and down arrows", async () =
   open.mockClear();
   press("ArrowUp", { shiftKey: true });
   press("ArrowLeft");
+  // The image swipe slider steps itself.
+  const slider = document.createElement("input");
+  slider.type = "range";
+  container.append(slider);
+  act(() => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
   expect(open).not.toHaveBeenCalled();
 });
