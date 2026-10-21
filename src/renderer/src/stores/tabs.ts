@@ -60,10 +60,11 @@ export const useTabs = create<TabsState>()((set, get) => {
         return;
       }
       // Fill a blank tab: the requested one if it is still blank (it may have been closed or
-      // filled while the repository was opening), else the active one if blank.
+      // filled while the repository was opening), else the active one if blank (e.g. the tab
+      // that replaced the closed one).
       const blank = (key: string | null | undefined) =>
         tabs.find((t) => t.key === key && t.repo === null)?.key;
-      const target = inTab === undefined ? blank(get().active) : blank(inTab);
+      const target = blank(inTab) ?? blank(get().active);
       if (target) {
         update({
           tabs: tabs.map((t) => (t.key === target ? { key: t.key, repo } : t)),
