@@ -388,6 +388,14 @@ it("copies the selected text of the lines, without numbers and signs", async () 
   expect(await copy([1, 6], [3, 5])).toBe("a = 1;\nold b\nconst");
 });
 
+/** The elements the scroller's `[&…]:select-none` classes match, as CSS would apply them. */
+const unselectable = (scroller: HTMLElement) =>
+  scroller.className.split(/\s+/).flatMap((c) => {
+    const variant = /^\[&(.+)\]:select-none$/.exec(c)?.[1];
+    if (!variant) return [];
+    return [...scroller.querySelectorAll(`:scope${variant.replaceAll("_", " ")}`)];
+  });
+
 it("selects and copies text within one column in split view", async () => {
   await render();
   await act(async () => container.querySelector<HTMLElement>("[aria-label='Split view']")!.click());
@@ -398,9 +406,19 @@ it("selects and copies text within one column in split view", async () => {
     textOf(3).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
   });
   expect(scroller.dataset.selectSide).toBe("1");
-  expect(scroller.className).toContain("data-[select-side=1]:**:data-[side=0]:select-none");
+  expect(unselectable(scroller)).toEqual([
+    ...container.querySelectorAll("[data-side='0'] [data-text]"),
+  ]);
   // Context lines sit in both columns; the right one has the replacement and no extra deletion.
   expect(await copy([3, 0], [4, 4])).toBe("const a = 2;\ntail");
+  // And the other way around.
+  await act(async () => {
+    textOf(1).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+  });
+  expect(scroller.dataset.selectSide).toBe("0");
+  expect(unselectable(scroller)).toEqual([
+    ...container.querySelectorAll("[data-side='1'] [data-text]"),
+  ]);
 });
 
 it("keeps the rows a text selection ends in mounted while scrolling, until it collapses", async () => {

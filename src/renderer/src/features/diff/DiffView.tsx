@@ -559,7 +559,9 @@ function DiffBody({
         ref={scrollRef}
         className={cn(
           "min-h-0 flex-1 font-mono text-[12px] [contain:strict]",
-          "data-[select-side=0]:**:data-[side=1]:select-none data-[select-side=1]:**:data-[side=0]:select-none",
+          // The other column's text is unselectable; these outrank its own `select-text`.
+          "[&[data-select-side='0']_[data-side='1']_[data-text]]:select-none",
+          "[&[data-select-side='1']_[data-side='0']_[data-text]]:select-none",
           mode === "split" ? "overflow-x-hidden overflow-y-auto" : "overflow-auto",
         )}
         onMouseDown={onMouseDown}
