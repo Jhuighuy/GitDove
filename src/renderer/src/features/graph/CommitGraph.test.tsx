@@ -388,3 +388,15 @@ it("fits the graph column to the lanes, up to a limit, and shades its edge when 
   });
   expect(width(graph())).toBe(fitted);
 });
+
+it("ignores wide rows rendered below the viewport", async () => {
+  // 400px of viewport shows rows 0-14; row 20 is only rendered as overscan.
+  mocks.info = { version: 1, count: 40, complete: true, maxLanes: 20 };
+  mocks.rows = Array.from({ length: 40 }, (_, i) =>
+    commit(i, i === 20 ? { lane: 15, edges: [15, 1, 15, 2, 3] } : {}),
+  );
+  await render();
+  expect(container.textContent).toContain("Commit 20");
+  expect(width(headerCells()[1]!)).toBe(6 * 2 + 3 * 16);
+  expect(container.querySelectorAll('[class*="after:bg-linear-to-l"]')).toHaveLength(0);
+});

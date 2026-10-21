@@ -103,8 +103,12 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
 
   // Fit the lanes on screen. The width only grows while scrolling, so the columns don't jump
   // back and forth; double-clicking the column border fits it to the rows on screen again.
+  // Only rows in the viewport count, not the overscan rendered around it.
+  const top = virtualizer.scrollOffset ?? 0;
+  const bottom = top + (virtualizer.scrollRect?.height ?? Infinity);
   let widestRow = 0;
   for (const item of items) {
+    if (item.end <= top || item.start >= bottom) continue;
     const row = rows.get(item.index - offset);
     if (row) widestRow = Math.max(widestRow, rowGraphWidth(row));
   }
