@@ -11,6 +11,7 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import { useRefs, useRepoInfo } from "@/lib/queries";
+import { WriteMenuItem } from "@/components/write-menu-item";
 import { commands } from "../commands";
 import type { useVisibility } from "./visibility";
 
@@ -67,15 +68,19 @@ function ResetItems({ repo, hash, head }: { repo: RepoId; hash: string; head: st
     <ContextMenuSub>
       <ContextMenuSubTrigger>Reset {head} to this commit</ContextMenuSubTrigger>
       <ContextMenuSubContent>
-        <Item onClick={() => void commands.reset(repo, hash, "soft")}>
+        <WriteMenuItem repo={repo} onClick={() => void commands.reset(repo, hash, "soft")}>
           Soft — keep all changes staged
-        </Item>
-        <Item onClick={() => void commands.reset(repo, hash, "mixed")}>
+        </WriteMenuItem>
+        <WriteMenuItem repo={repo} onClick={() => void commands.reset(repo, hash, "mixed")}>
           Mixed — keep working copy, reset index
-        </Item>
-        <Item variant="destructive" onClick={() => void commands.reset(repo, hash, "hard")}>
+        </WriteMenuItem>
+        <WriteMenuItem
+          repo={repo}
+          variant="destructive"
+          onClick={() => void commands.reset(repo, hash, "hard")}
+        >
           Hard — discard all changes
-        </Item>
+        </WriteMenuItem>
       </ContextMenuSubContent>
     </ContextMenuSub>
   );
@@ -98,18 +103,29 @@ function RemoteMenu({
   const allHidden = members.length > 0 && members.every((m) => vis.isHidden(m));
   return (
     <Menu>
-      <Item onClick={() => void commands.fetchRemote(repo, r.name)}>Fetch {r.name}</Item>
+      <WriteMenuItem repo={repo} onClick={() => void commands.fetchRemote(repo, r.name)}>
+        Fetch {r.name}
+      </WriteMenuItem>
       <Sep />
-      <Item onClick={() => void commands.editRemoteUrl(repo, r.name, r.fetchUrl)}>Edit URL…</Item>
+      <WriteMenuItem
+        repo={repo}
+        onClick={() => void commands.editRemoteUrl(repo, r.name, r.fetchUrl)}
+      >
+        Edit URL…
+      </WriteMenuItem>
       <Item onClick={() => commands.copy(r.fetchUrl, "Remote URL copied")}>Copy URL</Item>
       <Sep />
       <Item onClick={() => vis.toggleGroup(members, prefix)}>
         {allHidden ? `Show ${r.name} branches` : `Hide ${r.name} branches`}
       </Item>
       <Sep />
-      <Item variant="destructive" onClick={() => void commands.removeRemote(repo, r.name)}>
+      <WriteMenuItem
+        repo={repo}
+        variant="destructive"
+        onClick={() => void commands.removeRemote(repo, r.name)}
+      >
         Remove {r.name}
-      </Item>
+      </WriteMenuItem>
     </Menu>
   );
 }
@@ -146,43 +162,64 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       const r = target.ref;
       return (
         <Menu>
-          <Item
+          <WriteMenuItem
+            repo={repo}
             disabled={!r.isHead && !r.upstream}
             onClick={() => void commands.pullBranch(repo, r)}
           >
             Pull (fast-forward if possible)
-          </Item>
-          <Item onClick={() => void commands.pushBranch(repo, r)}>Push</Item>
-          <Item onClick={() => void commands.setUpstream(repo, r)}>Set upstream…</Item>
+          </WriteMenuItem>
+          <WriteMenuItem repo={repo} onClick={() => void commands.pushBranch(repo, r)}>
+            Push
+          </WriteMenuItem>
+          <WriteMenuItem repo={repo} onClick={() => void commands.setUpstream(repo, r)}>
+            Set upstream…
+          </WriteMenuItem>
           {!r.isHead && (
             <>
               <Sep />
-              <Item onClick={() => void commands.merge(repo, r.short)}>
+              <WriteMenuItem repo={repo} onClick={() => void commands.merge(repo, r.short)}>
                 Merge {r.short} into {head}
-              </Item>
-              <Item onClick={() => void commands.rebase(repo, r.short)}>
+              </WriteMenuItem>
+              <WriteMenuItem repo={repo} onClick={() => void commands.rebase(repo, r.short)}>
                 Rebase {head} onto {r.short}
-              </Item>
+              </WriteMenuItem>
               <Sep />
-              <Item onClick={() => void commands.checkoutRef(repo, r)}>Checkout {r.short}</Item>
+              <WriteMenuItem repo={repo} onClick={() => void commands.checkoutRef(repo, r)}>
+                Checkout {r.short}
+              </WriteMenuItem>
             </>
           )}
           <Sep />
-          <Item onClick={() => void commands.createWorktree(repo, r.short, r.short)}>
+          <WriteMenuItem
+            repo={repo}
+            onClick={() => void commands.createWorktree(repo, r.short, r.short)}
+          >
             Create worktree from {r.short}…
-          </Item>
+          </WriteMenuItem>
           <Sep />
-          <Item onClick={() => void commands.createBranch(repo, r.hash, r.short)}>
+          <WriteMenuItem
+            repo={repo}
+            onClick={() => void commands.createBranch(repo, r.hash, r.short)}
+          >
             Create branch here…
-          </Item>
-          <Item onClick={() => void commands.createTag(repo, r.hash)}>Create tag here…</Item>
+          </WriteMenuItem>
+          <WriteMenuItem repo={repo} onClick={() => void commands.createTag(repo, r.hash)}>
+            Create tag here…
+          </WriteMenuItem>
           {!r.isHead && <ResetItems repo={repo} hash={r.hash} head={head} />}
           <Sep />
-          <Item onClick={() => void commands.renameBranch(repo, r.short)}>Rename {r.short}…</Item>
+          <WriteMenuItem repo={repo} onClick={() => void commands.renameBranch(repo, r.short)}>
+            Rename {r.short}…
+          </WriteMenuItem>
           {!r.isHead && (
-            <Item variant="destructive" onClick={() => void commands.deleteBranch(repo, r)}>
+            <WriteMenuItem
+              repo={repo}
+              variant="destructive"
+              onClick={() => void commands.deleteBranch(repo, r)}
+            >
               Delete {r.short}
-            </Item>
+            </WriteMenuItem>
           )}
           <Sep />
           <Item onClick={() => commands.copy(r.short, "Branch name copied")}>Copy branch name</Item>
@@ -196,26 +233,40 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       const r = target.ref;
       return (
         <Menu>
-          <Item onClick={() => void commands.checkoutRef(repo, r)}>Checkout {r.short}</Item>
-          <Item onClick={() => void commands.merge(repo, r.short)}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.checkoutRef(repo, r)}>
+            Checkout {r.short}
+          </WriteMenuItem>
+          <WriteMenuItem repo={repo} onClick={() => void commands.merge(repo, r.short)}>
             Merge {r.short} into {head}
-          </Item>
-          <Item onClick={() => void commands.rebase(repo, r.short)}>
+          </WriteMenuItem>
+          <WriteMenuItem repo={repo} onClick={() => void commands.rebase(repo, r.short)}>
             Rebase {head} onto {r.short}
-          </Item>
+          </WriteMenuItem>
           <Sep />
-          <Item onClick={() => void commands.createWorktree(repo, r.short, r.short)}>
+          <WriteMenuItem
+            repo={repo}
+            onClick={() => void commands.createWorktree(repo, r.short, r.short)}
+          >
             Create worktree from {r.short}…
-          </Item>
-          <Item onClick={() => void commands.createBranch(repo, r.hash, r.short)}>
+          </WriteMenuItem>
+          <WriteMenuItem
+            repo={repo}
+            onClick={() => void commands.createBranch(repo, r.hash, r.short)}
+          >
             Create branch here…
-          </Item>
-          <Item onClick={() => void commands.createTag(repo, r.hash)}>Create tag here…</Item>
+          </WriteMenuItem>
+          <WriteMenuItem repo={repo} onClick={() => void commands.createTag(repo, r.hash)}>
+            Create tag here…
+          </WriteMenuItem>
           <ResetItems repo={repo} hash={r.hash} head={head} />
           <Sep />
-          <Item variant="destructive" onClick={() => void commands.deleteBranch(repo, r)}>
+          <WriteMenuItem
+            repo={repo}
+            variant="destructive"
+            onClick={() => void commands.deleteBranch(repo, r)}
+          >
             Delete {r.short} on remote
-          </Item>
+          </WriteMenuItem>
           <Sep />
           <Item onClick={() => commands.copy(r.short, "Branch name copied")}>Copy branch name</Item>
           <Item onClick={() => commands.copy(r.hash, "Commit SHA copied")}>Copy commit SHA</Item>
@@ -234,21 +285,34 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       const r = target.ref;
       return (
         <Menu>
-          <Item onClick={() => void commands.checkout(repo, r.short)}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.checkout(repo, r.short)}>
             Checkout {r.short} (detached)
-          </Item>
-          <Item onClick={() => void commands.createBranch(repo, r.hash, r.short)}>
+          </WriteMenuItem>
+          <WriteMenuItem
+            repo={repo}
+            onClick={() => void commands.createBranch(repo, r.hash, r.short)}
+          >
             Create branch here…
-          </Item>
+          </WriteMenuItem>
           <Sep />
-          <Item onClick={() => void commands.pushTag(repo, r.short)}>Push {r.short} to remote</Item>
+          <WriteMenuItem repo={repo} onClick={() => void commands.pushTag(repo, r.short)}>
+            Push {r.short} to remote
+          </WriteMenuItem>
           <Sep />
-          <Item variant="destructive" onClick={() => void commands.deleteTag(repo, r.short)}>
+          <WriteMenuItem
+            repo={repo}
+            variant="destructive"
+            onClick={() => void commands.deleteTag(repo, r.short)}
+          >
             Delete {r.short} locally
-          </Item>
-          <Item variant="destructive" onClick={() => void commands.deleteRemoteTag(repo, r.short)}>
+          </WriteMenuItem>
+          <WriteMenuItem
+            repo={repo}
+            variant="destructive"
+            onClick={() => void commands.deleteRemoteTag(repo, r.short)}
+          >
             Delete {r.short} on remote
-          </Item>
+          </WriteMenuItem>
           <Sep />
           <Item onClick={() => commands.copy(r.short, "Tag name copied")}>Copy tag name</Item>
           <Item onClick={() => commands.copy(r.hash, "Commit SHA copied")}>Copy commit SHA</Item>
@@ -261,15 +325,26 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       const s = target.stash;
       return (
         <Menu>
-          <Item onClick={() => void commands.applyStash(repo, s.index)}>Apply stash</Item>
-          <Item onClick={() => void commands.pop(repo, s.index)}>Pop stash</Item>
-          <Item onClick={() => void commands.createBranch(repo, s.hash, s.name)}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.applyStash(repo, s.index)}>
+            Apply stash
+          </WriteMenuItem>
+          <WriteMenuItem repo={repo} onClick={() => void commands.pop(repo, s.index)}>
+            Pop stash
+          </WriteMenuItem>
+          <WriteMenuItem
+            repo={repo}
+            onClick={() => void commands.createBranch(repo, s.hash, s.name)}
+          >
             Create branch here…
-          </Item>
+          </WriteMenuItem>
           <Sep />
-          <Item variant="destructive" onClick={() => void commands.dropStash(repo, s.index)}>
+          <WriteMenuItem
+            repo={repo}
+            variant="destructive"
+            onClick={() => void commands.dropStash(repo, s.index)}
+          >
             Delete stash
-          </Item>
+          </WriteMenuItem>
           <VisibilityItems name={stashKey(s.hash)} vis={vis} />
         </Menu>
       );
@@ -288,12 +363,13 @@ export function SidebarMenu({ repo, target, vis }: Props) {
           {!w.isMain && !current && (
             <>
               <Sep />
-              <Item
+              <WriteMenuItem
+                repo={repo}
                 variant="destructive"
                 onClick={() => void commands.removeWorktree(repo, w.path)}
               >
                 Remove worktree
-              </Item>
+              </WriteMenuItem>
             </>
           )}
         </Menu>
@@ -305,9 +381,9 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       return (
         <Menu>
           <Item onClick={() => commands.openSibling(repo, s.path)}>Open in new tab</Item>
-          <Item onClick={() => void commands.updateSubmodule(repo, s.path)}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.updateSubmodule(repo, s.path)}>
             {s.status === "uninitialized" ? "Initialize and update" : "Update"}
-          </Item>
+          </WriteMenuItem>
           <Item onClick={() => commands.copy(s.path, "Path copied")}>Copy path</Item>
         </Menu>
       );
@@ -335,9 +411,12 @@ export function SidebarMenu({ repo, target, vis }: Props) {
         case "local":
           return (
             <Menu>
-              <Item onClick={() => void commands.createBranch(repo, "HEAD", head)}>
+              <WriteMenuItem
+                repo={repo}
+                onClick={() => void commands.createBranch(repo, "HEAD", head)}
+              >
                 Create branch…
-              </Item>
+              </WriteMenuItem>
               <Sep />
               {groupItems("refs/heads/")}
             </Menu>
@@ -349,22 +428,34 @@ export function SidebarMenu({ repo, target, vis }: Props) {
             <Menu>
               {only ? (
                 <>
-                  <Item onClick={() => void commands.fetchRemote(repo, only.name)}>
+                  <WriteMenuItem
+                    repo={repo}
+                    onClick={() => void commands.fetchRemote(repo, only.name)}
+                  >
                     Fetch {only.name}
-                  </Item>
-                  <Item onClick={() => void commands.editRemoteUrl(repo, only.name, only.fetchUrl)}>
+                  </WriteMenuItem>
+                  <WriteMenuItem
+                    repo={repo}
+                    onClick={() => void commands.editRemoteUrl(repo, only.name, only.fetchUrl)}
+                  >
                     Edit {only.name} URL…
-                  </Item>
+                  </WriteMenuItem>
                   <Item onClick={() => commands.copy(only.fetchUrl, "Remote URL copied")}>
                     Copy {only.name} URL
                   </Item>
                   <Sep />
-                  <Item onClick={() => void commands.addRemote(repo)}>Add remote…</Item>
+                  <WriteMenuItem repo={repo} onClick={() => void commands.addRemote(repo)}>
+                    Add remote…
+                  </WriteMenuItem>
                 </>
               ) : (
                 <>
-                  <Item onClick={() => void commands.addRemote(repo)}>Add remote…</Item>
-                  <Item onClick={() => void commands.fetch(repo)}>Fetch all</Item>
+                  <WriteMenuItem repo={repo} onClick={() => void commands.addRemote(repo)}>
+                    Add remote…
+                  </WriteMenuItem>
+                  <WriteMenuItem repo={repo} onClick={() => void commands.fetch(repo)}>
+                    Fetch all
+                  </WriteMenuItem>
                 </>
               )}
               <Sep />
@@ -372,12 +463,13 @@ export function SidebarMenu({ repo, target, vis }: Props) {
               {only && (
                 <>
                   <Sep />
-                  <Item
+                  <WriteMenuItem
+                    repo={repo}
                     variant="destructive"
                     onClick={() => void commands.removeRemote(repo, only.name)}
                   >
                     Remove {only.name}
-                  </Item>
+                  </WriteMenuItem>
                 </>
               )}
             </Menu>
@@ -386,7 +478,9 @@ export function SidebarMenu({ repo, target, vis }: Props) {
         case "tags":
           return (
             <Menu>
-              <Item onClick={() => void commands.createTag(repo, "HEAD")}>Create tag at HEAD…</Item>
+              <WriteMenuItem repo={repo} onClick={() => void commands.createTag(repo, "HEAD")}>
+                Create tag at HEAD…
+              </WriteMenuItem>
               <Sep />
               {groupItems("refs/tags/")}
             </Menu>
@@ -394,10 +488,15 @@ export function SidebarMenu({ repo, target, vis }: Props) {
         case "worktrees":
           return (
             <Menu>
-              <Item onClick={() => void commands.createWorktree(repo, "HEAD", head)}>
+              <WriteMenuItem
+                repo={repo}
+                onClick={() => void commands.createWorktree(repo, "HEAD", head)}
+              >
                 Create worktree…
-              </Item>
-              <Item onClick={() => void commands.pruneWorktrees(repo)}>Prune stale worktrees</Item>
+              </WriteMenuItem>
+              <WriteMenuItem repo={repo} onClick={() => void commands.pruneWorktrees(repo)}>
+                Prune stale worktrees
+              </WriteMenuItem>
             </Menu>
           );
       }

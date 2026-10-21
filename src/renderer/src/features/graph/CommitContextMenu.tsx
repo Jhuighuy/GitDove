@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/context-menu";
 import { shortHash } from "@/lib/format";
 import { useRepoInfo } from "@/lib/queries";
+import { WriteMenuItem } from "@/components/write-menu-item";
 import { commands } from "../commands";
 import { useVisibility } from "../sidebar/visibility";
 import { api } from "@/lib/api";
@@ -39,14 +40,15 @@ export function CommitContextMenu({
   if (target.kind === "wip") {
     return (
       <ContextMenuContent className="min-w-56">
-        <ContextMenuItem
+        <WriteMenuItem
+          repo={repo}
           onClick={() => void runAction(repo, "Stage all", () => api("repo.stageAll", repo))}
         >
           Stage all changes
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => void commands.stash(repo)}>
+        </WriteMenuItem>
+        <WriteMenuItem repo={repo} onClick={() => void commands.stash(repo)}>
           Stash all changes
-        </ContextMenuItem>
+        </WriteMenuItem>
       </ContextMenuContent>
     );
   }
@@ -61,19 +63,20 @@ export function CommitContextMenu({
   if (stash) {
     return (
       <ContextMenuContent className="min-w-56">
-        <ContextMenuItem onClick={() => void commands.applyStash(repo, stash.index)}>
+        <WriteMenuItem repo={repo} onClick={() => void commands.applyStash(repo, stash.index)}>
           Apply stash
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => void commands.pop(repo, stash.index)}>
+        </WriteMenuItem>
+        <WriteMenuItem repo={repo} onClick={() => void commands.pop(repo, stash.index)}>
           Pop stash
-        </ContextMenuItem>
+        </WriteMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem
+        <WriteMenuItem
+          repo={repo}
           variant="destructive"
           onClick={() => void commands.dropStash(repo, stash.index)}
         >
           Delete stash
-        </ContextMenuItem>
+        </WriteMenuItem>
       </ContextMenuContent>
     );
   }
@@ -85,24 +88,27 @@ export function CommitContextMenu({
           <ContextMenuSubTrigger>{ref.short}</ContextMenuSubTrigger>
           <ContextMenuSubContent className="min-w-56">
             {!ref.isHead && (
-              <ContextMenuItem onClick={() => void commands.checkoutRef(repo, ref)}>
+              <WriteMenuItem repo={repo} onClick={() => void commands.checkoutRef(repo, ref)}>
                 Checkout {ref.short}
-              </ContextMenuItem>
+              </WriteMenuItem>
             )}
             {!ref.isHead && (
-              <ContextMenuItem onClick={() => void commands.merge(repo, ref.short)}>
+              <WriteMenuItem repo={repo} onClick={() => void commands.merge(repo, ref.short)}>
                 Merge {ref.short} into {headName}
-              </ContextMenuItem>
+              </WriteMenuItem>
             )}
             {!ref.isHead && (
-              <ContextMenuItem onClick={() => void commands.rebase(repo, ref.short)}>
+              <WriteMenuItem repo={repo} onClick={() => void commands.rebase(repo, ref.short)}>
                 Rebase {headName} onto {ref.short}
-              </ContextMenuItem>
+              </WriteMenuItem>
             )}
             {ref.kind === "branch" && (
-              <ContextMenuItem onClick={() => void commands.renameBranch(repo, ref.short)}>
+              <WriteMenuItem
+                repo={repo}
+                onClick={() => void commands.renameBranch(repo, ref.short)}
+              >
                 Rename {ref.short}…
-              </ContextMenuItem>
+              </WriteMenuItem>
             )}
             <ContextMenuItem onClick={() => commands.copy(ref.short, "Branch name copied")}>
               Copy branch name
@@ -115,12 +121,13 @@ export function CommitContextMenu({
             {!ref.isHead && (
               <>
                 <ContextMenuSeparator />
-                <ContextMenuItem
+                <WriteMenuItem
+                  repo={repo}
                   variant="destructive"
                   onClick={() => void commands.deleteBranch(repo, ref)}
                 >
                   Delete {ref.short}
-                </ContextMenuItem>
+                </WriteMenuItem>
               </>
             )}
           </ContextMenuSubContent>
@@ -134,47 +141,52 @@ export function CommitContextMenu({
               Copy tag name
             </ContextMenuItem>
             <ContextMenuItem onClick={() => vis.hide([tag.name])}>Hide from graph</ContextMenuItem>
-            <ContextMenuItem
+            <WriteMenuItem
+              repo={repo}
               variant="destructive"
               onClick={() => void commands.deleteTag(repo, tag.short)}
             >
               Delete tag {tag.short}
-            </ContextMenuItem>
+            </WriteMenuItem>
           </ContextMenuSubContent>
         </ContextMenuSub>
       ))}
       {(branchRefs.length > 0 || tags.length > 0) && <ContextMenuSeparator />}
-      <ContextMenuItem onClick={() => void commands.checkout(repo, hash)}>
+      <WriteMenuItem repo={repo} onClick={() => void commands.checkout(repo, hash)}>
         Checkout this commit (detached)
-      </ContextMenuItem>
-      <ContextMenuItem onClick={() => void commands.createBranch(repo, hash, shortHash(hash))}>
+      </WriteMenuItem>
+      <WriteMenuItem
+        repo={repo}
+        onClick={() => void commands.createBranch(repo, hash, shortHash(hash))}
+      >
         Create branch here…
-      </ContextMenuItem>
-      <ContextMenuItem onClick={() => void commands.createTag(repo, hash)}>
+      </WriteMenuItem>
+      <WriteMenuItem repo={repo} onClick={() => void commands.createTag(repo, hash)}>
         Create tag here…
-      </ContextMenuItem>
+      </WriteMenuItem>
       <ContextMenuSeparator />
-      <ContextMenuItem onClick={() => void commands.cherryPick(repo, hash)}>
+      <WriteMenuItem repo={repo} onClick={() => void commands.cherryPick(repo, hash)}>
         Cherry-pick commit
-      </ContextMenuItem>
-      <ContextMenuItem onClick={() => void commands.revert(repo, hash)}>
+      </WriteMenuItem>
+      <WriteMenuItem repo={repo} onClick={() => void commands.revert(repo, hash)}>
         Revert commit
-      </ContextMenuItem>
+      </WriteMenuItem>
       <ContextMenuSub>
         <ContextMenuSubTrigger>Reset {headName} to this commit</ContextMenuSubTrigger>
         <ContextMenuSubContent>
-          <ContextMenuItem onClick={() => void commands.reset(repo, hash, "soft")}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.reset(repo, hash, "soft")}>
             Soft — keep all changes staged
-          </ContextMenuItem>
-          <ContextMenuItem onClick={() => void commands.reset(repo, hash, "mixed")}>
+          </WriteMenuItem>
+          <WriteMenuItem repo={repo} onClick={() => void commands.reset(repo, hash, "mixed")}>
             Mixed — keep working copy, reset index
-          </ContextMenuItem>
-          <ContextMenuItem
+          </WriteMenuItem>
+          <WriteMenuItem
+            repo={repo}
             variant="destructive"
             onClick={() => void commands.reset(repo, hash, "hard")}
           >
             Hard — discard all changes
-          </ContextMenuItem>
+          </WriteMenuItem>
         </ContextMenuSubContent>
       </ContextMenuSub>
       <ContextMenuSeparator />

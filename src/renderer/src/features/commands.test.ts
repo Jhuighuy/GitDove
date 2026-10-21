@@ -7,7 +7,13 @@ const mocks = vi.hoisted(() => ({
   prompt: vi.fn(),
   confirm: vi.fn(),
   openLocation: vi.fn(),
-  toast: { loading: vi.fn(() => "t"), success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
+  toast: {
+    loading: vi.fn(() => "t"),
+    success: vi.fn(),
+    error: vi.fn(),
+    dismiss: vi.fn(),
+    warning: vi.fn(),
+  },
 }));
 vi.mock("@/lib/api", () => ({
   api: mocks.api,
@@ -28,6 +34,7 @@ vi.mock("./open/OpenRepo", () => ({ openLocation: mocks.openLocation }));
 const { commands } = await import("./commands");
 const { keys, queryClient } = await import("@/lib/queries");
 const { useRepoUiStore } = await import("@/stores/repo-ui");
+const { useBusyStore } = await import("@/stores/busy");
 
 const repo = "local:/work/repo";
 
@@ -163,6 +170,41 @@ it("reports failures as error toasts", async () => {
     "Create branch failed",
     expect.objectContaining({ description: "could not resolve host" }),
   );
+});
+
+it("does not open dialogs or start commands while another operation runs", async () => {
+  useBusyStore.getState().start(repo, { label: "Pulling…", cancellable: true });
+  try {
+    await commands.merge(repo, "topic");
+    await commands.createBranch(repo, "HEAD");
+    await commands.push(repo);
+    await commands.checkout(repo, "topic");
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.prompt).not.toHaveBeenCalled();
+    expect(mocks.api).not.toHaveBeenCalled();
+    expect(mocks.toast.warning).toHaveBeenCalledWith("Cannot merge now", {
+      description: "Pulling… Wait for it to finish.",
+    });
+    expect(mocks.toast.warning).toHaveBeenCalledTimes(4);
+  } finally {
+    useBusyStore.getState().finish(repo);
+  }
+});
+
+it("cancels the running operation", () => {
+  commands.cancel(repo);
+  expect(apiCalls("repo.cancel")).toEqual([[repo]]);
+});
+
+it("labels the busy state with the operation and its target", async () => {
+  const labels: (string | undefined)[] = [];
+  mocks.api.mockImplementation(async () => {
+    labels.push(useBusyStore.getState().byRepo[repo]?.label);
+  });
+  await commands.checkout(repo, "topic");
+  await commands.checkout(repo, "0123456789abcdef0123456789abcdef01234567");
+  await commands.merge(repo, "topic");
+  expect(labels).toEqual(["Checking out topic…", "Checking out 0123456…", "Merging topic…"]);
 });
 
 it("pushes the current branch", async () => {

@@ -1,5 +1,6 @@
 import type { RepoId } from "@shared/domain";
 import { toast } from "sonner";
+import { busyOf, busyReason, useBusyStore } from "@/stores/busy";
 import { ApiError } from "./api";
 import { keys, queryClient } from "./queries";
 
@@ -7,13 +8,27 @@ interface RunOptions {
   /** Shows a progress toast while running (for slow, network-bound operations). */
   readonly progress?: string;
   readonly success?: string;
+  /** What is running, for the busy indicator; defaults to `progress`, then `label`. */
+  readonly status?: string;
+  /** Lets the user cancel it from the busy indicator (network operations). */
+  readonly cancellable?: boolean;
 }
 
-const inflight = new Set<string>();
+/**
+ * Tells the user that `label` cannot start because another operation is
+ * running in `repo`, and returns whether that is the case.
+ */
+export const refuseWhileBusy = (repo: RepoId, label: string): boolean => {
+  const busy = busyOf(repo);
+  if (busy) toast.warning(`Cannot ${label.toLowerCase()} now`, { description: busyReason(busy) });
+  return busy !== null;
+};
 
 /**
  * Runs a repository-mutating action, reporting failures as toasts and
- * refreshing the repository's data afterwards.
+ * refreshing the repository's data afterwards. Actions run one at a time per
+ * repository: while one runs, the repository is busy (see `stores/busy.ts`)
+ * and starting another is refused.
  */
 export const runAction = async <A>(
   repo: RepoId,
@@ -21,9 +36,12 @@ export const runAction = async <A>(
   fn: () => Promise<A>,
   options: RunOptions = {},
 ): Promise<A | undefined> => {
-  const key = `${repo}:${label}`;
-  if (inflight.has(key)) return undefined;
-  inflight.add(key);
+  if (refuseWhileBusy(repo, label)) return undefined;
+  const busy = useBusyStore.getState();
+  busy.start(repo, {
+    label: options.status ?? options.progress ?? `${label}…`,
+    cancellable: options.cancellable ?? false,
+  });
   const id = options.progress ? toast.loading(options.progress) : undefined;
   try {
     const result = await fn();
@@ -31,6 +49,10 @@ export const runAction = async <A>(
     else if (id !== undefined) toast.dismiss(id);
     return result;
   } catch (e) {
+    if (e instanceof ApiError && e.tag === "CancelledError") {
+      toast.info(`${label} cancelled`, { id });
+      return undefined;
+    }
     const message = e instanceof Error ? e.message : String(e);
     const detail = e instanceof ApiError ? e.detail : undefined;
     toast.error(`${label} failed`, {
@@ -40,7 +62,7 @@ export const runAction = async <A>(
     });
     return undefined;
   } finally {
-    inflight.delete(key);
+    busy.finish(repo);
     // Watchers will pick up changes too, but refresh eagerly for snappiness.
     void queryClient.invalidateQueries({ queryKey: keys.info(repo) });
     void queryClient.invalidateQueries({ queryKey: keys.refs(repo) });

@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { basename, dirname, shortHash } from "@/lib/format";
 import { useDiff } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+import { useBusy, writeProps } from "@/stores/busy";
 import { type DiffMode, useLayout, useRepoUiStore } from "@/stores/repo-ui";
 import type { ThemeKind } from "./highlight-protocol";
 import { type DocHighlighter, tokenStyle, useHighlighter } from "./highlight";
@@ -80,6 +81,8 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo]);
 
+  // Staging and discarding wait while another operation runs.
+  const write = writeProps(useBusy(repo));
   const hunkActions = actionsFor(target, "Hunk");
   const lineActions = actionsFor(target, "Lines");
 
@@ -122,7 +125,12 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
         {textual && (isPending || isPlaceholderData) && <Spinner className="size-3.5" />}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {textual && selection.size > 0 && (
-            <SelectionBar count={selection.size} actions={lineActions} onAction={applyLines} />
+            <SelectionBar
+              count={selection.size}
+              actions={lineActions}
+              onAction={applyLines}
+              write={write}
+            />
           )}
           {kind.views.length > 1 && (
             <ViewToggle views={kind.views} view={view} setView={(v) => setView(kind.id, v)} />
@@ -140,6 +148,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
           mode={mode}
           actions={hunkActions}
           onAction={applyHunk}
+          write={write}
           selectable={lineActions.length > 0}
           selection={selection}
           setSelection={setSelection}
@@ -151,11 +160,19 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   );
 }
 
+type WriteProps = ReturnType<typeof writeProps>;
+
 function SelectionBar({
   count,
   actions,
   onAction,
-}: Readonly<{ count: number; actions: PatchAction[]; onAction: (a: PatchAction) => void }>) {
+  write,
+}: Readonly<{
+  count: number;
+  actions: PatchAction[];
+  onAction: (a: PatchAction) => void;
+  write: WriteProps;
+}>) {
   return (
     <>
       <span className="text-muted-foreground mr-1 text-[11px]">
@@ -167,6 +184,7 @@ function SelectionBar({
           size="xs"
           variant={a.destructive ? "destructive" : "secondary"}
           className="h-6 rounded-md px-2 text-[11px]"
+          {...write}
           onClick={() => onAction(a)}
         >
           {a.label}
@@ -275,6 +293,7 @@ function DiffBody({
   mode,
   actions,
   onAction,
+  write,
   selectable,
   selection,
   setSelection,
@@ -283,6 +302,7 @@ function DiffBody({
   mode: DiffMode;
   actions: PatchAction[];
   onAction: (hunk: number, a: PatchAction) => void;
+  write: WriteProps;
   selectable: boolean;
   selection: ReadonlySet<number>;
   setSelection: (s: ReadonlySet<number>) => void;
@@ -451,6 +471,7 @@ function DiffBody({
                         size="xs"
                         variant={a.destructive ? "destructive" : "secondary"}
                         className="h-5 rounded-md px-2 font-sans text-[11px]"
+                        {...write}
                         onClick={() => onAction(row.hunk, a)}
                       >
                         {a.label}

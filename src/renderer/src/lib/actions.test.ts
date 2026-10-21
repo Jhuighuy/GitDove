@@ -1,7 +1,14 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  toast: { loading: vi.fn(() => "toast-1"), success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
+  toast: {
+    loading: vi.fn(() => "toast-1"),
+    success: vi.fn(),
+    error: vi.fn(),
+    dismiss: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
 }));
 vi.mock("sonner", () => ({ toast: mocks.toast }));
 vi.mock("./api", () => {
@@ -17,7 +24,8 @@ vi.mock("./api", () => {
   return { ApiError, api: vi.fn(), useEvent: () => {} };
 });
 
-const { runAction } = await import("./actions");
+const { refuseWhileBusy, runAction } = await import("./actions");
+const { busyOf } = await import("@/stores/busy");
 const { ApiError } = (await import("./api")) as unknown as {
   ApiError: new (message: string, tag: string, detail?: string) => Error;
 };
@@ -101,17 +109,55 @@ it("describes non-Error failures", async () => {
   );
 });
 
-it("ignores the same action while it is running", async () => {
+it("runs one action at a time per repository, marking it busy", async () => {
   let release!: () => void;
   const fn = vi.fn(() => new Promise<string>((r) => (release = () => r("done"))));
-  const first = runAction(repo, "Fetch", fn);
-  await expect(runAction(repo, "Fetch", fn)).resolves.toBeUndefined();
-  // Other labels and repositories are independent.
-  await expect(runAction(repo, "Pull", async () => "pulled")).resolves.toBe("pulled");
+  const first = runAction(repo, "Checkout", fn, { status: "Checking out feature…" });
+  expect(busyOf(repo)).toEqual({ label: "Checking out feature…", cancellable: false });
+
+  // Any other action in the same repository is refused, with a reason.
+  const other = vi.fn(async () => "pulled");
+  await expect(runAction(repo, "Pull", other)).resolves.toBeUndefined();
+  expect(other).not.toHaveBeenCalled();
+  expect(mocks.toast.warning).toHaveBeenCalledWith("Cannot pull now", {
+    description: "Checking out feature… Wait for it to finish.",
+  });
+  expect(refuseWhileBusy(repo, "Merge")).toBe(true);
+  // Other repositories are independent.
   await expect(runAction("local:/other", "Fetch", async () => "x")).resolves.toBe("x");
+
   release();
   await expect(first).resolves.toBe("done");
   expect(fn).toHaveBeenCalledTimes(1);
-  // Once finished, it can run again.
-  await expect(runAction(repo, "Fetch", async () => "again")).resolves.toBe("again");
+  expect(busyOf(repo)).toBeNull();
+  expect(refuseWhileBusy(repo, "Merge")).toBe(false);
+  // Once finished, the next one runs.
+  await expect(runAction(repo, "Pull", other)).resolves.toBe("pulled");
+});
+
+it("labels the busy state from the progress message or the label", async () => {
+  let release!: () => void;
+  const wait = () => new Promise<void>((r) => (release = r));
+  const pull = runAction(repo, "Pull", wait, { progress: "Pulling…", cancellable: true });
+  expect(busyOf(repo)).toEqual({ label: "Pulling…", cancellable: true });
+  release();
+  await pull;
+  const stage = runAction(repo, "Stage", wait);
+  expect(busyOf(repo)?.label).toBe("Stage…");
+  release();
+  await stage;
+});
+
+it("reports a cancelled action without an error", async () => {
+  await runAction(
+    repo,
+    "Fetch",
+    async () => {
+      throw new ApiError("Operation was cancelled", "CancelledError");
+    },
+    { progress: "Fetching…", cancellable: true },
+  );
+  expect(mocks.toast.info).toHaveBeenCalledWith("Fetch cancelled", { id: "toast-1" });
+  expect(mocks.toast.error).not.toHaveBeenCalled();
+  expect(busyOf(repo)).toBeNull();
 });
