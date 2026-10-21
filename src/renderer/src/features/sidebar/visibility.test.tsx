@@ -217,3 +217,25 @@ it("filters branches by contributor", async () => {
   await step(() => probe.vis.soloContributors(["bob"]), ["person:ann lee"]);
   await step(() => probe.vis.showAllContributors(), []);
 });
+
+it("keeps the own state of filtered branches when a group changes", async () => {
+  await render();
+  const [main, originMain] = ["refs/heads/main", "refs/remotes/origin/main"];
+  const group = [main, originMain];
+  const ann = probe.vis.contributors.find((c) => c.person === "ann lee")!;
+  const step = async (action: () => void, hidden: string[]) => {
+    await act(async () => action());
+    await settle();
+    expect(probe.vis.hidden).toEqual(hidden);
+  };
+  // With main filtered, the group changes only origin/main, so not by prefix.
+  await step(() => probe.vis.toggleContributor(ann), ["person:ann lee"]);
+  await step(() => probe.vis.toggleGroup(group, "refs/"), ["person:ann lee", originMain]);
+  await step(() => probe.vis.toggleGroup(group, "refs/"), ["person:ann lee"]);
+  await step(() => probe.vis.toggleContributor(ann), []);
+  expect(probe.vis.isHidden(main)).toBe(false);
+  // Showing a group by prefix keeps a filtered member hidden by its own eye.
+  await step(() => probe.vis.hideGroup(group, "refs/"), ["refs/"]);
+  await step(() => probe.vis.toggleContributor(ann), ["refs/", "person:ann lee"]);
+  await step(() => probe.vis.showGroup(group, "refs/"), [main, "person:ann lee"]);
+});

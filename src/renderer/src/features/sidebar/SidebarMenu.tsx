@@ -489,9 +489,12 @@ export function SidebarMenu({ repo, target, vis }: Props) {
         const members = names(prefix);
         return (
           <>
-            <Item onClick={() => vis.show([prefix, ...members])}>Show all</Item>
+            <Item onClick={() => vis.showGroup(members, prefix)}>Show all</Item>
             <Item
-              onClick={() => (prefix === "refs/heads/" ? vis.hide(members) : vis.hide([prefix]))}
+              onClick={() =>
+                // New local branches stay visible.
+                prefix === "refs/heads/" ? vis.hideGroup(members) : vis.hideGroup(members, prefix)
+              }
             >
               Hide all
             </Item>

@@ -147,6 +147,24 @@ export const useVisibility = (repo: RepoId) => {
     },
     [client, repo],
   );
+  /**
+   * Shows or hides a group's members, by `prefix` when given (covering members added later).
+   * Members the contributor filter hides keep their own state, so then they are left out and
+   * the prefix is not used.
+   */
+  const setGroup = useCallback(
+    (names: readonly string[], prefix: string | undefined, show: boolean) => {
+      const active = names.filter((n) => !filtered(n));
+      if (active.length === 0) return;
+      const whole = prefix !== undefined && active.length === names.length;
+      save(
+        show
+          ? showNames(hidden, whole ? [prefix, ...active] : active, all)
+          : [...new Set([...hidden, ...(whole ? [prefix] : active)])],
+      );
+    },
+    [filtered, hidden, all, save],
+  );
   const saveFilter = useCallback(
     (entries: readonly string[]) => save(setContributorFilter(hidden, entries)),
     [hidden, save],
@@ -243,22 +261,21 @@ export const useVisibility = (repo: RepoId) => {
     ),
     showAllContributors: useCallback(() => saveFilter([]), [saveFilter]),
     /**
-     * Shows a group when all of its `names` are hidden and hides it otherwise:
-     * by `prefix` when given (covering members added later), else name by name.
+     * Shows a group when all of its `names` are hidden and hides it otherwise (see `setGroup`).
      * Branches the contributor filter hides do not count.
      */
     toggleGroup: useCallback(
-      (names: readonly string[], prefix?: string) => {
-        const active = names.filter((n) => !filtered(n));
-        if (active.length === 0) return;
-        const scope = prefix === undefined ? active : [prefix, ...active];
-        save(
-          active.every(explicit)
-            ? showNames(hidden, scope, all)
-            : [...new Set([...hidden, ...(prefix === undefined ? active : [prefix])])],
-        );
-      },
-      [filtered, explicit, hidden, all, save],
+      (names: readonly string[], prefix?: string) =>
+        setGroup(names, prefix, names.filter((n) => !filtered(n)).every(explicit)),
+      [setGroup, filtered, explicit],
+    ),
+    showGroup: useCallback(
+      (names: readonly string[], prefix?: string) => setGroup(names, prefix, true),
+      [setGroup],
+    ),
+    hideGroup: useCallback(
+      (names: readonly string[], prefix?: string) => setGroup(names, prefix, false),
+      [setGroup],
     ),
     /** Hides everything except `keep`. */
     solo: useCallback(

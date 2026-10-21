@@ -484,7 +484,11 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     const commitAs = (branch: string, who: string) =>
       `git checkout -q -b ${branch} main && git -c user.name=${who} -c user.email=${who}@x ` +
       `commit -q --allow-empty -m ${branch}`;
-    await sh(`${commitAs("ann", "Ann")} && ${commitAs("bob", "Bob")} && git checkout -q main`);
+    // An unpushed commit on main is not part of the branches made from it.
+    await sh(
+      "git -c user.name=Zed -c user.email=zed@x commit -q --allow-empty -m local && " +
+        `${commitAs("ann", "Ann")} && ${commitAs("bob", "Bob")} && git checkout -q main`,
+    );
     const { owners } = await run(repo.refs());
     expect(owners.byRef).toEqual({ "refs/heads/ann": ["ann@x"], "refs/heads/bob": ["bob@x"] });
     expect(owners.people["ann@x"]?.name).toBe("Ann");
@@ -502,11 +506,11 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
       version = g.version;
       return g.count;
     };
-    expect(await count()).toBe(4);
+    expect(await count()).toBe(5);
     repo.setHiddenRefs([authorKey("ann@x")]);
-    expect(await count()).toBe(3);
+    expect(await count()).toBe(4);
     repo.setHiddenRefs([personKey("bob")]);
-    expect(await count()).toBe(3);
+    expect(await count()).toBe(4);
   });
 
   describe("remotes", () => {

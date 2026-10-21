@@ -26,7 +26,11 @@ export const OWNERS_LOG_ARGS = [
   "--remotes",
   "--not",
   "--remotes=*/HEAD",
-  ...SHARED.flatMap((n) => [`--glob=refs/heads/${n}`, `--glob=refs/remotes/*/${n}`]),
+  // A glob without a wildcard matches `<pattern>/*`: `[m]ain` matches `main` exactly.
+  ...SHARED.flatMap((n) => [
+    `--glob=refs/heads/[${n[0]}]${n.slice(1)}`,
+    `--glob=refs/remotes/*/${n}`,
+  ]),
 ];
 
 /** `git log` arguments listing the tip commit of every branch, with `.mailmap` applied. */
