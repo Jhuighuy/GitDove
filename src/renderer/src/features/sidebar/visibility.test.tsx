@@ -161,7 +161,7 @@ it("reports a failed save and reloads the saved state", async () => {
   expect(mocks.calls.filter((c) => c === "repo.hiddenRefs")).toHaveLength(2);
 });
 
-it("filters branches by contributor, with exceptions", async () => {
+it("filters branches by contributor", async () => {
   await render();
   const bob = {
     person: "bob",
@@ -188,21 +188,27 @@ it("filters branches by contributor, with exceptions", async () => {
     await settle();
     expect(probe.vis.hidden).toEqual(hidden);
   };
+  const main = "refs/heads/main";
   await step(() => probe.vis.toggleContributor(ann), ["person:ann lee"]);
   expect(probe.vis.contributorVisibility(ann)).toBe("hidden");
-  expect(probe.vis.isFiltered("refs/heads/main")).toBe(true);
-  expect(probe.vis.isHidden("refs/heads/main")).toBe(true);
+  expect(probe.vis.isFiltered(main)).toBe(true);
+  expect(probe.vis.isHidden(main)).toBe(true);
   // A branch someone else works on too stays visible.
   expect(probe.vis.isHidden("refs/remotes/origin/main")).toBe(false);
   expect(probe.vis.anyHidden).toBe(true);
-  // The eye of a filtered branch makes an exception, and then hides it for real.
-  const main = "refs/heads/main";
-  await step(() => probe.vis.toggle(main), ["person:ann lee", `show:${main}`]);
-  expect(probe.vis.isHidden(main)).toBe(false);
-  await step(() => probe.vis.toggle(main), ["person:ann lee", main]);
-  expect(probe.vis.isFiltered(main)).toBe(false);
-  await step(() => probe.vis.toggle(main), ["person:ann lee", `show:${main}`]);
-  // Showing one email splits the contributor, and the stale exception goes.
+  expect(probe.vis.ownersOf(main)).toEqual([ann]);
+  // The eye of a filtered branch does nothing; showing its owners brings it back.
+  await step(() => probe.vis.toggle(main), ["person:ann lee"]);
+  await step(() => probe.vis.toggleGroup([main]), ["person:ann lee"]);
+  await step(() => probe.vis.showOwners(main), []);
+  // Its own eye is remembered while the filter hides it.
+  await step(() => probe.vis.toggle(main), [main]);
+  await step(() => probe.vis.toggleContributor(ann), [main, "person:ann lee"]);
+  expect(probe.vis.isHiddenByEye(main)).toBe(true);
+  await step(() => probe.vis.toggleContributor(ann), [main]);
+  await step(() => probe.vis.toggle(main), []);
+  // Showing one email splits the contributor.
+  await step(() => probe.vis.toggleContributor(ann), ["person:ann lee"]);
   await step(() => probe.vis.toggleEmail(ann, "ann@x"), ["author:ann@corp"]);
   expect(probe.vis.contributorVisibility(ann)).toBe("partial");
   await step(() => probe.vis.toggleEmail(ann, "ann@x"), ["author:ann@corp", "author:ann@x"]);

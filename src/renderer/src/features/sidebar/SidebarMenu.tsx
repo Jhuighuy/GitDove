@@ -63,14 +63,27 @@ function VisibilityItems({ name, vis }: { readonly name: string; readonly vis: P
   return (
     <>
       <Sep />
-      <Item onClick={() => (hidden ? vis.show([name]) : vis.hide([name]))}>
-        {hidden ? "Show in graph" : "Hide from graph"}
-      </Item>
-      <Item onClick={() => vis.solo([name])}>Solo (hide everything else)</Item>
+      {vis.isFiltered(name) ? (
+        // Only showing its contributors brings the branch back.
+        <Item onClick={() => vis.showOwners(name)}>
+          Show {possessive(vis.ownersOf(name).map((c) => c.name))} branches
+        </Item>
+      ) : (
+        <>
+          <Item onClick={() => (hidden ? vis.show([name]) : vis.hide([name]))}>
+            {hidden ? "Show in graph" : "Hide from graph"}
+          </Item>
+          <Item onClick={() => vis.solo([name])}>Solo (hide everything else)</Item>
+        </>
+      )}
       {vis.anyHidden && <Item onClick={vis.showAll}>Show all</Item>}
     </>
   );
 }
+
+/** "Ann's", "Ann and Bob's", "Ann, Bob and Cid's". */
+const possessive = (names: readonly string[]): string =>
+  `${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : (names[0] ?? "")}'s`;
 
 function ResetItems({ repo, hash, head }: { repo: RepoId; hash: string; head: string }) {
   return (
@@ -109,7 +122,9 @@ function RemoteMenu({
   const members = (refs?.refs ?? [])
     .filter((x) => x.name.startsWith(prefix) && !x.short.endsWith("/HEAD"))
     .map((x) => x.name);
-  const allHidden = members.length > 0 && members.every((m) => vis.isHidden(m));
+  // Branches the contributor filter hides keep their state.
+  const active = members.filter((m) => !vis.isFiltered(m));
+  const allHidden = active.length > 0 && active.every((m) => vis.isHiddenByEye(m));
   return (
     <Menu>
       <WriteMenuItem repo={repo} onClick={() => void commands.fetchRemote(repo, r.name)}>
@@ -124,9 +139,11 @@ function RemoteMenu({
       </WriteMenuItem>
       <Item onClick={() => commands.copy(r.fetchUrl, "Remote URL copied")}>Copy URL</Item>
       <Sep />
-      <Item onClick={() => vis.toggleGroup(members, prefix)}>
-        {allHidden ? `Show ${r.name} branches` : `Hide ${r.name} branches`}
-      </Item>
+      {active.length > 0 && (
+        <Item onClick={() => vis.toggleGroup(members, prefix)}>
+          {allHidden ? `Show ${r.name} branches` : `Hide ${r.name} branches`}
+        </Item>
+      )}
       <Sep />
       <WriteMenuItem
         repo={repo}
@@ -178,12 +195,16 @@ function FolderMenu({
   readonly target: Extract<SidebarTarget, { kind: "folder" }>;
   readonly vis: Props["vis"];
 }) {
-  const allHidden = names.length > 0 && names.every((n) => vis.isHidden(n));
+  // Branches the contributor filter hides keep their state.
+  const active = names.filter((n) => !vis.isFiltered(n));
+  const allHidden = active.length > 0 && active.every((n) => vis.isHiddenByEye(n));
   return (
     <Menu>
-      <Item onClick={() => vis.toggleGroup(names, prefix)}>
-        {allHidden ? `Show ${name} in graph` : `Hide ${name} from graph`}
-      </Item>
+      {active.length > 0 && (
+        <Item onClick={() => vis.toggleGroup(names, prefix)}>
+          {allHidden ? `Show ${name} in graph` : `Hide ${name} from graph`}
+        </Item>
+      )}
       <Item onClick={() => vis.solo(members)}>Solo {name} (hide everything else)</Item>
       {vis.anyHidden && <Item onClick={vis.showAll}>Show all</Item>}
     </Menu>

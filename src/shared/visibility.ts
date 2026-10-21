@@ -10,7 +10,7 @@ import type { BranchOwners } from "./domain";
  * The contributor filter lives in the same list: `author:<email>` hides one email
  * and `person:<name>` every email with that name (see `personOf`), like a group
  * prefix. A branch is hidden when all of its owners (see `BranchOwners`) are,
- * unless it is listed as `show:<ref name>`.
+ * whatever its own entry says; that entry is kept for when they are shown again.
  */
 export const stashKey = (hash: string): string => `stash:${hash}`;
 
@@ -21,9 +21,6 @@ export const personOf = (name: string): string =>
   name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/\s+/g, " ");
 
 export const personKey = (person: string): string => `person:${person}`;
-
-/** A branch shown although the contributor filter hides its owners. */
-export const exceptionKey = (name: string): string => `show:${name}`;
 
 export const isContributorKey = (entry: string): boolean =>
   entry.startsWith("author:") || entry.startsWith("person:");
@@ -66,9 +63,7 @@ export const isFilteredOut = (
   const emails = owners.byRef[name];
   if (!emails || emails.length === 0) return false;
   const list = asSet(hidden);
-  return (
-    !list.has(exceptionKey(name)) && emails.every((e) => isEmailHidden(list, e, owners.people))
-  );
+  return emails.every((e) => isEmailHidden(list, e, owners.people));
 };
 
 /**
@@ -103,24 +98,8 @@ export const toggleHidden = (
 ): string[] =>
   isHidden(hidden, name) ? showNames(hidden, [name], all) : [...new Set([...hidden, name])];
 
-/**
- * Replaces the contributor filter with `entries` (`author:` and `person:` keys).
- * Exceptions for branches the filter no longer hides are dropped, so they do not
- * linger.
- */
+/** Replaces the contributor filter with `entries` (`author:` and `person:` keys). */
 export const setContributorFilter = (
   hidden: readonly string[],
   entries: readonly string[],
-  owners: Pick<BranchOwners, "byRef" | "people">,
-): string[] => {
-  const next = [...new Set([...hidden.filter((h) => !isContributorKey(h)), ...entries])];
-  return next.filter(
-    (h) =>
-      !h.startsWith("show:") ||
-      isFilteredOut(
-        next.filter((e) => e !== h),
-        h.slice("show:".length),
-        owners,
-      ),
-  );
-};
+): string[] => [...new Set([...hidden.filter((h) => !isContributorKey(h)), ...entries])];

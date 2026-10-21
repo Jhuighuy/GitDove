@@ -1,7 +1,6 @@
 import type { BranchOwners, RefsSnapshot, RepoId } from "@shared/domain";
 import {
   authorKey,
-  exceptionKey,
   isContributorKey,
   isEmailHidden,
   isFilteredOut,
@@ -12,6 +11,7 @@ import {
   setContributorFilter,
   showNames,
   stashKey,
+  toggleHidden,
 } from "@shared/visibility";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
@@ -117,25 +117,24 @@ export const useVisibility = (repo: RepoId) => {
     [set, owners],
   );
 
-  /** Hidden by its own eye (or a hidden group). */
+  /** Hidden by its own eye (or a hidden group); remembered while the contributor filter hides it. */
   const explicit = useCallback((name: string) => isHidden(set, name), [set]);
-  /** Hidden only by the contributor filter. */
-  const filtered = useCallback(
-    (name: string) => !isHidden(set, name) && isFilteredOut(set, name, owners),
-    [set, owners],
-  );
+  /** Hidden by the contributor filter: its own eye cannot change that. */
+  const filtered = useCallback((name: string) => isFilteredOut(set, name, owners), [set, owners]);
   const hiddenNow = useCallback(
-    (name: string) => explicit(name) || isFilteredOut(set, name, owners),
-    [explicit, set, owners],
+    (name: string) => explicit(name) || filtered(name),
+    [explicit, filtered],
   );
-  /** `showNames`, plus exceptions for names the contributor filter would still hide. */
-  const reveal = useCallback(
-    (names: readonly string[]) => {
-      const next = showNames(hidden, names, all);
-      const filteredOut = names.filter((n) => isFilteredOut(next, n, owners));
-      return [...new Set([...next, ...filteredOut.map(exceptionKey)])];
-    },
-    [hidden, all, owners],
+  const byEmail = useMemo(
+    () => new Map(contributors.flatMap((c) => c.emails.map((e) => [e.email, c] as const))),
+    [contributors],
+  );
+  /** Contributors who own a branch, most commits first. */
+  const ownersOf = useCallback(
+    (name: string): Contributor[] => [
+      ...new Set((byRef[name] ?? []).flatMap((e) => byEmail.get(e) ?? [])),
+    ],
+    [byRef, byEmail],
   );
 
   const save = useCallback(
@@ -149,8 +148,8 @@ export const useVisibility = (repo: RepoId) => {
     [client, repo],
   );
   const saveFilter = useCallback(
-    (entries: readonly string[]) => save(setContributorFilter(hidden, entries, owners)),
-    [hidden, owners, save],
+    (entries: readonly string[]) => save(setContributorFilter(hidden, entries)),
+    [hidden, save],
   );
 
   return {
@@ -160,10 +159,13 @@ export const useVisibility = (repo: RepoId) => {
     anyHidden: filter.length > 0 || all.some(hiddenNow),
     /** Whether a name is left out of the graph, by its own eye or the contributor filter. */
     isHidden: hiddenNow,
-    /** Whether a name is left out of the graph only by the contributor filter. */
+    /** Whether its own eye hides a name (whatever the contributor filter does). */
+    isHiddenByEye: explicit,
+    /** Whether the contributor filter hides a branch. */
     isFiltered: filtered,
     /** Owner emails of each branch, by full ref name. */
     owners: byRef,
+    ownersOf,
     contributors,
     /** Whether the contributor filter hides an email. */
     isEmailHidden: emailHidden,
@@ -175,24 +177,35 @@ export const useVisibility = (repo: RepoId) => {
       },
       [emailHidden],
     ),
+    /** Toggles a name's own eye; does nothing to a branch the contributor filter hides. */
     toggle: useCallback(
-      (name: string) =>
-        save(
-          hiddenNow(name)
-            ? reveal([name])
-            : [...hidden.filter((h) => h !== exceptionKey(name)), name],
-        ),
-      [hiddenNow, reveal, hidden, save],
+      (name: string) => {
+        if (!filtered(name)) save(toggleHidden(hidden, name, all));
+      },
+      [filtered, hidden, all, save],
     ),
     hide: useCallback(
       (names: readonly string[]) => save([...new Set([...hidden, ...names])]),
       [hidden, save],
     ),
-    /**
-     * Shows names and group prefixes, splitting any hidden group that covers them
-     * and making exceptions to the contributor filter.
-     */
-    show: useCallback((names: readonly string[]) => save(reveal(names)), [reveal, save]),
+    /** Shows names and group prefixes, splitting any hidden group that covers them. */
+    show: useCallback(
+      (names: readonly string[]) => save(showNames(hidden, names, all)),
+      [hidden, all, save],
+    ),
+    /** Shows every owner of a branch the contributor filter hides. */
+    showOwners: useCallback(
+      (name: string) => {
+        const own = new Set(
+          ownersOf(name).flatMap((c) => [
+            personKey(c.person),
+            ...c.emails.map((e) => authorKey(e.email)),
+          ]),
+        );
+        saveFilter(filter.filter((h) => !own.has(h)));
+      },
+      [ownersOf, filter, saveFilter],
+    ),
     /**
      * Shows a contributor when all of their emails are hidden and hides them otherwise, by
      * name (covering emails added later).
@@ -220,7 +233,7 @@ export const useVisibility = (repo: RepoId) => {
       },
       [filter, emailHidden, saveFilter],
     ),
-    /** Hides every other contributor's branches (exceptions stay). */
+    /** Hides every other contributor's branches. */
     soloContributors: useCallback(
       (persons: readonly string[]) =>
         saveFilter(
@@ -232,18 +245,20 @@ export const useVisibility = (repo: RepoId) => {
     /**
      * Shows a group when all of its `names` are hidden and hides it otherwise:
      * by `prefix` when given (covering members added later), else name by name.
+     * Branches the contributor filter hides do not count.
      */
     toggleGroup: useCallback(
       (names: readonly string[], prefix?: string) => {
-        const scope = prefix === undefined ? names : [prefix, ...names];
-        const allHidden = names.length > 0 && names.every(hiddenNow);
+        const active = names.filter((n) => !filtered(n));
+        if (active.length === 0) return;
+        const scope = prefix === undefined ? active : [prefix, ...active];
         save(
-          allHidden
-            ? reveal(scope)
-            : [...new Set([...hidden, ...(prefix === undefined ? names : [prefix])])],
+          active.every(explicit)
+            ? showNames(hidden, scope, all)
+            : [...new Set([...hidden, ...(prefix === undefined ? active : [prefix])])],
         );
       },
-      [hidden, hiddenNow, reveal, save],
+      [filtered, explicit, hidden, all, save],
     ),
     /** Hides everything except `keep`. */
     solo: useCallback(

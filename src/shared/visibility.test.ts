@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   authorKey,
-  exceptionKey,
   isEmailHidden,
   isFilteredOut,
   isHidden,
@@ -86,24 +85,18 @@ describe("visibility", () => {
       true,
     );
     expect(isFilteredOut([personKey("ann lee")], "refs/heads/main", owners)).toBe(false);
-    expect(
-      isFilteredOut([personKey("ann lee"), exceptionKey("refs/heads/a")], "refs/heads/a", owners),
-    ).toBe(false);
+    // A branch's own entry does not matter.
+    expect(isFilteredOut([personKey("ann lee"), "refs/heads/a"], "refs/heads/a", owners)).toBe(
+      true,
+    );
   });
 
-  it("replaces the contributor filter and drops stale exceptions", () => {
-    const hidden = [
+  it("replaces the contributor filter", () => {
+    const hidden = ["refs/heads/x", personKey("ann lee"), authorKey("bob@x")];
+    expect(setContributorFilter(hidden, [authorKey("ann@x")])).toEqual([
       "refs/heads/x",
-      personKey("ann lee"),
-      authorKey("bob@x"),
-      exceptionKey("refs/heads/a"),
-      exceptionKey("refs/heads/b"),
-    ];
-    expect(setContributorFilter(hidden, [authorKey("ann@x")], owners)).toEqual([
-      "refs/heads/x",
-      exceptionKey("refs/heads/a"),
       authorKey("ann@x"),
     ]);
-    expect(setContributorFilter(hidden, [], owners)).toEqual(["refs/heads/x"]);
+    expect(setContributorFilter(hidden, [])).toEqual(["refs/heads/x"]);
   });
 });

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { Ref, RefsSnapshot } from "@shared/domain";
-import { authorKey, exceptionKey, personKey, stashKey } from "@shared/visibility";
+import { authorKey, personKey, stashKey } from "@shared/visibility";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -490,16 +490,15 @@ it("filters branches by contributor", async () => {
   expect(mocks.commands).toEqual([["copy", "bob@x", "Email copied"]]);
 });
 
-it("grays out branches of hidden contributors and shows them on request", async () => {
-  await render(base, [personKey("bob")]);
+it("locks the branches of hidden contributors", async () => {
+  await render(base, [personKey("bob"), "refs/remotes/origin/feature"]);
   expect(document.body.textContent).toContain("Viewing 5/6");
-  const toggle = row("origin/feature").querySelector<HTMLElement>(
-    '[title="Hidden with its contributors (click to show anyway)"]',
-  )!;
-  await act(async () => toggle.click());
-  await menu(row("bob@x"), "Show all contributors");
-  expect(mocks.setHidden).toEqual([
-    [personKey("bob"), exceptionKey("refs/remotes/origin/feature")],
-    [],
-  ]);
+  const lock = row("origin/feature").querySelector<HTMLElement>('[title="Hidden with Bob"]')!;
+  expect(lock.tagName).toBe("SPAN");
+  await act(async () => lock.click());
+  await fire(row("origin/feature"), "contextmenu");
+  expect(items()).not.toContain("Solo (hide everything else)");
+  await act(async () => item("Show Bob's branches").click());
+  // The branch's own eye is remembered.
+  expect(mocks.setHidden).toEqual([["refs/remotes/origin/feature"]]);
 });

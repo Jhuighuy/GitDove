@@ -37,7 +37,7 @@ import { SidebarMenu, type SidebarTarget } from "./SidebarMenu";
 import { buildTree, type TreeNode } from "./tree";
 import { type Contributor, useVisibility } from "./visibility";
 
-/** `filtered`: hidden by the contributor filter rather than its own eye. */
+/** `filtered`: hidden by the contributor filter, which its own eye cannot change. */
 type Visibility = "visible" | "hidden" | "filtered" | "partial" | "head" | "none";
 
 interface FolderState {
@@ -124,13 +124,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
           ? "hidden"
           : "visible";
   const contributors = vis.contributors;
-  const byEmail = useMemo(
-    () => new Map(contributors.flatMap((c) => c.emails.map((e) => [e.email, c] as const))),
-    [contributors],
-  );
-  const ownersOf = (r: Ref) => [
-    ...new Set((vis.owners[r.name] ?? []).flatMap((e) => byEmail.get(e) ?? [])),
-  ];
+  const ownersOf = (r: Ref) => vis.ownersOf(r.name);
   const count = (names: readonly string[], hidden = vis.isHidden) => {
     const shown = names.filter((n) => !hidden(n)).length;
     return shown === names.length ? (
@@ -144,6 +138,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
   const all = vis.all;
   const visibleTotal = all.filter((n) => !vis.isHidden(n)).length;
   const groupVisibility = (names: readonly string[]): Visibility => {
+    if (names.length > 0 && names.every(vis.isFiltered)) return "filtered";
     const hiddenCount = names.filter((n) => vis.isHidden(n)).length;
     if (names.length === 0 || hiddenCount === 0) return "visible";
     return hiddenCount === names.length ? "hidden" : "partial";
@@ -475,6 +470,8 @@ interface ItemProps {
   readonly label: string;
   readonly depth?: number;
   readonly visibility?: Visibility;
+  /** Who hides a `filtered` item, for its tooltip. */
+  readonly filteredBy?: string;
   readonly active?: boolean;
   readonly trailing?: ReactNode;
   readonly title?: string;
@@ -489,6 +486,7 @@ function Item({
   label,
   depth = 0,
   visibility = "none",
+  filteredBy,
   active,
   trailing,
   title,
@@ -509,7 +507,7 @@ function Item({
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
     >
-      <VisibilityToggle visibility={visibility} onToggle={onToggle} />
+      <VisibilityToggle visibility={visibility} filteredBy={filteredBy} onToggle={onToggle} />
       <span
         className={cn("text-muted-foreground flex", dim && "opacity-50")}
         style={{ marginLeft: depth * 14 }}
@@ -526,9 +524,11 @@ function Item({
 
 function VisibilityToggle({
   visibility,
+  filteredBy = "their contributors",
   onToggle,
 }: {
   visibility: Visibility;
+  filteredBy?: string;
   onToggle?: () => void;
 }) {
   if (visibility === "none") return <span className="w-5 shrink-0" />;
@@ -545,18 +545,12 @@ function VisibilityToggle({
   const off = visibility === "hidden" || visibility === "partial";
   if (visibility === "filtered") {
     return (
-      <button
-        type="button"
-        title="Hidden with its contributors (click to show anyway)"
-        className="text-muted-foreground hover:text-foreground flex w-5 shrink-0 justify-center"
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle?.();
-        }}
-        onDoubleClick={(e) => e.stopPropagation()}
+      <span
+        className="text-muted-foreground flex w-5 shrink-0 justify-center"
+        title={`Hidden with ${filteredBy}`}
       >
         <IconUserOff />
-      </button>
+      </span>
     );
   }
   return (
@@ -598,6 +592,7 @@ function RefItem({
   return (
     <Item
       {...rest}
+      filteredBy={owners.map((o) => o.name).join(", ")}
       label={label ?? r.short}
       active={r.isHead}
       trailing={

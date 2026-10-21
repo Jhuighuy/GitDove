@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { GraphInfo, RepoLocation } from "@shared/domain";
 import { SshError } from "../exec/errors";
 import { type Host, Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
-import { authorKey, exceptionKey, personKey } from "@shared/visibility";
+import { authorKey, personKey } from "@shared/visibility";
 import { Repository } from "./repository";
 
 const targets: string[] = [LOCAL_HOST];
@@ -505,8 +505,6 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     expect(await count()).toBe(4);
     repo.setHiddenRefs([authorKey("ann@x")]);
     expect(await count()).toBe(3);
-    repo.setHiddenRefs([authorKey("ann@x"), exceptionKey("refs/heads/ann")]);
-    expect(await count()).toBe(4);
     repo.setHiddenRefs([personKey("bob")]);
     expect(await count()).toBe(3);
   });
