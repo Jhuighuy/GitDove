@@ -30,7 +30,10 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 vi.mock("../commands", () => ({
-  commands: { cancel: (...args: unknown[]) => void mocks.commands.push(["cancel", ...args]) },
+  commands: {
+    cancel: (...args: unknown[]) => void mocks.commands.push(["cancel", ...args]),
+    copy: (...args: unknown[]) => void mocks.commands.push(["copy", ...args]),
+  },
 }));
 
 const SSH = "ssh://fedora.lab.example.com/home/me/project";
@@ -77,9 +80,18 @@ const setCached = (key: readonly unknown[], data: unknown) =>
 
 it("shows where the active repository lives", async () => {
   await render(SSH);
-  const host = container.querySelector<HTMLElement>("[title='fedora.lab.example.com']")!;
+  const host = container.querySelector<HTMLElement>(
+    "[title='fedora.lab.example.com (click to copy)']",
+  )!;
   expect(host.textContent).toBe("fedora.lab.example.com");
-  expect(container.querySelector("[title='/home/me/project']")).not.toBeNull();
+  const path = container.querySelector<HTMLElement>("[title='/home/me/project (click to copy)']")!;
+  // Both copy themselves when clicked.
+  await act(async () => host.click());
+  await act(async () => path.click());
+  expect(mocks.commands).toEqual([
+    ["copy", "fedora.lab.example.com", "Host name copied"],
+    ["copy", "/home/me/project", "Path copied"],
+  ]);
   expect(text()).not.toContain("Local");
 
   await render(LOCAL);

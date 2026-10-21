@@ -155,7 +155,11 @@ const menuItem = (label: string) => {
 it("shows the repository, its branch and ahead/behind counts", async () => {
   await render();
   expect(container.textContent).toContain("project");
-  expect(container.querySelector("[title='/work/project']")?.textContent).toBe("project");
+  const name = container.querySelector<HTMLElement>("[title='/work/project (click to copy)']")!;
+  expect(name.textContent).toBe("project");
+  await act(async () => name.click());
+  // (The mock drops the first argument.)
+  expect(mocks.commands).toContainEqual(["copy", "Path copied"]);
   expect(container.textContent).toContain("main");
   expect(tool("Pull").textContent).toBe("Pull3");
   expect(tool("Push").textContent).toBe("Push2");
