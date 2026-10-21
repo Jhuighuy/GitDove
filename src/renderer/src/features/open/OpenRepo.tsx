@@ -33,10 +33,11 @@ import { useTabs } from "@/stores/tabs";
 /** Opens a repository location in the active tab, reporting failures. */
 export const openLocation = async (location: RepoLocation, tabKey?: string): Promise<boolean> => {
   // Opening first gives the tab the repository's own id (e.g. for a subdirectory).
-  const status = useStatusStore.getState();
-  status.setActivity(
-    location.kind === "ssh" ? `Connecting to ${location.host}…` : "Opening repository…",
-  );
+  const done = useStatusStore
+    .getState()
+    .startActivity(
+      location.kind === "ssh" ? `Connecting to ${location.host}…` : "Opening repository…",
+    );
   try {
     const info = await api("repo.open", location);
     useTabs.getState().openRepo(info.id, tabKey);
@@ -47,7 +48,7 @@ export const openLocation = async (location: RepoLocation, tabKey?: string): Pro
     });
     return false;
   } finally {
-    status.setActivity(null);
+    done();
   }
 };
 

@@ -5,7 +5,7 @@ const notices = () => useStatusStore.getState().notices;
 
 beforeEach(() => {
   vi.useFakeTimers();
-  useStatusStore.setState({ notices: {}, activity: null });
+  useStatusStore.setState({ notices: {}, activities: [] });
 });
 afterEach(() => vi.useRealTimers());
 
@@ -28,9 +28,16 @@ it("keeps a newer notice when the older one's time is up", () => {
   expect(notices()["local:/a"]).toBeUndefined();
 });
 
-it("tracks app-wide activity", () => {
-  useStatusStore.getState().setActivity("Connecting to fedora…");
-  expect(useStatusStore.getState().activity).toBe("Connecting to fedora…");
-  useStatusStore.getState().setActivity(null);
-  expect(useStatusStore.getState().activity).toBeNull();
+it("tracks overlapping app-wide activities, each ended by its own caller", () => {
+  const texts = () => useStatusStore.getState().activities.map((a) => a.text);
+  const endFirst = useStatusStore.getState().startActivity("Connecting to fedora…");
+  const endSecond = useStatusStore.getState().startActivity("Opening repository…");
+  expect(texts()).toEqual(["Connecting to fedora…", "Opening repository…"]);
+  // The first finishing does not clear the one still pending.
+  endFirst();
+  expect(texts()).toEqual(["Opening repository…"]);
+  endFirst();
+  expect(texts()).toEqual(["Opening repository…"]);
+  endSecond();
+  expect(texts()).toEqual([]);
 });

@@ -38,7 +38,7 @@ const repo = "local:/repo";
 let invalidated: unknown[][];
 beforeEach(() => {
   vi.clearAllMocks();
-  useStatusStore.setState({ notices: {}, activity: null });
+  useStatusStore.setState({ notices: {}, activities: [] });
   invalidated = [];
   vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async (f) => {
     invalidated.push([...(f?.queryKey ?? [])]);

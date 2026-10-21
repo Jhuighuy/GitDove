@@ -45,7 +45,7 @@ beforeEach(() => {
   mocks.updater = { kind: "idle" };
   mocks.listeners.clear();
   useBusyStore.setState({ byRepo: {} });
-  useStatusStore.setState({ notices: {}, activity: null });
+  useStatusStore.setState({ notices: {}, activities: [] });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -137,8 +137,13 @@ it("shows results of the active repository and of the app", async () => {
 
 it("shows app-wide activity, e.g. while a repository opens", async () => {
   await render(null);
-  await act(async () => useStatusStore.getState().setActivity("Connecting to fedora…"));
+  let end = () => {};
+  await act(async () => {
+    end = useStatusStore.getState().startActivity("Connecting to fedora…");
+  });
   expect(container.querySelector("output")?.textContent).toBe("Connecting to fedora…");
+  await act(async () => end());
+  expect(container.querySelector("output")).toBeNull();
 });
 
 it("offers to restart for a downloaded update", async () => {

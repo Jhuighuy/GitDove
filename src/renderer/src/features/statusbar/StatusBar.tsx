@@ -14,7 +14,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { api, useEvent } from "@/lib/api";
 import { keys } from "@/lib/queries";
 import { type Busy, useBusy } from "@/stores/busy";
-import { APP, type Notice, useNotice, useStatusStore } from "@/stores/status";
+import { APP, type Notice, useActivity, useNotice } from "@/stores/status";
 import { commands } from "../commands";
 
 /**
@@ -28,7 +28,7 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
   const busy = useBusy(repo ?? "");
   const notice = useNotice(repo);
   const appNotice = useNotice(APP);
-  const activity = useStatusStore((s) => s.activity);
+  const activity = useActivity();
   const update = useUpdateReady();
 
   return (

@@ -84,7 +84,7 @@ const methods = () => mocks.api.mock.calls.map(([m]) => m as string);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useStatusStore.setState({ notices: {}, activity: null });
+  useStatusStore.setState({ notices: {}, activities: [] });
   queryClient.clear();
   mocks.api.mockResolvedValue(undefined);
   mocks.confirm.mockResolvedValue(true);
