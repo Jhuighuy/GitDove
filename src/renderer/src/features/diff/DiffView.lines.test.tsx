@@ -334,13 +334,16 @@ it("reports binary, truncated and failed diffs", async () => {
 
 it("selects a line on a click on its text, but not after selecting text", async () => {
   await render();
-  const click = (id: number) =>
+  const click = (id: number, upOn = id) =>
     act(async () => {
-      const text = textOf(id);
-      text.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-      text.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+      textOf(id).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      textOf(upOn).dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
     });
   await click(1);
+  expect(selectedIds()).toEqual([1]);
+
+  // A release on another line is not a click.
+  await click(2, 3);
   expect(selectedIds()).toEqual([1]);
 
   // A drag over the text selects text instead.

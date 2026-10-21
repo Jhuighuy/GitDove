@@ -434,9 +434,9 @@ function DiffBody({
       dragRef.current = { anchor: id, base: EMPTY_SELECTION };
     }
   };
-  // A press on the text starts a text selection; a click there without dragging (or with a
-  // modifier), or a press on the line numbers, selects lines.
-  const clickPending = useRef(false);
+  // A press on the text starts a text selection; a release on the same line without selecting
+  // text (or a press with a modifier, or on the line numbers) selects lines.
+  const pendingLine = useRef<number | null>(null);
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
@@ -447,7 +447,7 @@ function DiffBody({
     if (side) scrollRef.current?.setAttribute("data-select-side", side);
     else scrollRef.current?.removeAttribute("data-select-side");
 
-    clickPending.current = false;
+    pendingLine.current = null;
     if (!selectable) return;
     const id = lineAt(e);
     if (id === null || !isChange(model.lines[id]!)) {
@@ -456,18 +456,18 @@ function DiffBody({
     }
     const modifier = e.shiftKey || e.metaKey || e.ctrlKey;
     if (!modifier && !target.closest("[data-gutter]")) {
-      clickPending.current = true;
+      pendingLine.current = id;
       return;
     }
     e.preventDefault();
     pressLine(e, id);
     dragging.current = true;
   };
-  const onClick = (e: React.MouseEvent) => {
-    if (!clickPending.current) return;
-    clickPending.current = false;
-    const id = lineAt(e);
-    if (id !== null && window.getSelection()?.isCollapsed !== false) pressLine(e, id);
+  const onMouseUp = (e: React.MouseEvent) => {
+    const id = pendingLine.current;
+    pendingLine.current = null;
+    if (e.button !== 0 || id === null || lineAt(e) !== id) return;
+    if (window.getSelection()?.isCollapsed !== false) pressLine(e, id);
   };
   const dragging = useRef(false);
   useEffect(() => {
@@ -533,7 +533,7 @@ function DiffBody({
         )}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
-        onClick={onClick}
+        onMouseUp={onMouseUp}
         onWheel={onWheel}
       >
         <div
