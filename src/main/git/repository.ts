@@ -744,7 +744,7 @@ export class Repository {
       };
       // A graph that is still loading is shown while it streams in. One that did not finish
       // stays on screen until this load has more rows; a complete one, until this load is done.
-      if (this.graph === null) this.graph = snapshot;
+      this.graph ??= snapshot;
 
       let lastEmit = Date.now();
       let readyFired = false;
