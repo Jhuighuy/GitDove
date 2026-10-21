@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   api: [] as unknown[][],
   commands: [] as unknown[][],
   updater: { kind: "idle" } as UpdaterStatus,
+  graphInfo: undefined as GraphInfo | undefined,
   listeners: new Map<string, (payload: never) => void>(),
 }));
 
@@ -24,6 +25,7 @@ vi.mock("@/lib/api", () => ({
     mocks.api.push([method, ...args]);
     if (method === "updater.status") return mocks.updater;
     if (method === "updater.install") return undefined;
+    if (method === "repo.graphInfo") return mocks.graphInfo;
     throw new Error(`unexpected ${method}`);
   },
 }));
@@ -100,6 +102,7 @@ it("shows history still loading, without asking an unopened repository", async (
 });
 
 it("says why the history is cut off or outdated, and retries on request", async () => {
+  // As with a diff open: the graph view is gone and only the status bar's query remains.
   await render(LOCAL);
   const info: GraphInfo = {
     version: 1,
@@ -113,9 +116,13 @@ it("says why the history is cut off or outdated, and retries on request", async 
   expect(text()).not.toContain("Loading history");
 
   const invalidate = vi.spyOn(client, "invalidateQueries");
+  mocks.graphInfo = { ...info, count: 2400 };
   const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
   await act(async () => retry.click());
   expect(invalidate).toHaveBeenCalledWith({ queryKey: keys.repo(LOCAL) });
+  expect(mocks.api).toContainEqual(["repo.graphInfo", LOCAL]);
+  await setCached(keys.graphInfo(LOCAL), mocks.graphInfo);
+  expect(text()).toContain("History incomplete at 2,400 commits");
 
   await setCached(keys.graphInfo(LOCAL), { ...info, complete: true });
   expect(text()).toContain("History may be outdated: Lost connection");

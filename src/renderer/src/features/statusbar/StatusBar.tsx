@@ -102,6 +102,14 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
  */
 function GraphError({ repo, graph, error }: { repo: RepoId; graph: GraphInfo; error: string }) {
   const client = useQueryClient();
+  const retry = () => {
+    void client.invalidateQueries({ queryKey: keys.repo(repo) });
+    // Asked for explicitly: with the graph view closed (e.g. a diff is open), the only graph
+    // query left is the disabled one above, which invalidating does not refetch.
+    client
+      .fetchQuery({ queryKey: keys.graphInfo(repo), queryFn: () => api("repo.graphInfo", repo) })
+      .catch(() => {});
+  };
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-amber-500" title={error}>
       <IconAlertTriangle />
@@ -111,12 +119,7 @@ function GraphError({ repo, graph, error }: { repo: RepoId; graph: GraphInfo; er
           : `History incomplete at ${graph.count.toLocaleString()} commits`}
         : {error}
       </span>
-      <Button
-        variant="outline"
-        size="xs"
-        className="-my-1 h-5 px-1.5 text-[11px]"
-        onClick={() => void client.invalidateQueries({ queryKey: keys.repo(repo) })}
-      >
+      <Button variant="outline" size="xs" className="-my-1 h-5 px-1.5 text-[11px]" onClick={retry}>
         Retry
       </Button>
     </span>
