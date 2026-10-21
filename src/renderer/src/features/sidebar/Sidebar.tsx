@@ -32,8 +32,10 @@ import { Input } from "@/components/ui/input";
 import { useRefs, useRepoInfo } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { commands } from "../commands";
-import { SectionStack } from "./SectionStack";
+import { type SectionDef, SectionStack } from "./SectionStack";
 import { SidebarMenu, type SidebarTarget } from "./SidebarMenu";
+
+type SectionTarget = Extract<SidebarTarget, { kind: "section" }>;
 import { buildTree, type TreeNode } from "./tree";
 import { type Contributor, useVisibility } from "./visibility";
 
@@ -207,13 +209,20 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       ];
     });
 
-  const sections = [
+  const sectionMenu = (section: SectionTarget["section"]): void =>
+    setMenu({
+      kind: "section",
+      section,
+      sections: sections.map(({ id, title }) => ({ id, title })),
+    });
+
+  const sections: SectionDef[] = [
     {
       id: "local",
       title: "Local",
       icon: <IconDeviceLaptop />,
       count: count(locals.refs.map((r) => r.name)),
-      onHeaderContextMenu: () => setMenu({ kind: "section", section: "local" }),
+      onHeaderContextMenu: () => sectionMenu("local"),
       children: tree(locals.tree, 0, false, (r, label, depth) => (
         <RefItem
           key={r.name}
@@ -237,7 +246,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       title: "Remote",
       icon: <IconCloud />,
       count: count([...remotes.values()].flatMap((t) => t.refs.map((r) => r.name))),
-      onHeaderContextMenu: () => setMenu({ kind: "section", section: "remote" }),
+      onHeaderContextMenu: () => sectionMenu("remote"),
       children: [...remotes].map(([name, { refs, tree: nodes }]) => {
         const remote = remoteList.find((r) => r.name === name);
         const names = refs.map((r) => r.name);
@@ -288,7 +297,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
             (c) => c.person === person && vis.contributorVisibility(c) === "hidden",
           ),
       ),
-      onHeaderContextMenu: () => setMenu({ kind: "section", section: "contributors" }),
+      onHeaderContextMenu: () => sectionMenu("contributors"),
       children: contributors.flatMap((c) => {
         const emails = c.emails.filter((e) => match(e.email));
         if (!match(c.name) && emails.length === 0) return [];
@@ -337,7 +346,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       icon: <IconFolders />,
       count: <span>{worktrees.length}</span>,
       defaultOpen: false,
-      onHeaderContextMenu: () => setMenu({ kind: "section", section: "worktrees" }),
+      onHeaderContextMenu: () => sectionMenu("worktrees"),
       children: worktrees
         .filter((w) => match(w.path))
         .map((w) => (
@@ -357,6 +366,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       title: "Stashes",
       icon: <IconArchive />,
       count: count(stashes.map((s) => stashKey(s.hash))),
+      onHeaderContextMenu: () => sectionMenu("stashes"),
       children: stashes
         .filter((s) => match(s.message))
         .map((s) => (
@@ -377,7 +387,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       icon: <IconTag />,
       count: count(tags.map((t) => t.name)),
       defaultOpen: false,
-      onHeaderContextMenu: () => setMenu({ kind: "section", section: "tags" }),
+      onHeaderContextMenu: () => sectionMenu("tags"),
       children: tags
         .filter((r) => match(r.short))
         .slice(0, 1000)
@@ -402,6 +412,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
             icon: <IconBox />,
             count: <span>{submodules.length}</span>,
             defaultOpen: false,
+            onHeaderContextMenu: () => sectionMenu("submodules"),
             children: submodules
               .filter((s) => match(s.path))
               .map((s) => (

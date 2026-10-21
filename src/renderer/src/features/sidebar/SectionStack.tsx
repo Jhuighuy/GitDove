@@ -12,7 +12,10 @@ interface StackState {
   readonly open: Readonly<Record<string, boolean>>;
   /** Relative sizes of expanded sections (flex-grow weights). */
   readonly weights: Readonly<Record<string, number>>;
+  /** Sections taken out of the sidebar (default: shown). */
+  readonly hidden: Readonly<Record<string, true>>;
   setOpen(id: string, open: boolean): void;
+  setHidden(id: string, hidden: boolean): void;
   setWeights(weights: Record<string, number>): void;
 }
 
@@ -21,7 +24,13 @@ export const useSectionStack = create<StackState>()(
     (set) => ({
       open: {},
       weights: {},
+      hidden: {},
       setOpen: (id, open) => set((s) => ({ open: { ...s.open, [id]: open } })),
+      setHidden: (id, hidden) =>
+        set((s) => {
+          const { [id]: _, ...rest } = s.hidden;
+          return { hidden: hidden ? { ...rest, [id]: true } : rest };
+        }),
       setWeights: (weights) => set((s) => ({ weights: { ...s.weights, ...weights } })),
     }),
     { name: "gitdove.sidebar-sections" },
@@ -42,10 +51,11 @@ export interface SectionDef {
 /**
  * Vertically stacked, collapsible sidebar sections. Each expanded section
  * scrolls on its own, and the boundary between two expanded sections can be
- * dragged to resize them.
+ * dragged to resize them. Sections can be hidden altogether (`useSectionStack().hidden`).
  */
-export function SectionStack({ sections }: { sections: readonly SectionDef[] }) {
-  const { open, weights, setOpen, setWeights } = useSectionStack();
+export function SectionStack({ sections: all }: { sections: readonly SectionDef[] }) {
+  const { open, weights, hidden, setOpen, setWeights } = useSectionStack();
+  const sections = all.filter((s) => !hidden[s.id]);
   const refs = useRef(new Map<string, HTMLDivElement>());
   const isOpen = (s: SectionDef) => open[s.id] ?? s.defaultOpen ?? true;
 

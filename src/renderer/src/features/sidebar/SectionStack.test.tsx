@@ -9,7 +9,7 @@ let container: HTMLElement;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  useSectionStack.setState({ open: {}, weights: {} });
+  useSectionStack.setState({ open: {}, weights: {}, hidden: {} });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -55,6 +55,18 @@ it("expands and collapses sections, remembering the choice", () => {
   // A collapsed section takes no extra space.
   const a = header("A").parentElement!;
   expect(["none", "0 0 auto"]).toContain(a.style.flex);
+});
+
+it("leaves out hidden sections", () => {
+  useSectionStack.setState({ hidden: { b: true } });
+  render([section("a"), section("b"), section("c")]);
+  expect(body("b")).toBeNull();
+  expect(header("B")).toBeUndefined();
+  // The remaining sections still resize against each other.
+  expect(separators()).toHaveLength(1);
+  act(() => useSectionStack.getState().setHidden("b", false));
+  expect(body("b")).not.toBeNull();
+  expect(useSectionStack.getState().hidden).toEqual({});
 });
 
 it("forwards header context menus", () => {

@@ -112,6 +112,7 @@ beforeEach(() => {
   useSectionStack.setState({
     open: { worktrees: true, tags: true, submodules: true },
     weights: {},
+    hidden: {},
   });
 });
 
@@ -382,6 +383,48 @@ it("hides and shows whole sections", async () => {
   expect(mocks.setHidden.at(-1)).toEqual(["refs/remotes/", "refs/tags/"]);
   await menu(header("Remote"), "Show all");
   expect(mocks.setHidden.at(-1)).toEqual(["refs/tags/"]);
+});
+
+it("shows and hides sidebar sections", async () => {
+  await render();
+  const toggles = () =>
+    [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].map((e) => [
+      e.textContent?.trim(),
+      e.getAttribute("aria-checked"),
+    ]);
+  const toggle = async (label: string) => {
+    const el = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (e) => e.textContent?.trim() === label,
+    )!;
+    await act(async () => el.click());
+  };
+  const titles = ["Local", "Remote", "Contributors", "Worktrees", "Stashes", "Tags"];
+  // Every section header offers the toggles, the stashes one among them.
+  await fire(header("Stashes"), "contextmenu");
+  expect(toggles().map(([t]) => t)).toEqual(expect.arrayContaining(titles));
+  await toggle("Tags");
+  expect(useSectionStack.getState().hidden).toEqual({ tags: true });
+  expect(() => header("Tags")).toThrow();
+  await fire(header("Local"), "contextmenu");
+  expect(toggles()).toContainEqual(["Tags", "false"]);
+  await toggle("Tags");
+  expect(header("Tags")).toBeDefined();
+  // The last section shown stays.
+  act(() =>
+    useSectionStack.setState({
+      hidden: Object.fromEntries(
+        ["remote", "contributors", "worktrees", "stashes", "tags", "submodules"].map((id) => [
+          id,
+          true,
+        ]),
+      ),
+    }),
+  );
+  await fire(header("Local"), "contextmenu");
+  const local = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+    (e) => e.textContent?.trim() === "Local",
+  )!;
+  expect(local.hasAttribute("data-disabled")).toBe(true);
 });
 
 it("offers remote actions on each of several remotes", async () => {
