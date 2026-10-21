@@ -15,11 +15,12 @@ const AUTHOR_FORMAT = "%aN%x00%aE%x00%at";
 
 /**
  * `git log` arguments listing commits that are on some branch but not on a default
- * one, newest first. Capped so that a repository without a default branch does not
- * stream its whole history.
+ * one, newest first and never before their children. Capped so that a repository
+ * without a default branch does not stream its whole history.
  */
 export const OWNERS_LOG_ARGS = [
   "log",
+  "--date-order",
   `--format=%H%x00%P%x00${AUTHOR_FORMAT}`,
   "--max-count=5000",
   "--branches",
@@ -53,9 +54,51 @@ export interface OwnerLogs {
 }
 
 interface Commit {
+  readonly hash: string;
   readonly parents: readonly string[];
   readonly email: string;
 }
+
+/**
+ * The first `limit` commits of `log` reachable from `start`, by position in the log. As
+ * parents come after their children, a best-first walk finds them without visiting more.
+ */
+const newest = (
+  start: number,
+  log: readonly { readonly parents: readonly number[] }[],
+  limit: number,
+): number[] => {
+  const heap = [start];
+  const seen = new Set(heap);
+  const out: number[] = [];
+  while (heap.length > 0 && out.length < limit) {
+    out.push(heap[0]!);
+    // Pop the smallest position.
+    const last = heap.pop()!;
+    if (heap.length > 0) {
+      heap[0] = last;
+      for (let i = 0; ;) {
+        const l = 2 * i + 1;
+        const m = l + 1 < heap.length && heap[l + 1]! < heap[l]! ? l + 1 : l;
+        if (m >= heap.length || heap[i]! <= heap[m]!) break;
+        [heap[i], heap[m]] = [heap[m]!, heap[i]!];
+        i = m;
+      }
+    }
+    for (const p of log[out.at(-1)!]!.parents) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      heap.push(p);
+      for (let i = heap.length - 1; i > 0;) {
+        const up = (i - 1) >> 1;
+        if (heap[up]! <= heap[i]!) break;
+        [heap[i], heap[up]] = [heap[up]!, heap[i]!];
+        i = up;
+      }
+    }
+  }
+  return out;
+};
 
 const branchName = (ref: string): string | null => {
   if (ref.startsWith("refs/heads/")) return ref.slice("refs/heads/".length);
@@ -80,33 +123,32 @@ const parseUser = (out: string): BranchOwners["me"] => {
 /** Computes branch owners from `for-each-ref --format=REFS_FORMAT` and the logs above. */
 export const branchOwners = (refsOut: string, logs: OwnerLogs, userOut: string): BranchOwners => {
   const tips: { name: string; hash: string; upstream: string }[] = [];
-  const shared = new Set(SHARED);
+  /** Targets of the remotes' `HEAD`s, as full ref names. */
+  const heads = new Set<string>();
   for (const line of refsOut.split("\n")) {
     const [name, oid, , upstream, , , symref] = line.split("\0");
     if (!name || !oid || !(name.startsWith("refs/heads/") || name.startsWith("refs/remotes/")))
       continue;
     if (symref) {
-      // A remote's HEAD names its default branch.
-      const target = name.endsWith("/HEAD") ? branchName(symref) : null;
-      if (target) shared.add(target);
+      if (name.endsWith("/HEAD")) heads.add(symref);
       continue;
     }
     tips.push({ name, hash: oid, upstream: upstream ?? "" });
   }
-  const isShared = (ref: string) => {
-    const b = branchName(ref);
-    return b !== null && shared.has(b);
-  };
+  /** `main`, `master` or `trunk` anywhere, and each remote's `HEAD`. */
+  const isDefault = (ref: string) => heads.has(ref) || SHARED.includes(branchName(ref) ?? "");
+  /** Remote default branch names, which a local copy of them is usually named after. */
+  const headNames = new Set([...heads].map((h) => branchName(h)));
 
   const people: Record<string, { name: string; time: number }> = {};
   /** Reads commits; both logs list the newest commits first. */
-  const read = (out: string) => {
-    const commits = new Map<string, Commit>();
+  const read = (out: string): Commit[] => {
+    const commits: Commit[] = [];
     for (const line of out.split("\n")) {
       const [hash, parents, name, email, time] = line.split("\0");
       if (!hash || time === undefined) continue;
       const e = email!.toLowerCase();
-      commits.set(hash, { parents: parents ? parents.split(" ") : [], email: e });
+      commits.push({ hash, parents: parents ? parents.split(" ") : [], email: e });
       if (!e) continue;
       const p = people[e];
       const t = Number(time);
@@ -116,27 +158,32 @@ export const branchOwners = (refsOut: string, logs: OwnerLogs, userOut: string):
     return commits;
   };
   const commits = read(logs.commits);
-  const tipCommits = read(logs.tips);
+  const position = new Map(commits.map((c, i) => [c.hash, i]));
+  const log = commits.map((c) => ({
+    parents: c.parents.flatMap((p) => position.get(p) ?? []),
+  }));
+  const tipEmails = new Map(read(logs.tips).map((c) => [c.hash, c.email]));
 
   const byRef: Record<string, string[]> = {};
   const used = new Set<string>();
   for (const tip of tips) {
-    if (isShared(tip.name) || (tip.upstream && isShared(tip.upstream))) continue;
-    // Count the authors of the branch's own commits, newest first.
+    if (isDefault(tip.name)) continue;
+    // Count the authors of the branch's newest own commits.
     const counts = new Map<string, number>();
-    const seen = new Set<string>();
-    const queue = [tip.hash];
-    for (let i = 0; i < queue.length && seen.size < COMMITS_PER_BRANCH; i++) {
-      const hash = queue[i]!;
-      const c = commits.get(hash);
-      if (!c || seen.has(hash)) continue;
-      seen.add(hash);
-      if (c.email) counts.set(c.email, (counts.get(c.email) ?? 0) + 1);
-      queue.push(...c.parents);
+    const start = position.get(tip.hash);
+    for (const i of start === undefined ? [] : newest(start, log, COMMITS_PER_BRANCH)) {
+      const e = commits[i]!.email;
+      if (e) counts.set(e, (counts.get(e) ?? 0) + 1);
     }
-    const tipEmail = tipCommits.get(tip.hash)?.email;
-    if (counts.size === 0 && tipEmail) counts.set(tipEmail, 1);
-    if (counts.size === 0) continue;
+    if (counts.size === 0) {
+      // Without commits of its own, a branch is merged, or a local copy of a default branch.
+      const copy =
+        (tip.upstream && isDefault(tip.upstream)) ||
+        (tip.name.startsWith("refs/heads/") && headNames.has(branchName(tip.name)));
+      const tipEmail = tipEmails.get(tip.hash);
+      if (copy || !tipEmail) continue;
+      counts.set(tipEmail, 1);
+    }
     byRef[tip.name] = [...counts].toSorted((a, b) => b[1] - a[1]).map(([e]) => e);
     for (const e of counts.keys()) used.add(e);
   }

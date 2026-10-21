@@ -67,4 +67,49 @@ describe("branchOwners", () => {
     expect(o.byRef["refs/remotes/origin/topic"]).toEqual(["cid@x"]);
     expect(branchOwners(refs, { commits: "", tips: "" }, "").byRef).toEqual({});
   });
+
+  it("owns branches that track a default branch but have commits of their own", () => {
+    const o = branchOwners(
+      ref("refs/heads/feature", "f1", { upstream: "refs/remotes/origin/main" }),
+      { commits: commit("f1", "m1", "Ann", "ann@x", 1), tips: commit("f1", "", "Ann", "ann@x", 1) },
+      "",
+    );
+    expect(o.byRef).toEqual({ "refs/heads/feature": ["ann@x"] });
+  });
+
+  it("scopes a remote's default branch to that remote", () => {
+    const o = branchOwners(
+      [
+        ref("refs/remotes/upstream/HEAD", "u1", { symref: "refs/remotes/upstream/develop" }),
+        ref("refs/remotes/upstream/develop", "u1"),
+        ref("refs/remotes/origin/develop", "o1"),
+      ].join("\n"),
+      {
+        commits: commit("o1", "u1", "Ann", "ann@x", 2),
+        tips: [commit("u1", "", "Bob", "bob@x", 1), commit("o1", "", "Ann", "ann@x", 2)].join("\n"),
+      },
+      "",
+    );
+    expect(o.byRef).toEqual({ "refs/remotes/origin/develop": ["ann@x"] });
+  });
+
+  it("counts the newest commits, not the closest ones", () => {
+    // A merge of 99 recent commits by Ann and one old commit by Bob, in --date-order.
+    const ann = Array.from({ length: 99 }, (_, i) =>
+      commit(`a${i}`, i < 98 ? `a${i + 1}` : "base", "Ann", "ann@x", 1000 - i),
+    );
+    const o = branchOwners(
+      ref("refs/heads/topic", "merge"),
+      {
+        commits: [
+          commit("merge", "a0 bob", "Ann", "ann@x", 2000),
+          ...ann,
+          commit("bob", "base", "Bob", "bob@x", 1),
+        ].join("\n"),
+        tips: commit("merge", "", "Ann", "ann@x", 2000),
+      },
+      "",
+    );
+    expect(o.byRef["refs/heads/topic"]).toEqual(["ann@x"]);
+  });
 });
