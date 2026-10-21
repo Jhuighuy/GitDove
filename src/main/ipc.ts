@@ -4,13 +4,14 @@ import {
   type ApiArgs,
   type ApiMethod,
   type ApiResult,
+  EDIT_COMMANDS,
   IPC_INVOKE,
   type RpcError,
   type RpcResult,
 } from "@shared/ipc";
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
 import log from "electron-log/main";
-import { Cause, Effect, Exit, type ManagedRuntime } from "effect";
+import { Cause, Context, Effect, Exit, type ManagedRuntime } from "effect";
 import { type AppError, InvalidInputError } from "./exec/errors";
 import { Hosts } from "./exec/hosts";
 import { shellQuote } from "./exec/shell";
@@ -21,8 +22,15 @@ import { updater } from "./updater";
 
 type Services = Repos | Hosts | RepoSettings;
 
+/** The renderer a request came from. */
+export class Caller extends Context.Service<Caller, { readonly webContents: WebContents }>()(
+  "gitdove/Caller",
+) {}
+
 type Handlers = {
-  [M in ApiMethod]: (...args: ApiArgs<M>) => Effect.Effect<ApiResult<M>, AppError, Services>;
+  [M in ApiMethod]: (
+    ...args: ApiArgs<M>
+  ) => Effect.Effect<ApiResult<M>, AppError, Services | Caller>;
 };
 
 const withRepo = <A, E, R = never>(id: RepoId, f: (repo: Repository) => Effect.Effect<A, E, R>) =>
@@ -73,6 +81,12 @@ export const handlers: Handlers = {
   "app.getState": () => Effect.sync(loadState),
   "app.setState": (state) => Effect.sync(() => saveState(state)),
   "app.version": () => Effect.succeed({ version: app.getVersion(), platform: process.platform }),
+  "app.edit": (command) =>
+    EDIT_COMMANDS.includes(command)
+      ? Effect.gen(function* () {
+          (yield* Caller).webContents[command]();
+        })
+      : Effect.fail(new InvalidInputError({ message: `Unknown edit command: ${String(command)}` })),
   "dialog.pickDirectory": () =>
     Effect.promise(async () => {
       const win = BrowserWindow.getFocusedWindow();
@@ -259,7 +273,7 @@ const serializeError = (cause: Cause.Cause<AppError>): RpcError => {
 export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, never>) => {
   ipcMain.handle(
     IPC_INVOKE,
-    async (_event, method: unknown, args: unknown): Promise<RpcResult<unknown>> => {
+    async (event, method: unknown, args: unknown): Promise<RpcResult<unknown>> => {
       if (typeof method !== "string" || !Object.hasOwn(handlers, method) || !Array.isArray(args)) {
         return {
           ok: false,
@@ -268,9 +282,11 @@ export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, nev
       }
       const handler = handlers[method as ApiMethod] as (
         ...a: unknown[]
-      ) => Effect.Effect<unknown, AppError, Services>;
+      ) => Effect.Effect<unknown, AppError, Services | Caller>;
       const started = performance.now();
-      const exit = await runtime.runPromiseExit(handler(...args));
+      const exit = await runtime.runPromiseExit(
+        handler(...args).pipe(Effect.provideService(Caller, { webContents: event.sender })),
+      );
       const ms = performance.now() - started;
       if (ms > 500) log.info(`${method} took ${ms.toFixed(0)}ms`);
       if (Exit.isSuccess(exit)) return { ok: true, value: exit.value };

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { TextContextMenu } from "@/components/TextContextMenu";
 import { Spinner } from "@/components/ui/spinner";
 import { useRepoEvents } from "@/lib/queries";
 import { useTabs } from "@/stores/tabs";
@@ -42,6 +43,7 @@ export function App() {
       <StatusBar repo={tabs.find((t) => t.key === active)?.repo ?? null} />
       <DialogHost />
       <RemoteRepoDialog />
+      <TextContextMenu />
     </div>
   );
 }
