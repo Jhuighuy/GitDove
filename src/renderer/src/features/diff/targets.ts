@@ -1,4 +1,10 @@
-import { type DiffTarget, type FileChange, type RepoId, renameSource } from "@shared/domain";
+import {
+  type DiffTarget,
+  type FileChange,
+  type RepoId,
+  renameSource,
+  type WorkingStatus,
+} from "@shared/domain";
 import { useMemo } from "react";
 import { useCommitDetails, useStatus } from "@/lib/queries";
 
@@ -33,6 +39,23 @@ export const stepTarget = (
   return next ? fileTarget(source, next) : null;
 };
 
+/** The most files of each working tree list (unstaged, staged) that the WIP panel shows. */
+export const MAX_LISTED_FILES = 3000;
+
+/**
+ * The working tree files the WIP panel lists for `kind`: the staged ones, or the conflicts and
+ * then the unstaged ones.
+ */
+export const workingFiles = (
+  status: WorkingStatus,
+  kind: "staged" | "unstaged",
+): readonly FileChange[] => {
+  if (kind === "staged") return status.staged.slice(0, MAX_LISTED_FILES);
+  const seen = new Set(status.conflicted.map((f) => f.path));
+  const unstaged = status.unstaged.slice(0, MAX_LISTED_FILES).filter((f) => !seen.has(f.path));
+  return [...status.conflicted, ...unstaged];
+};
+
 const sourceOf = (target: DiffTarget): FileSource =>
   target.kind === "commit" ? { kind: "commit", hash: target.hash } : { kind: target.kind };
 
@@ -49,10 +72,7 @@ export function useSiblingFiles(
   const source = useMemo(() => sourceOf(target), [target]);
   const files = useMemo((): readonly FileChange[] => {
     if (source.kind === "commit") return commit?.files ?? [];
-    if (!status) return [];
-    if (source.kind === "staged") return status.staged;
-    const seen = new Set(status.conflicted.map((f) => f.path));
-    return [...status.conflicted, ...status.unstaged.filter((f) => !seen.has(f.path))];
+    return status ? workingFiles(status, source.kind) : [];
   }, [source, commit, status]);
   return { source, files };
 }

@@ -23,10 +23,8 @@ import { BusyHint } from "@/components/busy";
 import { busyReason, useBusy } from "@/stores/busy";
 import { useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
-import { fileTarget } from "../diff/targets";
+import { fileTarget, MAX_LISTED_FILES } from "../diff/targets";
 import { FileList } from "./FileList";
-
-const MAX_FILES = 3000;
 
 interface Draft {
   readonly summary: string;
@@ -145,7 +143,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
           }
         >
           <FileList
-            files={unstaged.slice(0, MAX_FILES)}
+            files={unstaged.slice(0, MAX_LISTED_FILES)}
             selectedPath={selected("unstaged")}
             onOpen={openUnstaged}
             renderActions={(f) => (
@@ -197,7 +195,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
           }
         >
           <FileList
-            files={staged.slice(0, MAX_FILES)}
+            files={staged.slice(0, MAX_LISTED_FILES)}
             selectedPath={selected("staged")}
             onOpen={(f) => openDiff(repo, fileTarget({ kind: "staged" }, f))}
             renderActions={(f) => (
@@ -220,10 +218,10 @@ export function WipPanel({ repo }: { repo: RepoId }) {
 }
 
 function Overflow({ count, truncated }: { count: number; truncated: boolean }) {
-  if (count <= MAX_FILES && !truncated) return null;
+  if (count <= MAX_LISTED_FILES && !truncated) return null;
   return (
     <p className="text-muted-foreground px-3 py-1 text-[11px]">
-      {truncated ? "Too many changes to list them all." : `…and ${count - MAX_FILES} more`}
+      {truncated ? "Too many changes to list them all." : `…and ${count - MAX_LISTED_FILES} more`}
     </p>
   );
 }
