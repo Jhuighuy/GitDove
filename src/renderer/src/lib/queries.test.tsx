@@ -293,6 +293,31 @@ it("indexes refs by hash, without hidden refs", async () => {
   await until(() => expect(names(second.result.current)).toEqual({ h1: ["main", "v1"] }));
 });
 
+it("keeps the checked-out branch even when it is hidden", async () => {
+  // Hiding a branch and then checking it out used to drop its pill, leaving origin/x alone.
+  mocks.api.mockImplementation(async (method: string) =>
+    method === "repo.refs"
+      ? {
+          refs: [
+            { ...ref("refs/heads/topic", "h2"), isHead: true },
+            ref("refs/remotes/origin/topic", "h2"),
+            ref("refs/heads/other", "h3"),
+          ],
+          stashes: [],
+          remotes: [],
+          worktrees: [],
+          submodules: [],
+        }
+      : ["refs/heads/"],
+  );
+  const view = await renderHook(() => q.useRefsByHash(`${repo}-head`), null);
+  await until(() => expect(view.result.current.size).toBe(1));
+  expect(view.result.current.get("h2")!.map((r) => [r.short, r.isHead])).toEqual([
+    ["topic", true],
+    ["origin/topic", false],
+  ]);
+});
+
 it("invalidates queries on repository change events", async () => {
   const invalidated: unknown[] = [];
   vi.spyOn(client, "invalidateQueries").mockImplementation(async (f) => {
