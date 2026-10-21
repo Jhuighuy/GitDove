@@ -4,8 +4,8 @@
  * fresh repository with two commits on `main` and a bare `origin` it is pushed to.
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { RepoLocation } from "@shared/domain";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GraphInfo, RepoLocation } from "@shared/domain";
 import { SshError } from "../exec/errors";
 import { type Host, Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
 import { Repository } from "./repository";
@@ -599,58 +599,136 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
 });
 
 describe.skipIf(process.platform === "win32")("Repository graph over a dropped connection", () => {
+  const runtime = ManagedRuntime.make(Layer.mergeAll(HostsLive));
+  let local: Host;
+  let dir = "";
+  const run = <A, E>(effect: Effect.Effect<A, E, Hosts>) => runtime.runPromise(effect);
+  const sh = async (script: string) =>
+    (await run(local.sh(script, { cwd: dir }))).stdout.toString().trim();
+
+  beforeAll(async () => {
+    local = await run(Effect.map(Hosts, (h) => h.get(LOCAL_HOST)));
+  });
+  beforeEach(async () => {
+    dir = (await run(local.sh("mktemp -d /tmp/gitdove-drop.XXXXXX"))).stdout.toString().trim();
+  });
+  afterEach(() => sh(`rm -rf -- '${dir}'`));
+  afterAll(() => runtime.dispose());
+
+  /** Makes a repository with `n` commits on main. */
+  const commits = (n: number) =>
+    sh(
+      `git init -q -b main . && awk 'BEGIN { for (i = 1; i <= ${n}; i++) ` +
+        `printf "commit refs/heads/main\\ncommitter T <t@x> %d +0000\\ndata <<EOF\\nc%d\\nEOF\\n\\n", ` +
+        `1700000000 + i, i }' | git fast-import --quiet`,
+    );
+  const history = async () => (await sh("git rev-list HEAD")).split("\n");
+
+  /**
+   * Opens the repository through a host that loses the connection while streaming `git log`:
+   * each queued drop is the fraction of the output that arrives first.
+   */
+  const openFlaky = async () => {
+    const drops: number[] = [];
+    let streams = 0;
+    const host: Host = {
+      ...local,
+      exec: (program, args, options = {}) => {
+        const { onStdout } = options;
+        if (!onStdout) return local.exec(program, args, options);
+        streams++;
+        const drop = drops.shift();
+        if (drop === undefined) return local.exec(program, args, options);
+        return local.exec(program, args, { ...options, onStdout: undefined }).pipe(
+          Effect.flatMap((r) => {
+            onStdout(r.stdout.subarray(0, Math.floor(r.stdout.length * drop)));
+            return Effect.fail(
+              new SshError({ message: "Lost connection", host: "x", stderr: "", mayHaveRun: true }),
+            );
+          }),
+        );
+      },
+    };
+    const events: GraphInfo[] = [];
+    const repo = await run(
+      Repository.open(
+        host,
+        { kind: "local", path: dir },
+        { onGraphProgress: (_, info) => void events.push(info) },
+      ),
+    );
+    return { repo, drops, events, streams: () => streams };
+  };
+  const until = (check: () => boolean) =>
+    vi.waitFor(() => expect(check()).toBe(true), { timeout: 20000, interval: 20 });
+  const hashes = async (repo: Repository, info: GraphInfo) =>
+    (await run(repo.graphRows(info.version, 0, info.count))).map((r) => r.hash);
+
   it("reloads the whole graph instead of streaming it twice", async () => {
-    const runtime = ManagedRuntime.make(Layer.mergeAll(HostsLive));
-    const local = await runtime.runPromise(Effect.map(Hosts, (h) => h.get(LOCAL_HOST)));
-    const dir = (await runtime.runPromise(local.sh("mktemp -d /tmp/gitdove-drop.XXXXXX"))).stdout
-      .toString()
-      .trim();
-    try {
-      await runtime.runPromise(
-        local.sh(
-          `git init -q -b main . && ${IDENTITY} && ` +
-            "for i in 1 2 3 4 5; do git commit -q --allow-empty -m c$i; done",
-          { cwd: dir },
-        ),
-      );
-      // Streams half of the log's output, then loses the connection once.
-      let streams = 0;
-      const host: Host = {
-        ...local,
-        exec: (program, args, options = {}) => {
-          const { onStdout } = options;
-          if (!onStdout || streams++ > 0) return local.exec(program, args, options);
-          return local.exec(program, args, { ...options, onStdout: undefined }).pipe(
-            Effect.flatMap((r) => {
-              onStdout(r.stdout.subarray(0, r.stdout.length >> 1));
-              return Effect.fail(
-                new SshError({
-                  message: "Lost connection",
-                  host: "x",
-                  stderr: "",
-                  mayHaveRun: true,
-                }),
-              );
-            }),
-          );
-        },
-      };
-      const repo = await runtime.runPromise(
-        Repository.open(host, { kind: "local", path: dir }, { onGraphProgress: () => {} }),
-      );
-      let g = await runtime.runPromise(repo.graphInfo());
-      while (!g.complete) g = await runtime.runPromise(repo.graphInfo());
-      expect(streams).toBe(2);
-      const rows = await runtime.runPromise(repo.graphRows(g.version, 0, 10));
-      expect(rows.map((r) => r.hash)).toEqual(
-        (await runtime.runPromise(local.sh("git rev-list HEAD", { cwd: dir }))).stdout
-          .toString()
-          .trim()
-          .split("\n"),
-      );
-    } finally {
-      await runtime.runPromise(local.sh(`rm -rf -- '${dir}'`));
-      await runtime.dispose();
-    }
+    await commits(5);
+    const { repo, drops, streams } = await openFlaky();
+    drops.push(0.5);
+    // The first caller waits through the reload.
+    const g = await run(repo.graphInfo());
+    expect(g).toMatchObject({ count: 5, complete: true });
+    expect(g.error).toBeUndefined();
+    expect(streams()).toBe(2);
+    expect(await hashes(repo, g)).toEqual(await history());
+  });
+
+  it("finishes loading on its own after losing the connection again and again", async () => {
+    await commits(2100);
+    const { repo, drops, events, streams } = await openFlaky();
+    drops.push(0.98, 0.5);
+    const first = await run(repo.graphInfo());
+    expect(first.complete).toBe(false);
+    expect(first.count).toBeGreaterThanOrEqual(2000);
+
+    // Nobody asks for the graph again: it is reloaded in the background.
+    await until(() => events.at(-1)?.complete === true);
+    const last = events.at(-1)!;
+    expect(last.count).toBe(2100);
+    expect(last.error).toBeUndefined();
+    expect(streams()).toBe(3);
+    expect(events.some((e) => e.error === "Lost connection" && !e.complete)).toBe(true);
+    // The rows on screen are kept until a reload has more of them.
+    events.forEach((e, i) => expect(e.count).toBeGreaterThanOrEqual(events[i - 1]?.count ?? 0));
+    expect(await hashes(repo, last)).toEqual(await history());
+  });
+
+  it("keeps the outdated graph, and says why, until a reload succeeds", async () => {
+    await commits(5);
+    const { repo, drops, events } = await openFlaky();
+    let g = await run(repo.graphInfo());
+    while (!g.complete) g = await run(repo.graphInfo());
+
+    await sh("git -c user.name=T -c user.email=t@x commit -q --allow-empty -m c6");
+    drops.push(0.5);
+    repo.invalidateGraph();
+    await until(() => events.some((e) => e.error !== undefined));
+    expect(events.find((e) => e.error !== undefined)).toMatchObject({
+      version: g.version,
+      count: 5,
+      complete: true,
+      error: "Lost connection",
+    });
+    await until(() => events.at(-1)?.count === 6);
+    expect(events.at(-1)!.complete).toBe(true);
+    expect(events.at(-1)!.error).toBeUndefined();
+  });
+
+  it("stops loading once the repository is closed", async () => {
+    await commits(5);
+    const { repo, drops, streams } = await openFlaky();
+    drops.push(...Array<number>(10).fill(0.5));
+    const waiting = run(repo.graphInfo());
+    await until(() => streams() === 1);
+    repo.dispose();
+    await expect(waiting).rejects.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(streams()).toBe(1);
+    repo.invalidateGraph();
+    expect((await run(repo.graphInfo())).complete).toBe(false);
+    expect(streams()).toBe(1);
   });
 });
