@@ -332,24 +332,31 @@ it("reports binary, truncated and failed diffs", async () => {
   expect(container.querySelector(".text-destructive")?.textContent).toBe("diff failed");
 });
 
-it("selects a line on a click on its text, but not after selecting text", async () => {
+it("selects a line on a click on its text, but not after dragging over text", async () => {
   await render();
-  const click = (id: number, upOn = id) =>
+  const click = (id: number, up: { on?: number; dx?: number; detail?: number } = {}) =>
     act(async () => {
-      textOf(id).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
-      textOf(upOn).dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+      const at = { bubbles: true, button: 0, clientX: 10, clientY: 10, detail: up.detail ?? 1 };
+      textOf(id).dispatchEvent(new MouseEvent("mousedown", at));
+      const release = { ...at, clientX: 10 + (up.dx ?? 0) };
+      textOf(up.on ?? id).dispatchEvent(new MouseEvent("mouseup", release));
     });
   await click(1);
   expect(selectedIds()).toEqual([1]);
 
-  // A release on another line is not a click.
-  await click(2, 3);
-  expect(selectedIds()).toEqual([1]);
-
-  // A drag over the text selects text instead.
+  // A click inside selected text selects the line: the text selection collapses only later.
   vi.spyOn(window, "getSelection").mockReturnValue({ isCollapsed: false } as Selection);
-  await click(3);
-  expect(selectedIds()).toEqual([1]);
+  await click(3, { dx: 2 });
+  expect(selectedIds()).toEqual([3]);
+
+  // A release on another line, or after a drag, is not a click.
+  await click(2, { on: 1 });
+  await click(2, { dx: 6 });
+  expect(selectedIds()).toEqual([3]);
+
+  // The second press of a double click selects a word and leaves the line alone.
+  await click(3, { detail: 2 });
+  expect(selectedIds()).toEqual([3]);
 });
 
 /** Selects text from `start` in one line's text to `end` in another's, and copies it. */
