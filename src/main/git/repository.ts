@@ -1062,11 +1062,30 @@ export class Repository {
 
   /**
    * Whether forcing would remove a worktree that git refused to: it is locked or has changes.
-   * Checked from the worktree's state rather than git's messages, which are translated.
+   * Checked from git's porcelain output rather than its messages, which are translated. The
+   * lock is read from the main repository, since a locked worktree's folder may be gone.
    */
   private worktreeNeedsForce(path: string): Effect.Effect<boolean> {
-    return this.host.sh(WORKTREE_STATE_SCRIPT, { cwd: path, idempotent: true }).pipe(
-      Effect.map((r) => r.stdout.toString("utf8").trim().length > 0),
+    // git lists worktrees by their resolved path; the folder, if it is still there, says its own.
+    const resolved = this.gitText(["-C", path, "rev-parse", "--show-toplevel"]).pipe(
+      Effect.map((s) => s.trim()),
+      Effect.orElseSucceed(() => path),
+    );
+    const locked = Effect.all([
+      this.gitText(["worktree", "list", "--porcelain"]).pipe(Effect.map(parseWorktrees)),
+      resolved,
+    ]).pipe(
+      Effect.map(([worktrees, top]) =>
+        worktrees.some((w) => w.locked && (w.path === path || w.path === top)),
+      ),
+    );
+    // `-C` takes the next argument as its value, so the path cannot be read as an option.
+    const dirty = this.gitText(["-C", path, "status", "--porcelain"]).pipe(
+      Effect.map((out) => out.length > 0),
+      Effect.orElseSucceed(() => false),
+    );
+    return Effect.all([locked, dirty], { concurrency: "unbounded" }).pipe(
+      Effect.map(([l, d]) => l || d),
       Effect.orElseSucceed(() => false),
     );
   }
@@ -1115,11 +1134,6 @@ const trimTrailingNewlines = (s: string): string => {
   while (end > 0 && s[end - 1] === "\n") end--;
   return s.slice(0, end);
 };
-
-/** Prints something when the worktree it runs in is locked or has changes. */
-const WORKTREE_STATE_SCRIPT = `gd=$(git rev-parse --absolute-git-dir) || exit 1
-test -f "$gd/locked" && echo locked
-git status --porcelain | head -n 1`;
 
 const validateRev = (rev: string) =>
   rev && !rev.startsWith("-") && !/[\0\n]/.test(rev)

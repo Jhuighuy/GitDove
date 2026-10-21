@@ -488,6 +488,16 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     await sh(`git worktree lock '${wt}'`);
     expect((await fails(repo.removeWorktree(wt, false)))._tag).toBe("WorktreeNeedsForceError");
     await run(repo.removeWorktree(wt, true));
+    // A locked worktree whose folder is gone can still be forced.
+    await run(repo.addWorktree(wt, "main~1", null));
+    await sh(`git worktree lock '${wt}' && rm -rf -- '${wt}'`);
+    // The sidebar passes the path as git lists it (resolved, e.g. /private/tmp on macOS).
+    const [gone] = (await run(repo.refs())).worktrees.filter((w) => w.locked);
+    expect((await fails(repo.removeWorktree(gone!.path, false)))._tag).toBe(
+      "WorktreeNeedsForceError",
+    );
+    await run(repo.removeWorktree(gone!.path, true));
+    expect((await run(repo.refs())).worktrees).toHaveLength(1);
     // Other failures are not something forcing fixes.
     expect((await fails(repo.removeWorktree(`${root}/no-such-worktree`, false)))._tag).toBe(
       "CommandError",

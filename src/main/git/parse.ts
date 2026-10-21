@@ -122,12 +122,14 @@ export const parseWorktrees = (out: string): Worktree[] => {
     let path = "";
     let hash: string | null = null;
     let branch: string | null = null;
+    let locked = false;
     for (const line of block.split("\n")) {
       if (line.startsWith("worktree ")) path = line.slice(9);
       else if (line.startsWith("HEAD ")) hash = line.slice(5);
       else if (line.startsWith("branch ")) branch = line.slice(7).replace(/^refs\/heads\//, "");
+      else if (line === "locked" || line.startsWith("locked ")) locked = true;
     }
-    result.push({ path, hash, branch, isMain: result.length === 0 });
+    result.push({ path, hash, branch, isMain: result.length === 0, locked });
   }
   return result;
 };

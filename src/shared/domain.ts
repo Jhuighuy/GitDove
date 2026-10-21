@@ -108,6 +108,8 @@ export interface Worktree {
   readonly hash: string | null;
   readonly branch: string | null;
   readonly isMain: boolean;
+  /** Locked with `git worktree lock`: removing it needs force. */
+  readonly locked: boolean;
 }
 
 export interface Submodule {
