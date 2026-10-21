@@ -138,6 +138,16 @@ describe.skipIf(process.platform === "win32")("spawn", () => {
     expect(existsSync(marker)).toBe(true);
   });
 
+  it("stops what an interrupted process started, too", async () => {
+    // Like git pull, whose git merge would otherwise go on and commit.
+    const pidFile = join(dir, "grandchild.pid");
+    const fiber = Effect.runFork(sh(`sh -c 'echo $$ > "${pidFile}"; exec sleep 30' & wait`));
+    while (!existsSync(pidFile)) await new Promise((r) => setTimeout(r, 20));
+    await run(Fiber.interrupt(fiber));
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
   it("kills a process that ignores SIGTERM", async () => {
     const pidFile = join(dir, "stubborn.pid");
     const fiber = Effect.runFork(

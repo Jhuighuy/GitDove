@@ -225,6 +225,22 @@ describe.skipIf(process.platform === "win32").each(shells)("runner script under 
     );
   });
 
+  it("stops what an interrupted command started on the host, too", async () => {
+    await withRunner((runner) =>
+      Effect.gen(function* () {
+        const pidFile = join(mkdtempSync(join(tmpdir(), "gitdove-runner-")), "grandchild.pid");
+        const fiber = yield* Effect.forkChild(
+          run(runner, `sh -c 'echo $$ > "${pidFile}"; exec sleep 30' & wait`),
+        );
+        while (!existsSync(pidFile)) yield* Effect.sleep("20 millis");
+        yield* Fiber.interrupt(fiber);
+        const pid = Number(readFileSync(pidFile, "utf8"));
+        expect(() => process.kill(pid, 0)).toThrow();
+        expect((yield* run(runner, "echo ok")).stdout.toString()).toBe("ok\n");
+      }),
+    );
+  });
+
   it("fails pending commands when the runner dies", async () => {
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {

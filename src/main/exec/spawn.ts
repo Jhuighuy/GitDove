@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { Effect } from "effect";
 import { CommandError } from "./errors";
+import { OWN_PROCESS_GROUP, signalTree, terminateTree } from "./terminate";
 
 /** Data written to a command's stdin. */
 export type Stdin = string | Buffer;
@@ -35,9 +36,6 @@ const MAX_STDERR = 64 * 1024;
  * Spawns a process and collects its output. Interrupting the returned effect
  * kills the process.
  */
-/** How long an interrupted process gets to exit after each signal. */
-const KILL_GRACE_MS = 3000;
-
 export const spawn = (
   file: string,
   args: readonly string[],
@@ -51,6 +49,8 @@ export const spawn = (
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      // Its own process group, so stopping it stops what it started too (see terminate.ts).
+      detached: OWN_PROCESS_GROUP,
     });
 
     const chunks: Buffer[] = [];
@@ -58,25 +58,6 @@ export const spawn = (
     let truncated = false;
     let stderr = "";
     let done = false;
-    let exited = false;
-    const onExit: (() => void)[] = [];
-    child.on("exit", () => {
-      exited = true;
-      for (const f of onExit.splice(0)) f();
-    });
-    /** Waits for the process to exit, for at most `ms`; true if it did. */
-    const waitExit = (ms: number) =>
-      Effect.callback<boolean>((resumeWait) => {
-        if (exited || child.exitCode !== null || child.signalCode !== null) {
-          resumeWait(Effect.succeed(true));
-          return;
-        }
-        const timer = setTimeout(() => resumeWait(Effect.succeed(false)), ms);
-        onExit.push(() => {
-          clearTimeout(timer);
-          resumeWait(Effect.succeed(true));
-        });
-      });
 
     const finish = (effect: Effect.Effect<SpawnResult, CommandError>) => {
       if (done) return;
@@ -95,7 +76,7 @@ export const spawn = (
         const keep = chunk.length - (bytes - options.maxBytes);
         if (keep > 0) chunks.push(chunk.subarray(0, keep));
         truncated = true;
-        child.kill();
+        signalTree(child);
         // Children it started may still hold the pipes open, which would delay "close" until
         // they exit; ours are not needed anymore (and a writer left behind gets SIGPIPE).
         child.stdout.destroy();
@@ -135,23 +116,8 @@ export const spawn = (
     if (options.stdin !== undefined) child.stdin.end(options.stdin);
     else child.stdin.end();
 
-    // Interrupting waits until the process has exited, so that callers holding a lock (see
-    // Repository.write) don't release it while git still runs. A process that ignores SIGTERM
-    // gets SIGKILL.
-    return Effect.suspend(() => {
-      if (done || exited || child.exitCode !== null) return Effect.void;
-      child.kill();
-      return waitExit(KILL_GRACE_MS).pipe(
-        Effect.flatMap((ok) =>
-          ok
-            ? Effect.void
-            : Effect.sync(() => child.kill("SIGKILL")).pipe(
-                Effect.andThen(waitExit(KILL_GRACE_MS)),
-              ),
-        ),
-        Effect.asVoid,
-      );
-    });
+    // Interrupting stops the process and what it started, and waits until all of it is gone.
+    return Effect.suspend(() => (done ? Effect.void : terminateTree(child)));
   });
 
 /**

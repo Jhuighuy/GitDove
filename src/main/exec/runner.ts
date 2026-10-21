@@ -34,6 +34,13 @@ trap 'exit 1' HUP INT TERM
 cd "$d" && mkfifo q || exit 1
 hc=
 head -c 1 </dev/null >/dev/null 2>&1 && hc=1
+tree() {
+  ps -A -o pid= -o ppid= 2>/dev/null | awk -v r="$1" '{ k[NR] = $1; p[NR] = $2 }
+    END { s = " " r " "; n = 1; while (n) { n = 0; for (i in k)
+      if (index(s, " " p[i] " ") && !index(s, " " k[i] " ")) { s = s k[i] " "; n = 1 } }
+      print s }'
+}
+alive() { for q in $(cat "$1"); do kill -0 "$q" 2>/dev/null && return 0; done; return 1; }
 job() {
   if [ "$2" -gt 0 ] && [ -n "$hc" ]; then
     { (. "./$1.c") <"$1.i" 2>"$1.e" 3>&- & echo $! >"$1.p"
@@ -44,6 +51,12 @@ job() {
     (. "./$1.c") <"$1.i" >"$1.o" 2>"$1.e" 3>&- & echo $! >"$1.p"
     [ -f "$1.k" ] && kill $! 2>/dev/null; wait $!; x=$?
   fi
+  # A killed command is reported once everything it started is gone too (see K). SIGKILL
+  # comes after 3 seconds; the limit only guards against a reused process id.
+  if [ -f "$1.t" ]; then
+    e=$(($(date +%s) + 10))
+    while alive "$1.t" && [ "$(date +%s)" -lt "$e" ]; do sleep 0.05 2>/dev/null || sleep 1; done
+  fi
   : >"$1.p"
   set -- "$1" "$x" $(wc -c "$1.o" "$1.e")
   printf '@GDR %s %s %s %s\\n' "$1" "$2" "$3" "$5" >"$1.h"
@@ -51,7 +64,7 @@ job() {
 }
 while read -r id; do
   cat "$id.h" "$id.o" "$id.e"
-  rm -f "$id.c" "$id.i" "$id.o" "$id.e" "$id.h" "$id.x" "$id.p" "$id.k"
+  rm -f "$id.c" "$id.i" "$id.o" "$id.e" "$id.h" "$id.x" "$id.p" "$id.k" "$id.t"
 done <q &
 exec 3>q
 printf '@GDR-HELLO 1\\n'
@@ -59,16 +72,19 @@ while read -r op id l c i; do
   case $op in
   X) printf "$c" >"$id.c"; printf "$i" >"$id.i"; job "$id" "$l" & ;;
   K) p=; read -r p 2>/dev/null <"$id.p"
-     if [ -n "$p" ]; then kill "$p" 2>/dev/null; else : >"$id.k"; fi ;;
+     if [ -n "$p" ]; then
+       # The command and everything it started (e.g. git merge behind git pull): SIGTERM,
+       # then SIGKILL for what is left after 3 seconds.
+       t=$(tree "$p"); [ -n "$t" ] || t=$p
+       echo "$t" >"$id.t"; kill $t 2>/dev/null
+       (sleep 3; alive "$id.t" && kill -9 $t 2>/dev/null) &
+     else : >"$id.k"; fi ;;
   esac
 done
 exec 3>&-
 for p in *.p; do read -r k 2>/dev/null <"$p" && kill "$k" 2>/dev/null; done
 wait
 `;
-
-/** How long an interrupted command gets to exit on the host before we stop waiting. */
-const KILL_WAIT_MS = 5000;
 
 /** Largest stdin payload sent through the runner (encoding costs up to 4x). */
 export const MAX_RUNNER_STDIN = 16 * 1024;
@@ -367,12 +383,7 @@ export const runOnRunner = (
     });
     // `run` reports a dead runner synchronously; otherwise the request is on its way.
     sent = true;
-    // Interrupting waits until the killed command has exited on the host (see spawn).
-    return Effect.callback<void>((settled) => {
-      const timer = setTimeout(() => settled(Effect.void), KILL_WAIT_MS);
-      runner.cancel(id, () => {
-        clearTimeout(timer);
-        settled(Effect.void);
-      });
-    });
+    // Interrupting waits until the killed command, and everything it started, is gone on the
+    // host: the runner reports it then (SIGKILL follows SIGTERM), or the runner itself fails.
+    return Effect.callback<void>((settled) => runner.cancel(id, () => settled(Effect.void)));
   });

@@ -225,6 +225,25 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
       expect(await branchRef("after")).toBeDefined();
     });
 
+    it("cancels a pull together with the merge it runs", async () => {
+      // origin and the clone diverge, so the pull merges; the merge waits in a hook.
+      const other = await otherClone();
+      await sh("echo o > o.txt && git add o.txt && git commit -qm other && git push -q", other);
+      await sh("echo l > l.txt && git add l.txt && git commit -qm local");
+      const before = await head();
+      await blockingHook("pre-merge-commit");
+      const pull = fails(repo.pull("merge"));
+      await until(() => exists("pre-merge-commit.started"));
+      await run(repo.cancel());
+      expect((await pull)._tag).toBe("CancelledError");
+      // Let a surviving merge go on: it must not commit.
+      await sh("touch go");
+      await new Promise((r) => setTimeout(r, 500));
+      expect(await head()).toBe(before);
+      await run(repo.createBranch("after-cancel", "HEAD", false));
+      expect(await branchRef("after-cancel")).toBeDefined();
+    });
+
     it("cancels a running push and lets the next write run", async () => {
       await blockingHook("pre-push");
       await sh("echo e > e.txt && git add e.txt && git commit -qm three");
