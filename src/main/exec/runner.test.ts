@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Exit, Fiber } from "effect";
@@ -239,6 +239,37 @@ describe.skipIf(process.platform === "win32").each(shells)("runner script under 
         expect((yield* run(runner, "echo ok")).stdout.toString()).toBe("ok\n");
       }),
     );
+  });
+
+  it("keeps waiting while a killed command's processes may still run", async () => {
+    // A ps that reports every process as running under the same command, as if the kill
+    // could not be confirmed (e.g. a process stuck in the kernel).
+    const bin = mkdtempSync(join(tmpdir(), "gitdove-ps-"));
+    writeFileSync(
+      join(bin, "ps"),
+      `#!/bin/sh\ncase "$*" in *stat=*) echo S ;; *comm=*) echo pinned ;; *) exec /bin/ps "$@" ;; esac\n`,
+    );
+    chmodSync(join(bin, "ps"), 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      const runner = await Effect.runPromise(Runner.start(sh, ["-c", RUNNER_SCRIPT]));
+      const outcome = await Effect.runPromise(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(run(runner, "sleep 30 & wait"));
+          yield* Effect.sleep("200 millis");
+          const interrupt = yield* Effect.forkChild(Fiber.interrupt(fiber));
+          // Not confirmed gone: the interruption (and a write lock held around it) waits.
+          const early = yield* Fiber.join(interrupt).pipe(Effect.timeoutOption("1500 millis"));
+          runner.close();
+          yield* Fiber.join(interrupt);
+          return early._tag;
+        }),
+      );
+      expect(outcome).toBe("None");
+    } finally {
+      process.env.PATH = path;
+    }
   });
 
   it("fails pending commands when the runner dies", async () => {

@@ -40,7 +40,16 @@ tree() {
       if (index(s, " " p[i] " ") && !index(s, " " k[i] " ")) { s = s k[i] " "; n = 1 } }
       print s }'
 }
-alive() { for q in $(cat "$1"); do kill -0 "$q" 2>/dev/null && return 0; done; return 1; }
+# Whether a process listed in $1 ("pid command" lines) still runs. Zombies don't count, and a
+# process id now running another command was reused. Without ps, kill -0 decides.
+alive() {
+  while read -r q c; do
+    s=$(ps -o stat= -p "$q" 2>/dev/null) || { kill -0 "$q" 2>/dev/null && return 0; continue; }
+    case $s in *Z*) continue ;; esac
+    [ "$(ps -o comm= -p "$q" 2>/dev/null)" = "$c" ] && return 0
+  done <"$1"
+  return 1
+}
 job() {
   if [ "$2" -gt 0 ] && [ -n "$hc" ]; then
     { (. "./$1.c") <"$1.i" 2>"$1.e" 3>&- & echo $! >"$1.p"
@@ -51,12 +60,8 @@ job() {
     (. "./$1.c") <"$1.i" >"$1.o" 2>"$1.e" 3>&- & echo $! >"$1.p"
     [ -f "$1.k" ] && kill $! 2>/dev/null; wait $!; x=$?
   fi
-  # A killed command is reported once everything it started is gone too (see K). SIGKILL
-  # comes after 3 seconds; the limit only guards against a reused process id.
-  if [ -f "$1.t" ]; then
-    e=$(($(date +%s) + 10))
-    while alive "$1.t" && [ "$(date +%s)" -lt "$e" ]; do sleep 0.05 2>/dev/null || sleep 1; done
-  fi
+  # A killed command is reported once everything it started is gone too (see K).
+  if [ -f "$1.t" ]; then while alive "$1.t"; do sleep 0.05 2>/dev/null || sleep 1; done; fi
   : >"$1.p"
   set -- "$1" "$x" $(wc -c "$1.o" "$1.e")
   printf '@GDR %s %s %s %s\\n' "$1" "$2" "$3" "$5" >"$1.h"
@@ -76,7 +81,8 @@ while read -r op id l c i; do
        # The command and everything it started (e.g. git merge behind git pull): SIGTERM,
        # then SIGKILL for what is left after 3 seconds.
        t=$(tree "$p"); [ -n "$t" ] || t=$p
-       echo "$t" >"$id.t"; kill $t 2>/dev/null
+       for q in $t; do echo "$q $(ps -o comm= -p "$q" 2>/dev/null)"; done >"$id.t"
+       kill $t 2>/dev/null
        (sleep 3; alive "$id.t" && kill -9 $t 2>/dev/null) &
      else : >"$id.k"; fi ;;
   esac

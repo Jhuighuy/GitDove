@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { Effect } from "effect";
 
 /** How long a process tree gets to exit after SIGTERM before it gets SIGKILL. */
@@ -20,27 +20,42 @@ const signalGroup = (pid: number, signal: NodeJS.Signals) => {
   }
 };
 
-/** Whether any process of the group led by `pid` is still there. */
-const groupAlive = (pid: number) => {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "EPERM";
-  }
-};
+/**
+ * Whether `ps -A -o pgid= -o stat=` output lists a live member of process group `pgid`.
+ * Zombies don't count: where PID 1 doesn't reap orphans (some containers), they stay in the
+ * group forever, and no signal removes them.
+ */
+export const groupHasLiveMember = (psOutput: string, pgid: number): boolean =>
+  psOutput.split("\n").some((line) => {
+    const [group, state = ""] = line.trim().split(/\s+/);
+    return Number(group) === pgid && !state.startsWith("Z");
+  });
 
-/** Waits until `done()` holds, checking every POLL_MS; false if `ms` passed first. */
-const until = (done: () => boolean, ms = Infinity) =>
-  Effect.callback<boolean>((resume) => {
+/** Whether any process of the group led by `pid` is still running. */
+const groupAlive = (pid: number): Effect.Effect<boolean> =>
+  Effect.suspend(() => {
+    try {
+      process.kill(-pid, 0);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EPERM") return Effect.succeed(false);
+    }
+    // The group exists, but maybe only as zombies: ask ps (without ps, assume it runs).
+    return Effect.callback<boolean>((resume) => {
+      execFile("ps", ["-A", "-o", "pgid=", "-o", "stat="], (error, stdout) =>
+        resume(Effect.succeed(error ? true : groupHasLiveMember(stdout, pid))),
+      );
+    });
+  });
+
+/** Waits until `done` holds, checking every POLL_MS; false if `ms` passed first. */
+const until = (done: Effect.Effect<boolean>, ms = Infinity) =>
+  Effect.gen(function* () {
     const start = Date.now();
-    const check = () => {
-      if (done()) resume(Effect.succeed(true));
-      else if (Date.now() - start >= ms) resume(Effect.succeed(false));
-      else timer = setTimeout(check, POLL_MS);
-    };
-    let timer = setTimeout(check, 0);
-    return Effect.sync(() => clearTimeout(timer));
+    for (;;) {
+      if (yield* done) return true;
+      if (Date.now() - start >= ms) return false;
+      yield* Effect.sleep(POLL_MS);
+    }
   });
 
 /** Sends SIGTERM (POSIX) to the process and everything it started. */
@@ -60,7 +75,7 @@ export const terminateTree = (child: ChildProcess): Effect.Effect<void> =>
   Effect.suspend(() => {
     const pid = child.pid;
     if (pid === undefined) return Effect.void;
-    const exited = () => child.exitCode !== null || child.signalCode !== null;
+    const exited = Effect.sync(() => child.exitCode !== null || child.signalCode !== null);
     if (!OWN_PROCESS_GROUP) {
       return Effect.callback<void>((resume) => {
         const killer = nodeSpawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
@@ -73,14 +88,13 @@ export const terminateTree = (child: ChildProcess): Effect.Effect<void> =>
       }).pipe(Effect.andThen(until(exited)), Effect.asVoid);
     }
     signalGroup(pid, "SIGTERM");
-    return until(() => !groupAlive(pid), GRACE_MS).pipe(
-      Effect.flatMap((gone) =>
-        gone
+    const gone = Effect.map(groupAlive(pid), (alive) => !alive);
+    return until(gone, GRACE_MS).pipe(
+      Effect.flatMap((done) =>
+        done
           ? Effect.void
           : // SIGKILL cannot be ignored, so this wait ends.
-            Effect.sync(() => signalGroup(pid, "SIGKILL")).pipe(
-              Effect.andThen(until(() => !groupAlive(pid))),
-            ),
+            Effect.sync(() => signalGroup(pid, "SIGKILL")).pipe(Effect.andThen(until(gone))),
       ),
       Effect.asVoid,
     );
