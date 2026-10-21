@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/context-menu";
 import { shortHash } from "@/lib/format";
 import { useRepoInfo } from "@/lib/queries";
-import { WriteMenuItem } from "@/components/write-menu-item";
+import { WriteMenuItem } from "@/components/busy";
 import { commands } from "../commands";
 import { useVisibility } from "../sidebar/visibility";
 import { api } from "@/lib/api";

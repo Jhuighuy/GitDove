@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { basename, dirname, shortHash } from "@/lib/format";
 import { useDiff } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+import { BusyHint } from "@/components/busy";
 import { useBusy, writeProps } from "@/stores/busy";
 import { type DiffMode, useLayout, useRepoUiStore } from "@/stores/repo-ui";
 import type { ThemeKind } from "./highlight-protocol";
@@ -178,18 +179,20 @@ function SelectionBar({
       <span className="text-muted-foreground mr-1 text-[11px]">
         {count} {count === 1 ? "line" : "lines"} selected
       </span>
-      {actions.map((a) => (
-        <Button
-          key={a.label}
-          size="xs"
-          variant={a.destructive ? "destructive" : "secondary"}
-          className="h-6 rounded-md px-2 text-[11px]"
-          {...write}
-          onClick={() => onAction(a)}
-        >
-          {a.label}
-        </Button>
-      ))}
+      <BusyHint reason={write.title} className="gap-1">
+        {actions.map((a) => (
+          <Button
+            key={a.label}
+            size="xs"
+            variant={a.destructive ? "destructive" : "secondary"}
+            className="h-6 rounded-md px-2 text-[11px]"
+            disabled={write.disabled}
+            onClick={() => onAction(a)}
+          >
+            {a.label}
+          </Button>
+        ))}
+      </BusyHint>
       <span className="bg-border mx-1 h-4 w-px" />
     </>
   );
@@ -464,14 +467,14 @@ function DiffBody({
                   className="bg-muted/40 text-muted-foreground absolute top-0 left-0 flex w-full items-center gap-2 border-y px-3"
                 >
                   <span className="truncate">{model.diff.hunks[row.hunk]!.header}</span>
-                  <span className="sticky right-2 ml-auto flex gap-1">
+                  <span className="sticky right-2 ml-auto flex gap-1" title={write.title}>
                     {actions.map((a) => (
                       <Button
                         key={a.label}
                         size="xs"
                         variant={a.destructive ? "destructive" : "secondary"}
                         className="h-5 rounded-md px-2 font-sans text-[11px]"
-                        {...write}
+                        disabled={write.disabled}
                         onClick={() => onAction(row.hunk, a)}
                       >
                         {a.label}

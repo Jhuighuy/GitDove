@@ -11,7 +11,7 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import { useRefs, useRepoInfo } from "@/lib/queries";
-import { WriteMenuItem } from "@/components/write-menu-item";
+import { WriteMenuItem } from "@/components/busy";
 import { commands } from "../commands";
 import type { useVisibility } from "./visibility";
 

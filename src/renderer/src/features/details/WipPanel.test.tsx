@@ -204,7 +204,8 @@ it("disables staging, discarding and committing while another operation runs", a
   }
   for (const label of ["Stage All", "Unstage All", "Abort", "Continue", "Commit Changes"]) {
     expect(button(label).disabled).toBe(true);
-    expect(button(label).title).toBe(reason);
+    // Disabled buttons get no pointer events: a wrapper explains why.
+    expect(button(label).parentElement!.title).toBe(reason);
   }
   // Browsing still works.
   await click(row("src/edit.ts"));

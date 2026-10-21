@@ -57,26 +57,25 @@ function ToolButton({
 }) {
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onClick}
-            className={cn(
-              "text-muted-foreground hover:text-foreground hover:bg-muted relative flex h-11 w-14 flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] disabled:opacity-40 [&_svg]:size-[18px]",
-              className,
-            )}
-          />
-        }
-      >
-        {icon}
-        <span>{label}</span>
-        {badge ? (
-          <span className="bg-primary text-primary-foreground absolute top-1 right-2 rounded-full px-1 text-[9px] leading-3.5 font-semibold tabular-nums">
-            {badge}
-          </span>
-        ) : null}
+      {/* A wrapper triggers the tooltip: disabled buttons get no pointer events. */}
+      <TooltipTrigger render={<span className="flex" />}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onClick}
+          className={cn(
+            "text-muted-foreground hover:text-foreground hover:bg-muted relative flex h-11 w-14 flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-[18px]",
+            className,
+          )}
+        >
+          {icon}
+          <span>{label}</span>
+          {badge ? (
+            <span className="bg-primary text-primary-foreground absolute top-1 right-2 rounded-full px-1 text-[9px] leading-3.5 font-semibold tabular-nums">
+              {badge}
+            </span>
+          ) : null}
+        </button>
       </TooltipTrigger>
       <TooltipContent>{tooltip ?? label}</TooltipContent>
     </Tooltip>
@@ -91,7 +90,7 @@ function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
       className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs"
       title={busy.label}
     >
-      <Spinner className="size-3.5 shrink-0" />
+      <Spinner className="size-3.5 shrink-0" role="presentation" aria-hidden />
       <span className="truncate">{busy.label}</span>
       {busy.cancellable && (
         <Button

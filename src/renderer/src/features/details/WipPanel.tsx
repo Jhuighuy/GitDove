@@ -19,7 +19,8 @@ import { runAction } from "@/lib/actions";
 import { api, modKey, useEvent } from "@/lib/api";
 import { useRepoInfo, useStatus } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { busyReason, useBusy, writeProps } from "@/stores/busy";
+import { BusyHint } from "@/components/busy";
+import { busyReason, useBusy } from "@/stores/busy";
 import { useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
 import { FileList } from "./FileList";
@@ -83,21 +84,23 @@ export function WipPanel({ repo }: { repo: RepoId }) {
         <div className="flex items-center gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs">
           <IconAlertTriangle className="size-4 shrink-0 text-amber-500" />
           <span className="flex-1 capitalize">{info.state.replace("-", " ")} in progress</span>
-          <Button
-            size="xs"
-            variant="outline"
-            {...writeProps(busy)}
-            onClick={() => void commands.abort(repo)}
-          >
-            Abort
-          </Button>
-          <Button
-            size="xs"
-            onClick={() => void commands.continue(repo)}
-            {...writeProps(busy, conflicted.length > 0)}
-          >
-            Continue
-          </Button>
+          <BusyHint reason={blocked} className="gap-2">
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!!busy}
+              onClick={() => void commands.abort(repo)}
+            >
+              Abort
+            </Button>
+            <Button
+              size="xs"
+              onClick={() => void commands.continue(repo)}
+              disabled={!!busy || conflicted.length > 0}
+            >
+              Continue
+            </Button>
+          </BusyHint>
         </div>
       )}
 
@@ -125,15 +128,19 @@ export function WipPanel({ repo }: { repo: RepoId }) {
           count={unstaged.length}
           action={
             unstaged.length > 0 && (
-              <Button
-                size="xs"
-                variant="secondary"
-                className="h-5 rounded-md px-2 text-[11px]"
-                {...writeProps(busy)}
-                onClick={() => void runAction(repo, "Stage all", () => api("repo.stageAll", repo))}
-              >
-                Stage All
-              </Button>
+              <BusyHint reason={blocked}>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  className="h-5 rounded-md px-2 text-[11px]"
+                  disabled={!!busy}
+                  onClick={() =>
+                    void runAction(repo, "Stage all", () => api("repo.stageAll", repo))
+                  }
+                >
+                  Stage All
+                </Button>
+              </BusyHint>
             )
           }
         >
@@ -173,17 +180,19 @@ export function WipPanel({ repo }: { repo: RepoId }) {
           count={staged.length}
           action={
             staged.length > 0 && (
-              <Button
-                size="xs"
-                variant="secondary"
-                className="h-5 rounded-md px-2 text-[11px]"
-                {...writeProps(busy)}
-                onClick={() =>
-                  void runAction(repo, "Unstage all", () => api("repo.unstageAll", repo))
-                }
-              >
-                Unstage All
-              </Button>
+              <BusyHint reason={blocked}>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  className="h-5 rounded-md px-2 text-[11px]"
+                  disabled={!!busy}
+                  onClick={() =>
+                    void runAction(repo, "Unstage all", () => api("repo.unstageAll", repo))
+                  }
+                >
+                  Unstage All
+                </Button>
+              </BusyHint>
             )
           }
         >
@@ -259,21 +268,17 @@ function RowAction({
 }) {
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label={label}
-            disabled={blocked !== undefined}
-            className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-5 items-center justify-center rounded disabled:opacity-40 [&_svg]:size-3.5"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClick();
-            }}
-          />
-        }
-      >
-        {children}
+      {/* A wrapper triggers the tooltip: disabled buttons get no pointer events. */}
+      <TooltipTrigger render={<span className="flex" onClick={(e) => e.stopPropagation()} />}>
+        <button
+          type="button"
+          aria-label={label}
+          disabled={blocked !== undefined}
+          className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-5 items-center justify-center rounded disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5"
+          onClick={onClick}
+        >
+          {children}
+        </button>
       </TooltipTrigger>
       <TooltipContent>{blocked ?? label}</TooltipContent>
     </Tooltip>
@@ -372,19 +377,16 @@ function CommitBox({ repo, stagedCount }: { repo: RepoId; stagedCount: number })
         className="max-h-48 min-h-20 resize-none rounded-lg text-[13px]"
         spellCheck
       />
-      <Button
-        onClick={() => void commit()}
-        disabled={!canCommit}
-        title={busy ? busyReason(busy) : undefined}
-        className="h-9 rounded-lg"
-      >
-        {draft.amend
-          ? "Amend Previous Commit"
-          : stagedCount === 0
-            ? "Stage Changes to Commit"
-            : `Commit Changes to ${stagedCount} ${stagedCount === 1 ? "File" : "Files"}`}
-        <span className="text-[10px] opacity-60">{modKey}↵</span>
-      </Button>
+      <BusyHint reason={busy ? busyReason(busy) : undefined} className="flex-col">
+        <Button onClick={() => void commit()} disabled={!canCommit} className="h-9 rounded-lg">
+          {draft.amend
+            ? "Amend Previous Commit"
+            : stagedCount === 0
+              ? "Stage Changes to Commit"
+              : `Commit Changes to ${stagedCount} ${stagedCount === 1 ? "File" : "Files"}`}
+          <span className="text-[10px] opacity-60">{modKey}↵</span>
+        </Button>
+      </BusyHint>
     </div>
   );
 }
