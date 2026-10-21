@@ -18,6 +18,7 @@ import { type DiffMode, useLayout, useRepoUiStore } from "@/stores/repo-ui";
 import type { ThemeKind } from "./highlight-protocol";
 import { type DocHighlighter, tokenStyle, useHighlighter } from "./highlight";
 import { ImageDiff } from "./ImageDiff";
+import { stepTarget, useSiblingFiles } from "./targets";
 import { buildModel, type DiffModel, isChange, type Line } from "./model";
 import { type DiffViewId, fileKind, viewFor } from "./views";
 
@@ -53,6 +54,10 @@ const EMPTY_SELECTION: ReadonlySet<number> = new Set();
 const isTextEntry = (el: EventTarget | null) =>
   el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && el.type !== "range");
 
+/** Whether a key press belongs to a menu, dialog or other popup, which handles arrows itself. */
+const inPopup = (el: EventTarget | null) =>
+  el instanceof Element && el.closest("[role=menu],[role=dialog],[role=listbox]") !== null;
+
 export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget }) {
   const kind = useMemo(() => fileKind(target.path), [target.path]);
   const view = useLayout((s) => viewFor(kind, s.diffViews));
@@ -70,11 +75,29 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
+  // Up and down step through the files of the list this diff was opened from.
+  const siblings = useSiblingFiles(repo, target);
+  const step = (by: number) => {
+    const next = stepTarget(siblings.files, siblings.source, target, by);
+    if (next) useRepoUiStore.getState().openDiff(repo, next);
+  };
+  const stepRef = useRef(step);
+  stepRef.current = step;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isTextEntry(e.target)) {
+      if (isTextEntry(e.target)) return;
+      if (e.key === "Escape") {
         if (selectionRef.current.size > 0) setSelection(EMPTY_SELECTION);
         else close();
+      } else if (
+        (e.key === "ArrowDown" || e.key === "ArrowUp") &&
+        !e.defaultPrevented &&
+        !(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) &&
+        !inPopup(e.target)
+      ) {
+        e.preventDefault();
+        stepRef.current(e.key === "ArrowDown" ? 1 : -1);
       }
     };
     window.addEventListener("keydown", onKey);

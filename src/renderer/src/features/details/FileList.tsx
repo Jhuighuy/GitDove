@@ -26,6 +26,9 @@ export function ChangeBadge({ kind }: { kind: ChangeKind }) {
   );
 }
 
+// Keeps the selected file on screen as the arrow keys move it through a diff.
+const scrollIntoView = (el: HTMLElement | null) => el?.scrollIntoView?.({ block: "nearest" });
+
 interface Props {
   readonly files: readonly FileChange[];
   readonly selectedPath: string | null;
@@ -60,6 +63,7 @@ export const FileList = memo(function FileList({
               if (!(e.target as Element).closest("[data-row-actions]")) onOpen(f);
             }}
             onContextMenu={() => onContextMenu?.(f)}
+            ref={selectedPath === f.path ? scrollIntoView : undefined}
           >
             <ChangeBadge kind={f.kind} />
             <span className="flex min-w-0 flex-1 items-baseline gap-1.5">

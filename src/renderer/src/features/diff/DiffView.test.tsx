@@ -1,17 +1,21 @@
 // @vitest-environment happy-dom
-import type { DiffTarget, FileDiff } from "@shared/domain";
+import type { DiffTarget, FileChange, WorkingStatus } from "@shared/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { useLayout, useRepoUiStore } from "@/stores/repo-ui";
 import { DiffView } from "./DiffView";
 
-const mocks = vi.hoisted(() => ({ calls: [] as string[] }));
+const mocks = vi.hoisted(() => ({
+  calls: [] as string[],
+  status: { staged: [], unstaged: [], conflicted: [], truncated: false } as WorkingStatus,
+}));
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
-  api: async (method: string, _repo: string, target: DiffTarget): Promise<FileDiff> => {
+  api: async (method: string, _repo: string, target: DiffTarget): Promise<unknown> => {
+    if (method === "repo.status") return mocks.status;
     mocks.calls.push(`${method} ${target.path}`);
     const hunks = target.path.endsWith(".svg")
       ? [
@@ -149,4 +153,47 @@ it("closes on Escape, also from the swipe slider but not from text fields", asyn
   container.append(slider);
   press(slider);
   expect(diff()).toBeNull();
+});
+
+const change = (path: string, kind: FileChange["kind"] = "modified"): FileChange => ({
+  path,
+  oldPath: null,
+  kind,
+  additions: 1,
+  deletions: 0,
+  binary: false,
+});
+
+it("steps through the files of its list with the up and down arrows", async () => {
+  mocks.status = {
+    staged: [change("s.ts")],
+    unstaged: [change("a.ts"), change("b.ts", "untracked")],
+    conflicted: [change("c.ts", "conflicted")],
+    truncated: false,
+  };
+  const open = vi.fn();
+  const { openDiff } = useRepoUiStore.getState();
+  useRepoUiStore.setState({ openDiff: open });
+  onTestFinished(() => useRepoUiStore.setState({ openDiff }));
+  await render("a.ts");
+  const press = (key: string, init: KeyboardEventInit = {}) =>
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key, ...init })));
+
+  press("ArrowDown");
+  expect(open).toHaveBeenLastCalledWith("local:/repo", {
+    kind: "unstaged",
+    path: "b.ts",
+    untracked: true,
+  });
+  // Conflicts are listed first, then the unstaged files; staged files are another list.
+  press("ArrowUp");
+  expect(open).toHaveBeenLastCalledWith("local:/repo", {
+    kind: "unstaged",
+    path: "c.ts",
+    untracked: false,
+  });
+  open.mockClear();
+  press("ArrowUp", { shiftKey: true });
+  press("ArrowLeft");
+  expect(open).not.toHaveBeenCalled();
 });
