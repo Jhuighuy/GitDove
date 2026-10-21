@@ -118,8 +118,8 @@ it("drops a line selection when switching to the image view", async () => {
   withViewport();
   await render("a.svg");
   await act(async () => new Promise((r) => setTimeout(r, 0)));
-  const line = container.querySelector<HTMLElement>("[data-line]");
-  await act(async () => line!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+  const gutter = container.querySelector<HTMLElement>("[data-line] [data-gutter]");
+  await act(async () => gutter!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
   expect(container.textContent).toContain("1 line selected");
   await click("Image");
   expect(container.textContent).not.toContain("selected");

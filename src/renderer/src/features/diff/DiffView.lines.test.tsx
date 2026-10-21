@@ -127,10 +127,13 @@ async function render(target: DiffTarget = { kind: "unstaged", path: "src/a.ts" 
 }
 
 const line = (id: number) => container.querySelector<HTMLElement>(`[data-line="${id}"]`)!;
+/** Presses on a line's numbers, which select lines. */
 const mouse = (id: number, type: string, init: MouseEventInit = {}) =>
   act(async () => {
-    line(id).dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, ...init }));
+    const gutter = line(id).querySelector("[data-gutter]")!;
+    gutter.dispatchEvent(new MouseEvent(type, { bubbles: true, button: 0, ...init }));
   });
+const textOf = (id: number) => line(id).querySelector<HTMLElement>("[data-text]")!;
 const buttonByText = (label: string) => {
   const el = [...container.querySelectorAll("button")].find((b) => b.textContent === label);
   if (!el) throw new Error(`No "${label}" button`);
@@ -327,4 +330,65 @@ it("reports binary, truncated and failed diffs", async () => {
   expect(container.textContent).toContain("Diff truncated — file is too large.");
   await render({ kind: "unstaged", path: "bad.txt" });
   expect(container.querySelector(".text-destructive")?.textContent).toBe("diff failed");
+});
+
+it("selects a line on a click on its text, but not after selecting text", async () => {
+  await render();
+  const click = (id: number) =>
+    act(async () => {
+      const text = textOf(id);
+      text.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      text.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    });
+  await click(1);
+  expect(selectedIds()).toEqual([1]);
+
+  // A drag over the text selects text instead.
+  vi.spyOn(window, "getSelection").mockReturnValue({ isCollapsed: false } as Selection);
+  await click(3);
+  expect(selectedIds()).toEqual([1]);
+});
+
+/** Selects text from `start` in one line's text to `end` in another's, and copies it. */
+const copy = async (from: [number, number], to: [number, number]) => {
+  const point = (id: number, offset: number): [Node, number] => {
+    const walker = document.createTreeWalker(textOf(id), NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node && offset > node.textContent!.length) {
+      offset -= node.textContent!.length;
+      node = walker.nextNode();
+    }
+    return [node!, offset];
+  };
+  const range = document.createRange();
+  range.setStart(...point(...from));
+  range.setEnd(...point(...to));
+  const sel = window.getSelection()!;
+  sel.removeAllRanges();
+  sel.addRange(range);
+  const setData = vi.fn();
+  const event = new Event("copy", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", { value: { setData } });
+  await act(async () => textOf(from[0]).dispatchEvent(event));
+  return setData.mock.calls.at(-1)?.[1] as string | undefined;
+};
+
+it("copies the selected text of the lines, without numbers and signs", async () => {
+  await render();
+  expect(await copy([1, 6], [3, 5])).toBe("a = 1;\nold b\nconst");
+});
+
+it("selects and copies text within one column in split view", async () => {
+  await render();
+  await act(async () => container.querySelector<HTMLElement>("[aria-label='Split view']")!.click());
+  await settle();
+  const scroller = container.querySelector<HTMLElement>(".overflow-y-auto.font-mono")!;
+  // Pressing on the right column makes the left one unselectable, and copies from the right.
+  await act(async () => {
+    textOf(3).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+  });
+  expect(scroller.dataset.selectSide).toBe("1");
+  expect(scroller.className).toContain("data-[select-side=1]:**:data-[side=0]:select-none");
+  // Context lines sit in both columns; the right one has the replacement and no extra deletion.
+  expect(await copy([3, 0], [4, 4])).toBe("const a = 2;\ntail");
 });
