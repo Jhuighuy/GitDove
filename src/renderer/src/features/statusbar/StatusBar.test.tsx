@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   api: [] as unknown[][],
   commands: [] as unknown[][],
   updater: { kind: "idle" } as UpdaterStatus,
+  graphInfo: undefined as GraphInfo | undefined,
   listeners: new Map<string, (payload: never) => void>(),
 }));
 
@@ -24,6 +25,7 @@ vi.mock("@/lib/api", () => ({
     mocks.api.push([method, ...args]);
     if (method === "updater.status") return mocks.updater;
     if (method === "updater.install") return undefined;
+    if (method === "repo.graphInfo") return mocks.graphInfo;
     throw new Error(`unexpected ${method}`);
   },
 }));
@@ -97,6 +99,60 @@ it("shows history still loading, without asking an unopened repository", async (
   expect(text()).toContain("Loading history… 1,234 commits");
   await setCached(keys.graphInfo(LOCAL), { ...info, complete: true });
   expect(text()).not.toContain("Loading history");
+});
+
+it("says why the history is cut off or outdated, and retries on request", async () => {
+  // As with a diff open: the graph view is gone and only the status bar's query remains.
+  await render(LOCAL);
+  const info: GraphInfo = {
+    version: 1,
+    count: 2345,
+    complete: false,
+    maxLanes: 2,
+    error: "Lost connection",
+  };
+  await setCached(keys.graphInfo(LOCAL), info);
+  expect(text()).toContain("History incomplete at 2,345 commits: Lost connection");
+  expect(text()).not.toContain("Loading history");
+
+  const invalidate = vi.spyOn(client, "invalidateQueries");
+  mocks.graphInfo = { ...info, count: 2400 };
+  const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
+  await act(async () => retry.click());
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: keys.repo(LOCAL) });
+  expect(mocks.api).toContainEqual(["repo.graphInfo", LOCAL]);
+  await setCached(keys.graphInfo(LOCAL), mocks.graphInfo);
+  expect(text()).toContain("History incomplete at 2,400 commits");
+
+  await setCached(keys.graphInfo(LOCAL), { ...info, complete: true });
+  expect(text()).toContain("History may be outdated: Lost connection");
+  await setCached(keys.graphInfo(LOCAL), { ...info, complete: true, error: undefined });
+  expect(text()).not.toContain("History");
+});
+
+it("offers to retry when the history never loaded", async () => {
+  await render(LOCAL);
+  // The graph view's first request failed: the shared query has an error and no data.
+  await act(async () => {
+    await client
+      .query({
+        queryKey: keys.graphInfo(LOCAL),
+        queryFn: () => Promise.reject(new Error("Lost connection")),
+      })
+      .catch(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(text()).toContain("Couldn't load history: Lost connection");
+
+  mocks.graphInfo = { version: 1, count: 3000, complete: false, maxLanes: 2 };
+  const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
+  await act(async () => {
+    retry.click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(mocks.api).toContainEqual(["repo.graphInfo", LOCAL]);
+  expect(text()).toContain("Loading history… 3,000 commits");
+  expect(text()).not.toContain("Couldn't load");
 });
 
 it("shows the running operation, with a cancel button for network operations", async () => {

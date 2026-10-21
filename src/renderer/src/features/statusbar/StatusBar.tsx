@@ -1,13 +1,14 @@
 import type { GraphInfo, RepoId, UpdaterStatus } from "@shared/domain";
 import { repoLocationOf } from "@shared/domain";
 import {
+  IconAlertTriangle,
   IconCheck,
   IconDeviceLaptop,
   IconInfoCircle,
   IconServer,
   IconX,
 } from "@tabler/icons-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -24,7 +25,9 @@ import { commands } from "../commands";
  */
 export function StatusBar({ repo }: { repo: RepoId | null }) {
   const location = repo ? repoLocationOf(repo) : null;
-  const graph = useCachedGraphInfo(repo);
+  const { data: graph, error: graphFailure } = useCachedGraphInfo(repo);
+  // A graph that loaded says why it is incomplete; one that never loaded has only the request's.
+  const graphError = graph?.error ?? graphFailure?.message;
   const busy = useBusy(repo ?? "");
   const notice = useNotice(repo);
   const appNotice = useNotice(APP);
@@ -53,10 +56,16 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
         )}
       </div>
       <div className="flex min-w-0 items-center justify-end gap-3">
-        {graph && !graph.complete && graph.count > 0 && (
-          <span className="shrink-0 tabular-nums">
-            Loading history… {graph.count.toLocaleString()} commits
-          </span>
+        {graphError ? (
+          <GraphError repo={repo!} graph={graph} error={graphError} />
+        ) : (
+          graph &&
+          !graph.complete &&
+          graph.count > 0 && (
+            <span className="shrink-0 tabular-nums">
+              Loading history… {graph.count.toLocaleString()} commits
+            </span>
+          )
         )}
         {busy ? (
           <BusyIndicator repo={repo!} busy={busy} />
@@ -88,6 +97,43 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
     </footer>
   );
 }
+
+/**
+ * Why the history is missing, cut off or outdated. The main process retries after a lost
+ * connection on its own; Retry asks for the graph again right away.
+ */
+function GraphError({ repo, graph, error }: { repo: RepoId; graph?: GraphInfo; error: string }) {
+  const client = useQueryClient();
+  const retry = () => {
+    void client.invalidateQueries({ queryKey: keys.repo(repo) });
+    // Asked for explicitly: with the graph view closed (e.g. a diff is open), the only graph
+    // query left is the disabled one above, which invalidating does not refetch.
+    client
+      .query({
+        queryKey: keys.graphInfo(repo),
+        queryFn: () => api("repo.graphInfo", repo),
+        staleTime: 0,
+      })
+      .catch(() => {});
+  };
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-amber-500" title={error}>
+      <IconAlertTriangle />
+      <span className="truncate tabular-nums">
+        {graphProblem(graph)}: {error}
+      </span>
+      <Button variant="outline" size="xs" className="-my-1 h-5 px-1.5 text-[11px]" onClick={retry}>
+        Retry
+      </Button>
+    </span>
+  );
+}
+
+const graphProblem = (graph: GraphInfo | undefined): string => {
+  if (!graph) return "Couldn't load history";
+  if (graph.complete) return "History may be outdated";
+  return `History incomplete at ${graph.count.toLocaleString()} commits`;
+};
 
 /** The running repository-changing operation, with a cancel button for network operations. */
 function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
@@ -124,12 +170,12 @@ function NoticeView({ notice }: { notice: Notice }) {
  * The graph's loading progress, from the cache only: the graph view requests it, and an
  * unopened repository must not be asked.
  */
-const useCachedGraphInfo = (repo: RepoId | null): GraphInfo | undefined =>
+const useCachedGraphInfo = (repo: RepoId | null) =>
   useQuery({
     queryKey: repo ? keys.graphInfo(repo) : ["no-repo"],
     queryFn: () => api("repo.graphInfo", repo!),
     enabled: false,
-  }).data;
+  });
 
 /** The version of a downloaded over-the-air update, once one is ready. */
 const useUpdateReady = (): string | null => {

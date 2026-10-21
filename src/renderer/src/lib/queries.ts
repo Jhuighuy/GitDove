@@ -31,8 +31,11 @@ export const keys = {
   refs: (repo: RepoId) => ["repo", repo, "refs"] as const,
   status: (repo: RepoId) => ["repo", repo, "status"] as const,
   graphInfo: (repo: RepoId) => ["repo", repo, "graph", "info"] as const,
-  graphPage: (repo: RepoId, version: number, page: number) =>
+  graphPages: (repo: RepoId, version: number, page: number) =>
     ["repo", repo, "graph", "page", version, page] as const,
+  // Rows never change once built, so a page is identified by how many of its rows exist.
+  graphPage: (repo: RepoId, version: number, page: number, size: number) =>
+    [...keys.graphPages(repo, version, page), size] as const,
   commit: (repo: RepoId, hash: string) => ["repo", repo, "commit", hash] as const,
   diff: (repo: RepoId, target: DiffTarget) => ["repo", repo, "diff", target] as const,
   // Under "diff" so that it goes stale together with diffs.
@@ -94,8 +97,9 @@ export const useFileVersions = (repo: RepoId, target: DiffTarget) =>
 export const GRAPH_PAGE = 256;
 
 /**
- * Returns the graph rows in `[start, end)`, fetching pages on demand. While a
- * new graph version loads, rows from the previous version are kept on screen.
+ * Returns the graph rows in `[start, end)`, fetching pages on demand. While the graph streams
+ * in, a page that gains rows is fetched again. While a page loads, the rows it had before (or
+ * rows from the previous graph version) are kept on screen.
  */
 export const useGraphRows = (
   repo: RepoId,
@@ -105,40 +109,48 @@ export const useGraphRows = (
 ) => {
   const pages = useMemo(() => {
     if (!info || end <= start) return [];
+    const out: { page: number; size: number }[] = [];
     const first = Math.floor(start / GRAPH_PAGE);
-    const last = Math.floor(Math.max(start, end - 1) / GRAPH_PAGE);
-    const out: number[] = [];
-    for (let p = first; p <= last; p++) out.push(p);
+    const last = Math.ceil(Math.min(end, info.count) / GRAPH_PAGE);
+    for (let page = first; page < last; page++) {
+      out.push({ page, size: Math.min(GRAPH_PAGE, info.count - page * GRAPH_PAGE) });
+    }
     return out;
   }, [info, start, end]);
 
   const client = useQueryClient();
+  const version = info?.version ?? 0;
   const results = useQueries({
-    queries: pages.map((page) => ({
-      queryKey: keys.graphPage(repo, info!.version, page),
+    queries: pages.map(({ page, size }) => ({
+      queryKey: keys.graphPage(repo, version, page, size),
       queryFn: () =>
-        api("repo.graphRows", repo, info!.version, page * GRAPH_PAGE, (page + 1) * GRAPH_PAGE),
-      // While the graph is still streaming in, the last page grows.
-      staleTime: info!.complete || (page + 1) * GRAPH_PAGE <= info!.count ? Infinity : 0,
+        api("repo.graphRows", repo, version, page * GRAPH_PAGE, page * GRAPH_PAGE + size),
+      staleTime: Infinity,
       gcTime: 60 * 1000,
-      placeholderData: () => previousPage(client, repo, info!.version, page),
+      placeholderData: () => placeholderPage(client, repo, version, page),
     })),
   });
 
   return useMemo(() => {
     const rows = new Map<number, GraphRow>();
     results.forEach((r, i) => {
-      const base = pages[i]! * GRAPH_PAGE;
+      const base = pages[i]!.page * GRAPH_PAGE;
       r.data?.forEach((row, j) => rows.set(base + j, row));
     });
     return rows;
   }, [results, pages]);
 };
 
-const previousPage = (client: QueryClient, repo: RepoId, version: number, page: number) => {
-  for (let v = version - 1; v >= Math.max(0, version - 5); v--) {
-    const data = client.getQueryData<GraphRow[]>(keys.graphPage(repo, v, page));
-    if (data) return data;
+/** The fullest cached copy of a page, from this graph version or a recent previous one. */
+const placeholderPage = (client: QueryClient, repo: RepoId, version: number, page: number) => {
+  for (let v = version; v >= Math.max(0, version - 5); v--) {
+    let best: GraphRow[] | undefined;
+    for (const [, data] of client.getQueriesData<GraphRow[]>({
+      queryKey: keys.graphPages(repo, v, page),
+    })) {
+      if (data && data.length > (best?.length ?? 0)) best = data;
+    }
+    if (best) return best;
   }
   return undefined;
 };

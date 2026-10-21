@@ -137,6 +137,8 @@ export interface GraphInfo {
   readonly complete: boolean;
   /** Largest lane index used by any row + 1. */
   readonly maxLanes: number;
+  /** Why the last load failed: the graph is incomplete or outdated, and may be reloading. */
+  readonly error?: string;
 }
 
 /**

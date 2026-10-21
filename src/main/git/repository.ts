@@ -232,6 +232,19 @@ interface GraphSnapshot {
   complete: boolean;
 }
 
+/**
+ * Waits before reloading a graph whose load lost the connection. After the last one, the graph
+ * waits for something to ask for it again (a refresh, or refs changing).
+ */
+const GRAPH_RETRY_DELAYS = [
+  "1 second",
+  "2 seconds",
+  "5 seconds",
+  "15 seconds",
+  "30 seconds",
+  "60 seconds",
+] as const;
+
 // ---------------------------------------------------------------------------
 // Repository
 // ---------------------------------------------------------------------------
@@ -243,8 +256,12 @@ export interface RepositoryHooks {
 export class Repository {
   private graph: GraphSnapshot | null = null;
   private graphDirty = true;
-  private graphLoad: Fiber.Fiber<void, GitError> | null = null;
+  private graphLoad: Fiber.Fiber<void> | null = null;
   private graphReady: Deferred.Deferred<void, GitError> | null = null;
+  private graphRetry: Fiber.Fiber<void> | null = null;
+  private graphFailures = 0;
+  private graphError: string | null = null;
+  private disposed = false;
   private nextVersion = 1;
   private hiddenRefs: readonly string[] = [];
   private readonly writes = Semaphore.makeUnsafe(1);
@@ -561,6 +578,13 @@ export class Repository {
     if (this.graph) this.startGraphLoad();
   }
 
+  /** Stops loading the graph for good: the repository was closed. */
+  dispose(): void {
+    this.disposed = true;
+    this.cancelGraphLoad();
+    if (this.graphReady) Effect.runSync(Deferred.interrupt(this.graphReady));
+  }
+
   graphInfo(): Effect.Effect<GraphInfo, GitError> {
     return Effect.suspend(() => {
       if (this.graphDirty && !this.graphLoad) this.startGraphLoad();
@@ -607,26 +631,28 @@ export class Repository {
       count: g.builder.rows.length,
       complete: g.complete,
       maxLanes: g.builder.maxLanes,
+      ...(this.graphError === null ? {} : { error: this.graphError }),
     };
   }
 
-  private startGraphLoad(): void {
-    if (this.graphLoad) {
-      Effect.runFork(Fiber.interrupt(this.graphLoad));
-    }
+  /** Starts loading the graph, replacing any load in progress. */
+  private startGraphLoad(retry = false): void {
+    if (this.disposed) return;
+    this.cancelGraphLoad();
+    if (!retry) this.graphFailures = 0;
     this.graphDirty = false;
-    const first = this.graph === null;
-    const ready = Deferred.makeUnsafe<void, GitError>();
-    if (first) this.graphReady = ready;
+    // The first callers wait for the first rows, also through reloads after a lost connection.
+    const pending =
+      this.graphReady && !Deferred.isDoneUnsafe(this.graphReady) ? this.graphReady : null;
+    const ready = pending ?? Deferred.makeUnsafe<void, GitError>();
+    if (this.graph === null) this.graphReady = ready;
     const fiber = Effect.runFork(
-      this.loadGraph(first, ready).pipe(
-        // The log streams into a parser, so a lost connection restarts the whole load (with a
-        // new snapshot) rather than rerunning the command into the same one.
-        Effect.retry({ while: (e) => e._tag === "SshError", times: 1 }),
-        Effect.onError((cause) => {
-          this.graphDirty = true;
-          return Deferred.failCause(ready, cause);
-        }),
+      this.loadGraph(ready).pipe(
+        Effect.catch((e) =>
+          Effect.suspend(() => (this.graphFailed(e) ? Effect.void : Deferred.fail(ready, e))),
+        ),
+        Effect.catchDefect((d) => Deferred.die(ready, d)),
+        Effect.asVoid,
         Effect.ensuring(
           Effect.sync(() => {
             if (this.graphLoad === fiber) this.graphLoad = null;
@@ -637,7 +663,38 @@ export class Repository {
     this.graphLoad = fiber;
   }
 
-  private loadGraph(first: boolean, ready: Deferred.Deferred<void, GitError>) {
+  private cancelGraphLoad(): void {
+    for (const f of [this.graphLoad, this.graphRetry]) if (f) Effect.runFork(Fiber.interrupt(f));
+    this.graphLoad = null;
+    this.graphRetry = null;
+  }
+
+  /**
+   * Shows why the graph is outdated or incomplete, and reloads it after a lost connection. The
+   * log streams into a parser, so a reload starts over with a new snapshot rather than rerunning
+   * the command into the same one. Returns whether a reload follows.
+   */
+  private graphFailed(e: GitError): boolean {
+    this.graphDirty = true;
+    this.graphError = e.message;
+    if (this.graph) this.hooks.onGraphProgress(this, this.snapshotInfo(this.graph));
+    const delay = GRAPH_RETRY_DELAYS[this.graphFailures];
+    if (e._tag !== "SshError" || delay === undefined) return false;
+    this.graphFailures++;
+    this.graphRetry = Effect.runFork(
+      Effect.sleep(delay).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            this.graphRetry = null;
+            this.startGraphLoad(true);
+          }),
+        ),
+      ),
+    );
+    return true;
+  }
+
+  private loadGraph(ready: Deferred.Deferred<void, GitError>) {
     return Effect.gen({ self: this }, function* () {
       const stashes = parseStashes(
         yield* this.gitText(["stash", "list", `--format=${STASH_FORMAT}`]).pipe(
@@ -685,18 +742,25 @@ export class Repository {
         builder: new GraphBuilder(),
         complete: false,
       };
-      if (first) this.graph = snapshot;
+      // A graph that is still loading is shown while it streams in. One that did not finish
+      // stays on screen until this load has more rows; a complete one, until this load is done.
+      this.graph ??= snapshot;
 
       let lastEmit = Date.now();
       let readyFired = false;
       const progress = () => {
         const count = snapshot.builder.rows.length;
-        if (first && !readyFired && count >= 2000) {
+        const shown = this.graph;
+        if (shown && shown !== snapshot && !shown.complete && count > shown.builder.rows.length) {
+          this.graph = snapshot;
+        }
+        if (this.graph !== snapshot) return;
+        if (!readyFired && count >= 2000) {
           readyFired = true;
           Effect.runSync(Deferred.succeed(ready, undefined));
         }
         const now = Date.now();
-        if (first && now - lastEmit > 300) {
+        if (now - lastEmit > 300) {
           lastEmit = now;
           this.hooks.onGraphProgress(this, this.snapshotInfo(snapshot));
         }
@@ -709,8 +773,7 @@ export class Repository {
 
       if (revs.length === 0 && stdinRevs.length === 0) {
         // Everything is hidden and HEAD is unborn: nothing to show.
-        snapshot.complete = true;
-        this.graph = snapshot;
+        this.graphLoaded(snapshot);
         if (!readyFired) yield* Deferred.succeed(ready, undefined);
         this.hooks.onGraphProgress(this, this.snapshotInfo(snapshot));
         return;
@@ -734,11 +797,17 @@ export class Repository {
           }),
         );
       }
-      snapshot.complete = true;
-      this.graph = snapshot;
+      this.graphLoaded(snapshot);
       if (!readyFired) yield* Deferred.succeed(ready, undefined);
       this.hooks.onGraphProgress(this, this.snapshotInfo(snapshot));
     });
+  }
+
+  private graphLoaded(snapshot: GraphSnapshot): void {
+    snapshot.complete = true;
+    this.graph = snapshot;
+    this.graphFailures = 0;
+    this.graphError = null;
   }
 
   // -------------------------------------------------------------------------

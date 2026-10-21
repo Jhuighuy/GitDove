@@ -58,10 +58,14 @@ export const ReposLive = Layer.effect(
       const existing = entries.get(repo.id);
       if (existing) return existing.repo;
       repo.setHiddenRefs(settings.hidden(repo.id));
-      const dispose = watchRepository(repo, (scopes) => {
+      const unwatch = watchRepository(repo, (scopes) => {
         if (scopes.has("refs") || scopes.has("head")) repo.invalidateGraph();
         notifier.emit("repo.changed", { repo: repo.id, scopes: [...scopes] });
       });
+      const dispose = () => {
+        unwatch();
+        repo.dispose();
+      };
       entries.set(repo.id, { repo, dispose });
       return repo;
     };

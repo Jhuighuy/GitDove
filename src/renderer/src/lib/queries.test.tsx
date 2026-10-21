@@ -89,7 +89,7 @@ it("nests all keys under the repository", () => {
     keys.refs(repo),
     keys.status(repo),
     keys.graphInfo(repo),
-    keys.graphPage(repo, 1, 2),
+    keys.graphPage(repo, 1, 2, GRAPH_PAGE),
     keys.commit(repo, "h"),
     keys.diff(repo, target),
     keys.search(repo, "x"),
@@ -189,6 +189,11 @@ const graphInfo = (extra: Partial<GraphInfo> = {}): GraphInfo => ({
 const graphRows = async (_m: string, _r: string, version: number, from: number, to: number) =>
   Array.from({ length: to - from }, (_, i) => row(`v${version}:${from + i}`));
 
+/** Like the main process: serves only the rows built so far. */
+const builtRows =
+  (built: () => number) => (m: string, r: string, v: number, from: number, to: number) =>
+    graphRows(m, r, v, from, Math.max(from, Math.min(to, built())));
+
 type RowsProps = { info: GraphInfo | undefined; start: number; end: number };
 const useRows = ({ info, start, end }: RowsProps) => q.useGraphRows(repo, info, start, end);
 
@@ -217,24 +222,38 @@ it("fetches nothing without graph info or for an empty range", async () => {
 });
 
 it("refetches the growing last page while the graph streams in", async () => {
-  mocks.api.mockImplementation(graphRows);
-  await renderHook(useRows, {
-    info: graphInfo({ complete: false, count: GRAPH_PAGE + 10 }),
-    start: 0,
+  let built = GRAPH_PAGE + 10;
+  mocks.api.mockImplementation(builtRows(() => built));
+  const props = (complete: boolean) => ({
+    info: graphInfo({ complete, count: built }),
+    start: GRAPH_PAGE,
     end: GRAPH_PAGE + 1,
   });
-  await until(() => expect(calls()).toHaveLength(2));
-  const staleTime = (page: number) =>
-    (
-      client.getQueryCache().find({ queryKey: keys.graphPage(repo, 1, page) })!.observers[0]!
-        .options as { staleTime?: number }
-    ).staleTime;
-  expect(staleTime(0)).toBe(Infinity);
-  expect(staleTime(1)).toBe(0);
+  const { result, rerender } = await renderHook(useRows, props(false));
+  await until(() => expect(result.current.size).toBe(10));
+
+  built = GRAPH_PAGE + 100;
+  await rerender(props(false));
+  await until(() => expect(result.current.size).toBe(100));
+
+  built = 2 * GRAPH_PAGE + 5;
+  await rerender(props(true));
+  await until(() => expect(result.current.size).toBe(GRAPH_PAGE));
+  expect(result.current.get(2 * GRAPH_PAGE - 1)?.hash).toBe(`v1:${2 * GRAPH_PAGE - 1}`);
+});
+
+it("keeps the shorter page on screen while the grown page loads", async () => {
+  mocks.api.mockImplementation(builtRows(() => 10));
+  const info = (count: number) => graphInfo({ complete: false, count });
+  const { result, rerender } = await renderHook(useRows, { info: info(10), start: 0, end: 1 });
+  await until(() => expect(result.current.size).toBe(10));
+  mocks.api.mockReturnValue(new Promise(() => {}));
+  await rerender({ info: info(20), start: 0, end: 1 });
+  expect(result.current.size).toBe(10);
 });
 
 it("keeps rows of a previous graph version while the new version loads", async () => {
-  client.setQueryData(keys.graphPage(repo, 3, 0), [row("old")]);
+  client.setQueryData(keys.graphPage(repo, 3, 0, 1), [row("old")]);
   mocks.api.mockReturnValue(new Promise(() => {}));
   const { result } = await renderHook(useRows, {
     info: graphInfo({ version: 5 }),
@@ -244,7 +263,7 @@ it("keeps rows of a previous graph version while the new version loads", async (
   expect(result.current.get(0)?.hash).toBe("old");
   // Versions too far back are not used.
   client.clear();
-  client.setQueryData(keys.graphPage(repo, 1, 0), [row("ancient")]);
+  client.setQueryData(keys.graphPage(repo, 1, 0, 1), [row("ancient")]);
   const r2 = await renderHook(useRows, { info: graphInfo({ version: 7 }), start: 0, end: 1 });
   expect(r2.result.current.size).toBe(0);
 });

@@ -43,6 +43,7 @@ vi.mock("./git/repository", async () => {
         hooks,
         setHiddenRefs: vi.fn(),
         invalidateGraph: vi.fn(),
+        dispose: vi.fn(),
       } as unknown as Repository;
     }),
   );
@@ -190,20 +191,23 @@ describe("Repos", () => {
     const first = await run((r) => r.open(local("/repo/sub")));
     await run((r) => r.close("local:/repo/sub"));
     expect(fake.watchers[0]!.dispose).toHaveBeenCalledTimes(1);
+    expect(first.dispose).toHaveBeenCalledTimes(1);
     await run((r) => r.close("local:/repo"));
     await run((r) => r.close("local:/never-opened"));
     expect(fake.watchers[0]!.dispose).toHaveBeenCalledTimes(1);
+    expect(first.dispose).toHaveBeenCalledTimes(1);
 
     const second = await run((r) => r.get("local:/repo/sub"));
     expect(second).not.toBe(first);
     expect(fake.open).toHaveBeenCalledTimes(2);
   });
 
-  it("stops all watchers on shutdown", async () => {
+  it("stops all watchers and graph loads on shutdown", async () => {
     const { run, runtime } = repos();
-    await run((r) => Effect.all([r.open(local("/repo")), r.open(local("/other"))]));
+    const opened = await run((r) => Effect.all([r.open(local("/repo")), r.open(local("/other"))]));
     await runtime.dispose();
     current = null;
     expect(fake.watchers.map((w) => w.dispose.mock.calls.length)).toEqual([1, 1]);
+    expect(opened.map((r) => vi.mocked(r.dispose).mock.calls.length)).toEqual([1, 1]);
   });
 });
