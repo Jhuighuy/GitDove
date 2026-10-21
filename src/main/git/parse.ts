@@ -29,6 +29,9 @@ export const REFS_FORMAT = [
   "%(upstream:track,nobracket)",
   "%(HEAD)",
   "%(symref)",
+  // Tip author, for `branchOwners`.
+  "%(authorname)",
+  "%(authoremail)",
 ].join("%00");
 
 const parseTrack = (track: string) => {

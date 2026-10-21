@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { GraphInfo, RepoLocation } from "@shared/domain";
 import { SshError } from "../exec/errors";
 import { type Host, Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
+import { authorKey, exceptionKey } from "@shared/visibility";
 import { Repository } from "./repository";
 
 const targets: string[] = [LOCAL_HOST];
@@ -477,6 +478,34 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     expect((await fails(repo.findCommit(g.version + 1, rows[0]!.hash)))._tag).toBe(
       "StaleGraphError",
     );
+  });
+
+  it("finds branch owners and filters the graph by contributor", async () => {
+    const commitAs = (branch: string, who: string) =>
+      `git checkout -q -b ${branch} main && git -c user.name=${who} -c user.email=${who}@x ` +
+      `commit -q --allow-empty -m ${branch}`;
+    await sh(`${commitAs("ann", "Ann")} && ${commitAs("bob", "Bob")} && git checkout -q main`);
+    const { owners } = await run(repo.refs());
+    expect(owners.byRef).toEqual({ "refs/heads/ann": ["ann@x"], "refs/heads/bob": ["bob@x"] });
+    expect(owners.names).toMatchObject({ "ann@x": "Ann", "bob@x": "Bob" });
+    expect(owners.me).toBe("t@x");
+
+    let version = 0;
+    /** Rows in the next complete graph. */
+    const count = async () => {
+      let g = await run(repo.graphInfo());
+      while (!g.complete || g.version <= version) {
+        await new Promise((r) => setTimeout(r, 10));
+        g = await run(repo.graphInfo());
+      }
+      version = g.version;
+      return g.count;
+    };
+    expect(await count()).toBe(4);
+    repo.setHiddenRefs([authorKey("ann@x")]);
+    expect(await count()).toBe(3);
+    repo.setHiddenRefs([authorKey("ann@x"), exceptionKey("refs/heads/ann")]);
+    expect(await count()).toBe(4);
   });
 
   describe("remotes", () => {

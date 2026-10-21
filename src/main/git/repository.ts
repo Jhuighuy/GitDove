@@ -16,7 +16,7 @@ import type {
   WorkingStatus,
 } from "@shared/domain";
 import { repoDisplayName, repoIdOf } from "@shared/domain";
-import { isHidden, stashKey } from "@shared/visibility";
+import { isAuthorKey, isFilteredOut, isHidden, stashKey } from "@shared/visibility";
 import type { ResetMode } from "@shared/ipc";
 import { Deferred, Effect, Fiber, Semaphore } from "effect";
 import {
@@ -32,6 +32,7 @@ import type { ExecOptions, Host } from "../exec/hosts";
 import { shellQuote } from "../exec/shell";
 import type { SpawnResult } from "../exec/spawn";
 import { GraphBuilder, LOG_FORMAT, LogParser } from "./graph";
+import { branchOwners, OWNERS_LOG_ARGS } from "./owners";
 import {
   parseDiff,
   parseFileVersions,
@@ -376,13 +377,9 @@ export class Repository {
   refs(): Effect.Effect<RefsSnapshot, GitError> {
     return Effect.all(
       {
-        refs: this.gitText([
-          "for-each-ref",
-          `--format=${REFS_FORMAT}`,
-          "refs/heads",
-          "refs/remotes",
-          "refs/tags",
-        ]).pipe(Effect.map(parseRefs)),
+        refs: this.refList(),
+        ownersLog: this.ownersLog(),
+        me: this.gitText(["config", "--get", "user.email"], { okCodes: [0, 1] }),
         stashes: this.gitText(["stash", "list", `--format=${STASH_FORMAT}`]).pipe(
           Effect.map((s) => parseStashes(s).map(toStash)),
           Effect.orElseSucceed(() => []),
@@ -400,6 +397,29 @@ export class Repository {
             ),
       },
       { concurrency: "unbounded" },
+    ).pipe(
+      Effect.map(({ refs, ownersLog, me, ...rest }) => ({
+        ...rest,
+        refs: parseRefs(refs),
+        owners: branchOwners(refs, ownersLog, me),
+      })),
+    );
+  }
+
+  private refList(): Effect.Effect<string, GitError> {
+    return this.gitText([
+      "for-each-ref",
+      `--format=${REFS_FORMAT}`,
+      "refs/heads",
+      "refs/remotes",
+      "refs/tags",
+    ]);
+  }
+
+  /** Commits for `branchOwners`; best effort, as owners only refine the contributor filter. */
+  private ownersLog(): Effect.Effect<string> {
+    return this.gitText(OWNERS_LOG_ARGS, { maxBytes: 4 * 1024 * 1024 }).pipe(
+      Effect.orElseSucceed(() => ""),
     );
   }
 
@@ -736,20 +756,26 @@ export class Repository {
         revs = ["--branches", "--remotes", "--tags"];
         stdinRevs = stashes.map((s) => s.hash);
       } else {
-        const names = lines(
-          yield* this.gitText([
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/heads",
-            "refs/remotes",
-            "refs/tags",
-          ]),
+        const hidden = new Set(hiddenRefs);
+        const [refList, owners] = yield* Effect.all(
+          [
+            this.refList(),
+            // Owners are only needed for the contributor filter.
+            hiddenRefs.some(isAuthorKey) ? this.ownersLog() : Effect.succeed(null),
+          ],
+          { concurrency: 2 },
         );
+        const byRef = owners === null ? {} : branchOwners(refList, owners, null).byRef;
         revs = [];
         stdinRevs = [
-          ...names.filter(
-            (n) => !/^refs\/remotes\/[^/]+\/HEAD$/.test(n) && !isHidden(hiddenRefs, n),
-          ),
+          ...parseRefs(refList)
+            .map((r) => r.name)
+            .filter(
+              (n) =>
+                !/^refs\/remotes\/[^/]+\/HEAD$/.test(n) &&
+                !isHidden(hidden, n) &&
+                !isFilteredOut(hidden, n, byRef[n]),
+            ),
           ...stashes.filter((s) => !isHidden(hiddenRefs, stashKey(s.hash))).map((s) => s.hash),
         ];
       }

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { isHidden, showNames, toggleHidden } from "./visibility";
+import {
+  authorKey,
+  exceptionKey,
+  hiddenAuthors,
+  isFilteredOut,
+  isHidden,
+  setHiddenAuthors,
+  showNames,
+  toggleHidden,
+} from "./visibility";
 
 describe("visibility", () => {
   it("matches exact names and group prefixes", () => {
@@ -43,5 +52,31 @@ describe("visibility", () => {
     expect(
       toggleHidden(["refs/remotes/origin/", "refs/remotes/origin/main"], all[0]!, all),
     ).toEqual(["refs/remotes/origin/release/1", "refs/remotes/origin/release/2"]);
+  });
+
+  it("filters branches whose owners are all hidden", () => {
+    const hidden = [authorKey("Ann@x"), authorKey("bob@x")];
+    expect(isFilteredOut(hidden, "refs/heads/a", ["ann@x"])).toBe(true);
+    expect(isFilteredOut(hidden, "refs/heads/a", ["ann@x", "bob@x"])).toBe(true);
+    expect(isFilteredOut(hidden, "refs/heads/a", ["ann@x", "cid@x"])).toBe(false);
+    expect(isFilteredOut(hidden, "refs/heads/main", undefined)).toBe(false);
+    expect(isFilteredOut([...hidden, exceptionKey("refs/heads/a")], "refs/heads/a", ["ann@x"])).toBe(
+      false,
+    );
+  });
+
+  it("sets hidden contributors and drops stale exceptions", () => {
+    const owners = { "refs/heads/a": ["ann@x"], "refs/heads/b": ["bob@x"] };
+    const hidden = [
+      "refs/heads/x",
+      authorKey("ann@x"),
+      authorKey("bob@x"),
+      exceptionKey("refs/heads/a"),
+      exceptionKey("refs/heads/b"),
+    ];
+    const next = setHiddenAuthors(hidden, ["ann@x"], owners);
+    expect(next).toEqual(["refs/heads/x", exceptionKey("refs/heads/a"), authorKey("ann@x")]);
+    expect(hiddenAuthors(next)).toEqual(["ann@x"]);
+    expect(setHiddenAuthors(next, [], owners)).toEqual(["refs/heads/x"]);
   });
 });
