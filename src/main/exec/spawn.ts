@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { Effect } from "effect";
 import { CommandError } from "./errors";
+import { OWN_PROCESS_GROUP, signalTree, terminateTree } from "./terminate";
 
 /** Data written to a command's stdin. */
 export type Stdin = string | Buffer;
@@ -48,6 +49,8 @@ export const spawn = (
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      // Its own process group, so stopping it stops what it started too (see terminate.ts).
+      detached: OWN_PROCESS_GROUP,
     });
 
     const chunks: Buffer[] = [];
@@ -73,7 +76,7 @@ export const spawn = (
         const keep = chunk.length - (bytes - options.maxBytes);
         if (keep > 0) chunks.push(chunk.subarray(0, keep));
         truncated = true;
-        child.kill();
+        signalTree(child);
         // Children it started may still hold the pipes open, which would delay "close" until
         // they exit; ours are not needed anymore (and a writer left behind gets SIGPIPE).
         child.stdout.destroy();
@@ -113,9 +116,8 @@ export const spawn = (
     if (options.stdin !== undefined) child.stdin.end(options.stdin);
     else child.stdin.end();
 
-    return Effect.sync(() => {
-      if (!done && child.exitCode === null) child.kill();
-    });
+    // Interrupting stops the process and what it started, and waits until all of it is gone.
+    return Effect.suspend(() => (done ? Effect.void : terminateTree(child)));
   });
 
 /**

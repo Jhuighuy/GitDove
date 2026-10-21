@@ -44,7 +44,13 @@ export class InvalidInputError extends Data.TaggedError("InvalidInputError")<{
   readonly message: string;
 }> {}
 
+/** The user cancelled a running operation. */
+export class CancelledError extends Data.TaggedError("CancelledError")<{
+  readonly message: string;
+}> {}
+
 export type AppError =
+  | CancelledError
   | CommandError
   | SshError
   | NotARepositoryError

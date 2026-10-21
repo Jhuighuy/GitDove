@@ -5,7 +5,7 @@ import type { Ref, RefsSnapshot, RepoId, RepoInfo, RepoLocation } from "@shared/
 import { repoLocationOf } from "@shared/domain";
 import type { ResetMode } from "@shared/ipc";
 import { toast } from "sonner";
-import { runAction } from "@/lib/actions";
+import { refuseWhileBusy, runAction } from "@/lib/actions";
 import { ApiError, api } from "@/lib/api";
 import { shortHash } from "@/lib/format";
 import { keys, queryClient } from "@/lib/queries";
@@ -15,6 +15,8 @@ import { openLocation } from "./open/OpenRepo";
 
 const refs = (repo: RepoId) => queryClient.getQueryData<RefsSnapshot>(keys.refs(repo));
 const headBranch = (repo: RepoId) => refs(repo)?.refs.find((r) => r.kind === "branch" && r.isHead);
+/** A ref or a commit hash for display. */
+const refLabel = (ref: string) => (/^[0-9a-f]{40}$/.test(ref) ? shortHash(ref) : ref);
 const info = (repo: RepoId) => queryClient.getQueryData<RepoInfo>(keys.info(repo));
 const defaultRemote = (repo: RepoId) => {
   const remotes = refs(repo)?.remotes ?? [];
@@ -35,15 +37,20 @@ const sibling = (repo: RepoId, path: string): RepoLocation => {
 
 export const commands = {
   fetch: (repo: RepoId) =>
-    runAction(repo, "Fetch", () => api("repo.fetch", repo, null), { progress: "Fetching…" }),
+    runAction(repo, "Fetch", () => api("repo.fetch", repo, null), {
+      progress: "Fetching…",
+      cancellable: true,
+    }),
 
   pull: (repo: RepoId, mode: "ff-only" | "merge" | "rebase" = "ff-only") =>
     runAction(repo, "Pull", () => api("repo.pull", repo, mode), {
       progress: "Pulling…",
       success: "Pulled",
+      cancellable: true,
     }),
 
   push: async (repo: RepoId, force = false) => {
+    if (refuseWhileBusy(repo, "Push")) return;
     const head = headBranch(repo);
     if (!head) {
       toast.error("Push failed", { description: "No branch is checked out" });
@@ -70,24 +77,31 @@ export const commands = {
       if (!ok) return;
     }
     await runAction(repo, "Push", () => api("repo.push", repo, { force, setUpstream }), {
-      progress: "Pushing…",
+      progress: `Pushing ${head.short}…`,
       success: `Pushed ${head.short}`,
+      cancellable: true,
     });
   },
 
   stash: async (repo: RepoId) => {
     await runAction(repo, "Stash", () => api("repo.stash", repo, null, true), {
+      status: "Stashing changes…",
       success: "Changes stashed",
     });
   },
 
   pop: (repo: RepoId, index = 0) =>
-    runAction(repo, "Pop stash", () => api("repo.stashPop", repo, index)),
+    runAction(repo, "Pop stash", () => api("repo.stashPop", repo, index), {
+      status: `Popping stash@{${index}}…`,
+    }),
 
   applyStash: (repo: RepoId, index: number) =>
-    runAction(repo, "Apply stash", () => api("repo.stashApply", repo, index)),
+    runAction(repo, "Apply stash", () => api("repo.stashApply", repo, index), {
+      status: `Applying stash@{${index}}…`,
+    }),
 
   dropStash: async (repo: RepoId, index: number) => {
+    if (refuseWhileBusy(repo, "Delete stash")) return;
     const ok = await confirm({
       title: `Delete stash@{${index}}?`,
       description: "Stashed changes will be lost.",
@@ -98,7 +112,9 @@ export const commands = {
   },
 
   checkout: (repo: RepoId, ref: string) =>
-    runAction(repo, "Checkout", () => api("repo.checkout", repo, ref)),
+    runAction(repo, "Checkout", () => api("repo.checkout", repo, ref), {
+      status: `Checking out ${refLabel(ref)}…`,
+    }),
 
   checkoutRef: async (repo: RepoId, ref: Ref) => {
     if (ref.kind === "branch") return commands.checkout(repo, ref.short);
@@ -106,12 +122,15 @@ export const commands = {
       const local = ref.short.slice((ref.remote?.length ?? 0) + 1);
       const existing = refs(repo)?.refs.find((r) => r.kind === "branch" && r.short === local);
       if (existing) return commands.checkout(repo, existing.short);
-      return runAction(repo, "Checkout", () => api("repo.checkoutRemote", repo, ref.short, local));
+      return runAction(repo, "Checkout", () => api("repo.checkoutRemote", repo, ref.short, local), {
+        status: `Checking out ${ref.short}…`,
+      });
     }
     return commands.checkout(repo, ref.hash);
   },
 
   createBranch: async (repo: RepoId, at: string, label?: string) => {
+    if (refuseWhileBusy(repo, "Create branch")) return;
     const r = await prompt({
       title: "Create branch",
       description: label ? `Create a new branch at ${label}.` : undefined,
@@ -128,6 +147,7 @@ export const commands = {
   },
 
   renameBranch: async (repo: RepoId, name: string) => {
+    if (refuseWhileBusy(repo, "Rename branch")) return;
     const r = await prompt({
       title: "Rename branch",
       label: "New name",
@@ -140,6 +160,7 @@ export const commands = {
   },
 
   deleteBranch: async (repo: RepoId, ref: Ref) => {
+    if (refuseWhileBusy(repo, "Delete branch")) return;
     if (ref.kind === "remote") {
       const name = ref.short.slice((ref.remote?.length ?? 0) + 1);
       const ok = await confirm({
@@ -153,7 +174,7 @@ export const commands = {
           repo,
           "Delete remote branch",
           () => api("repo.deleteRemoteBranch", repo, ref.remote!, name),
-          { progress: `Deleting ${ref.short}…` },
+          { progress: `Deleting ${ref.short}…`, cancellable: true },
         );
       }
       return;
@@ -169,6 +190,7 @@ export const commands = {
   },
 
   createTag: async (repo: RepoId, at: string) => {
+    if (refuseWhileBusy(repo, "Create tag")) return;
     const r = await prompt({
       title: "Create tag",
       description: `Tag commit ${shortHash(at)}.`,
@@ -188,6 +210,7 @@ export const commands = {
   },
 
   deleteTag: async (repo: RepoId, name: string) => {
+    if (refuseWhileBusy(repo, "Delete tag")) return;
     const ok = await confirm({
       title: `Delete tag ${name}?`,
       description: "The tag is deleted locally only.",
@@ -198,36 +221,49 @@ export const commands = {
   },
 
   merge: async (repo: RepoId, ref: string) => {
+    if (refuseWhileBusy(repo, "Merge")) return;
     const head = headBranch(repo);
     const ok = await confirm({
       title: `Merge ${ref}?`,
       description: `Merge “${ref}” into “${head?.short ?? "HEAD"}”.`,
       confirmLabel: "Merge",
     });
-    if (ok) await runAction(repo, "Merge", () => api("repo.merge", repo, ref, {}));
+    if (ok) {
+      await runAction(repo, "Merge", () => api("repo.merge", repo, ref, {}), {
+        status: `Merging ${ref}…`,
+      });
+    }
   },
 
   rebase: async (repo: RepoId, onto: string) => {
+    if (refuseWhileBusy(repo, "Rebase")) return;
     const head = headBranch(repo);
     const ok = await confirm({
       title: `Rebase onto ${onto}?`,
       description: `Rebase “${head?.short ?? "HEAD"}” onto “${onto}”. This rewrites history.`,
       confirmLabel: "Rebase",
     });
-    if (ok) await runAction(repo, "Rebase", () => api("repo.rebase", repo, onto));
+    if (ok) {
+      await runAction(repo, "Rebase", () => api("repo.rebase", repo, onto), {
+        status: `Rebasing onto ${onto}…`,
+      });
+    }
   },
 
   cherryPick: (repo: RepoId, hash: string) =>
     runAction(repo, "Cherry-pick", () => api("repo.cherryPick", repo, hash), {
+      status: `Cherry-picking ${shortHash(hash)}…`,
       success: `Cherry-picked ${shortHash(hash)}`,
     }),
 
   revert: (repo: RepoId, hash: string) =>
     runAction(repo, "Revert", () => api("repo.revert", repo, hash), {
+      status: `Reverting ${shortHash(hash)}…`,
       success: `Reverted ${shortHash(hash)}`,
     }),
 
   reset: async (repo: RepoId, hash: string, mode: ResetMode) => {
+    if (refuseWhileBusy(repo, "Reset")) return;
     const head = headBranch(repo);
     const ok = await confirm({
       title: `${mode[0]!.toUpperCase()}${mode.slice(1)} reset to ${shortHash(hash)}?`,
@@ -240,14 +276,25 @@ export const commands = {
       confirmLabel: "Reset",
       destructive: mode === "hard",
     });
-    if (ok) await runAction(repo, "Reset", () => api("repo.reset", repo, hash, mode));
+    if (ok) {
+      await runAction(repo, "Reset", () => api("repo.reset", repo, hash, mode), {
+        status: `Resetting to ${shortHash(hash)}…`,
+      });
+    }
   },
 
-  abort: (repo: RepoId) => runAction(repo, "Abort", () => api("repo.abortOperation", repo)),
+  abort: (repo: RepoId) =>
+    runAction(repo, "Abort", () => api("repo.abortOperation", repo), { status: "Aborting…" }),
   continue: (repo: RepoId) =>
-    runAction(repo, "Continue", () => api("repo.continueOperation", repo)),
+    runAction(repo, "Continue", () => api("repo.continueOperation", repo), {
+      status: "Continuing…",
+    }),
+
+  /** Cancels the running fetch, pull or push. */
+  cancel: (repo: RepoId) => void api("repo.cancel", repo),
 
   discard: async (repo: RepoId, paths: string[], untracked: string[]) => {
+    if (refuseWhileBusy(repo, "Discard")) return;
     const count = paths.length + untracked.length;
     const ok = await confirm({
       title:
@@ -261,7 +308,11 @@ export const commands = {
       confirmLabel: "Discard",
       destructive: true,
     });
-    if (ok) await runAction(repo, "Discard", () => api("repo.discard", repo, paths, untracked));
+    if (ok) {
+      await runAction(repo, "Discard", () => api("repo.discard", repo, paths, untracked), {
+        status: "Discarding changes…",
+      });
+    }
   },
 
   pushBranch: (repo: RepoId, ref: Ref) =>
@@ -270,6 +321,7 @@ export const commands = {
       : runAction(repo, "Push", () => api("repo.pushBranch", repo, ref.short, false), {
           progress: `Pushing ${ref.short}…`,
           success: `Pushed ${ref.short}`,
+          cancellable: true,
         }),
 
   /** Pull for the current branch; fast-forward from upstream for any other branch. */
@@ -279,9 +331,11 @@ export const commands = {
       : runAction(repo, "Fast-forward", () => api("repo.fastForwardBranch", repo, ref.short), {
           progress: `Updating ${ref.short}…`,
           success: `Updated ${ref.short}`,
+          cancellable: true,
         }),
 
   setUpstream: async (repo: RepoId, ref: Ref) => {
+    if (refuseWhileBusy(repo, "Set upstream")) return;
     const remote = defaultRemote(repo);
     const r = await prompt({
       title: `Set upstream for ${ref.short}`,
@@ -296,6 +350,7 @@ export const commands = {
   },
 
   createWorktree: async (repo: RepoId, ref: string, label: string) => {
+    if (refuseWhileBusy(repo, "Create worktree")) return;
     const workTree = info(repo)?.workTree ?? repoLocationOf(repo).path;
     const parent = workTree.replace(/[\\/][^\\/]+[\\/]?$/, "");
     const base = workTree.slice(parent.length + 1);
@@ -318,6 +373,7 @@ export const commands = {
   },
 
   removeWorktree: async (repo: RepoId, path: string) => {
+    if (refuseWhileBusy(repo, "Remove worktree")) return;
     const ok = await confirm({
       title: "Remove worktree?",
       description: `Deletes the folder ${path}.`,
@@ -368,10 +424,12 @@ export const commands = {
     return runAction(repo, "Push tag", () => api("repo.pushTag", repo, remote, tag), {
       progress: `Pushing ${tag}…`,
       success: `Pushed ${tag} to ${remote}`,
+      cancellable: true,
     });
   },
 
   deleteRemoteTag: async (repo: RepoId, tag: string) => {
+    if (refuseWhileBusy(repo, "Delete remote tag")) return;
     const remote = defaultRemote(repo);
     if (!remote) return void toast.error("No remotes configured");
     const ok = await confirm({
@@ -381,17 +439,22 @@ export const commands = {
       destructive: true,
     });
     if (ok)
-      await runAction(repo, "Delete remote tag", () =>
-        api("repo.deleteRemoteTag", repo, remote, tag),
+      await runAction(
+        repo,
+        "Delete remote tag",
+        () => api("repo.deleteRemoteTag", repo, remote, tag),
+        { progress: `Deleting ${tag} from ${remote}…`, cancellable: true },
       );
   },
 
   fetchRemote: (repo: RepoId, remote: string) =>
     runAction(repo, "Fetch", () => api("repo.fetch", repo, remote), {
       progress: `Fetching ${remote}…`,
+      cancellable: true,
     }),
 
   addRemote: async (repo: RepoId) => {
+    if (refuseWhileBusy(repo, "Add remote")) return;
     const name = await prompt({
       title: "Add remote",
       label: "Name",
@@ -413,6 +476,7 @@ export const commands = {
   },
 
   editRemoteUrl: async (repo: RepoId, name: string, current: string) => {
+    if (refuseWhileBusy(repo, "Edit remote")) return;
     const r = await prompt({
       title: `Edit ${name} URL`,
       label: "URL",
@@ -424,6 +488,7 @@ export const commands = {
   },
 
   removeRemote: async (repo: RepoId, name: string) => {
+    if (refuseWhileBusy(repo, "Remove remote")) return;
     const ok = await confirm({
       title: `Remove remote ${name}?`,
       description: "Its remote-tracking branches are removed too. Nothing changes on the server.",

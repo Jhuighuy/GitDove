@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useBusyStore } from "@/stores/busy";
 import { useRepoUiStore } from "@/stores/repo-ui";
 import { WipPanel } from "./WipPanel";
 
@@ -13,7 +14,14 @@ const mocks = vi.hoisted(() => ({
   info: null as unknown,
   listeners: new Map<string, (payload: unknown) => void>(),
   commands: { abort: vi.fn(), continue: vi.fn(), discard: vi.fn() },
-  toast: { loading: vi.fn(), success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
+  toast: {
+    loading: vi.fn(),
+    success: vi.fn(),
+    error: vi.fn(),
+    dismiss: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
 }));
 
 vi.mock("sonner", () => ({ toast: mocks.toast }));
@@ -177,6 +185,45 @@ it("stages, unstages and discards files", async () => {
   await click(button("Unstage All"));
   expect(apiCalls("repo.stageAll")).toEqual([[repo]]);
   expect(apiCalls("repo.unstageAll")).toEqual([[repo]]);
+});
+
+it("disables staging, discarding and committing while another operation runs", async () => {
+  mocks.info = info({ state: "merging" });
+  await render();
+  await type(summary(), "Summary");
+  await act(async () =>
+    useBusyStore.getState().start(repo, { label: "Pulling…", cancellable: true }),
+  );
+  const reason = "Pulling… Wait for it to finish.";
+  for (const el of [
+    rowAction("src/edit.ts", 0),
+    rowAction("src/edit.ts", 1),
+    rowAction("staged.ts", 0),
+  ]) {
+    expect(el.disabled).toBe(true);
+  }
+  for (const label of ["Stage All", "Unstage All", "Abort", "Continue", "Commit Changes"]) {
+    expect(button(label).disabled).toBe(true);
+    // Disabled buttons get no pointer events: a wrapper explains why.
+    expect(button(label).parentElement!.title).toBe(reason);
+  }
+  // Clicking a disabled action (its tooltip wrapper gets the click) doesn't open the file.
+  await click(rowAction("staged.ts", 0).parentElement!);
+  expect(ui()?.diff ?? null).toBeNull();
+  // Browsing still works.
+  await click(row("src/edit.ts"));
+  expect(ui()?.diff).toEqual({ kind: "unstaged", path: "src/edit.ts", untracked: false });
+  // The keyboard shortcut does not commit either.
+  await act(async () =>
+    summary().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+    ),
+  );
+  expect(apiCalls("repo.commit")).toEqual([]);
+
+  await act(async () => useBusyStore.getState().finish(repo));
+  expect(rowAction("src/edit.ts", 1).disabled).toBe(false);
+  expect(button("Commit Changes").disabled).toBe(false);
 });
 
 it("collapses sections", async () => {

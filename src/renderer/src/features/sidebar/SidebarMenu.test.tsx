@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useBusyStore } from "@/stores/busy";
 import { useSectionStack } from "./SectionStack";
 import { Sidebar } from "./Sidebar";
 
@@ -198,6 +199,21 @@ it("runs local branch actions", async () => {
   // Without an upstream there is nothing to pull from.
   await fire(row("feature"), "contextmenu");
   expect(item("Pull (fast-forward if possible)").getAttribute("aria-disabled")).toBe("true");
+});
+
+it("disables changing actions while another operation runs", async () => {
+  await render();
+  await act(async () =>
+    useBusyStore.getState().start(mocks.repo, { label: "Fetching…", cancellable: true }),
+  );
+  await fire(row("feature"), "contextmenu");
+  for (const label of ["Push", "Merge feature into main", "Checkout feature", "Delete feature"]) {
+    expect(item(label).getAttribute("aria-disabled")).toBe("true");
+    expect(item(label).title).toBe("Fetching… Wait for it to finish.");
+  }
+  expect(item("Copy branch name").getAttribute("aria-disabled")).toBeNull();
+  expect(item("Hide from graph").getAttribute("aria-disabled")).toBeNull();
+  await act(async () => useBusyStore.getState().finish(mocks.repo));
 });
 
 it("offers fewer actions on the checked-out branch", async () => {

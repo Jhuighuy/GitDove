@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useBusyStore } from "@/stores/busy";
 import { useLayout } from "@/stores/repo-ui";
 import { Toolbar } from "./Toolbar";
 
@@ -94,6 +95,7 @@ beforeEach(() => {
   mocks.refs = refs();
   mocks.status = clean;
   useLayout.setState({ sidebar: true, details: true });
+  useBusyStore.setState({ byRepo: {} });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -232,4 +234,41 @@ it("toggles the sidebar and details panels", async () => {
   await click(sidebar);
   await click(details);
   expect(useLayout.getState()).toMatchObject({ sidebar: true, details: true });
+});
+
+it("shows the running operation and disables write actions meanwhile", async () => {
+  mocks.status = { ...clean, unstaged: [{ path: "a", kind: "modified" }] };
+  mocks.refs = refs({
+    stashes: [{ index: 0, name: "stash@{0}", hash: "s", message: "m", time: 0 }],
+  });
+  await render();
+  expect(container.querySelector("output")).toBeNull();
+
+  await act(async () =>
+    useBusyStore.getState().start(REPO, { label: "Checking out feature…", cancellable: false }),
+  );
+  expect(container.querySelector("output")?.textContent).toBe("Checking out feature…");
+  expect(container.querySelector("[aria-label='Cancel']")).toBeNull();
+  for (const label of ["Pull", "Push", "Fetch", "Branch", "Stash", "Pop"]) {
+    expect(tool(label).disabled).toBe(true);
+  }
+  for (const chevron of chevrons()) {
+    expect(chevron.disabled).toBe(true);
+    expect(chevron.title).toBe("Checking out feature… Wait for it to finish.");
+  }
+  // Opening a terminal does not change the repository.
+  expect(tool("Terminal").disabled).toBe(false);
+
+  await act(async () => useBusyStore.getState().finish(REPO));
+  expect(container.querySelector("output")).toBeNull();
+  expect(tool("Pull").disabled).toBe(false);
+});
+
+it("cancels a running network operation", async () => {
+  await render();
+  await act(async () =>
+    useBusyStore.getState().start(REPO, { label: "Pulling…", cancellable: true }),
+  );
+  await click(container.querySelector<HTMLElement>("[aria-label='Cancel']")!);
+  expect(mocks.commands).toEqual([["cancel"]]);
 });

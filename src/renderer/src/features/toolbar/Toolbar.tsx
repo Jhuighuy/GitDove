@@ -11,8 +11,10 @@ import {
   IconRefresh,
   IconServer,
   IconTerminal2,
+  IconX,
 } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +26,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api } from "@/lib/api";
 import { useRefs, useRepoInfo, useStatus } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+import { type Busy, busyReason, useBusy } from "@/stores/busy";
 import { useLayout } from "@/stores/repo-ui";
 import { commands } from "../commands";
 
@@ -54,29 +57,52 @@ function ToolButton({
 }) {
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onClick}
-            className={cn(
-              "text-muted-foreground hover:text-foreground hover:bg-muted relative flex h-11 w-14 flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] disabled:opacity-40 [&_svg]:size-[18px]",
-              className,
-            )}
-          />
-        }
-      >
-        {icon}
-        <span>{label}</span>
-        {badge ? (
-          <span className="bg-primary text-primary-foreground absolute top-1 right-2 rounded-full px-1 text-[9px] leading-3.5 font-semibold tabular-nums">
-            {badge}
-          </span>
-        ) : null}
+      {/* A wrapper triggers the tooltip: disabled buttons get no pointer events. */}
+      <TooltipTrigger render={<span className="flex" />}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onClick}
+          className={cn(
+            "text-muted-foreground hover:text-foreground hover:bg-muted relative flex h-11 w-14 flex-col items-center justify-center gap-0.5 rounded-lg text-[10px] disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-[18px]",
+            className,
+          )}
+        >
+          {icon}
+          <span>{label}</span>
+          {badge ? (
+            <span className="bg-primary text-primary-foreground absolute top-1 right-2 rounded-full px-1 text-[9px] leading-3.5 font-semibold tabular-nums">
+              {badge}
+            </span>
+          ) : null}
+        </button>
       </TooltipTrigger>
       <TooltipContent>{tooltip ?? label}</TooltipContent>
     </Tooltip>
+  );
+}
+
+/** The running repository-changing operation, with a cancel button for network operations. */
+function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
+  return (
+    <output
+      className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs"
+      title={busy.label}
+    >
+      <Spinner className="size-3.5 shrink-0" role="presentation" aria-hidden />
+      <span className="truncate">{busy.label}</span>
+      {busy.cancellable && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Cancel"
+          title="Cancel"
+          onClick={() => commands.cancel(repo)}
+        >
+          <IconX />
+        </Button>
+      )}
+    </output>
   );
 }
 
@@ -85,6 +111,9 @@ export function Toolbar({ repo }: { repo: RepoId }) {
   const { data: refs } = useRefs(repo);
   const { data: status } = useStatus(repo);
   const layout = useLayout();
+  const busy = useBusy(repo);
+  // While an operation runs, the actions that change the repository wait for it.
+  const reason = busy ? busyReason(busy) : undefined;
 
   const head = refs?.refs.find((r) => r.kind === "branch" && r.isHead);
   const dirty = status ? status.staged.length + status.unstaged.length > 0 : false;
@@ -126,12 +155,21 @@ export function Toolbar({ repo }: { repo: RepoId }) {
             label="Pull"
             icon={<IconArrowDown />}
             badge={head?.behind}
-            tooltip="Pull (fast-forward if possible)"
+            disabled={!!busy}
+            tooltip={reason ?? "Pull (fast-forward if possible)"}
             onClick={() => void commands.pull(repo)}
           />
           <DropdownMenu>
             <DropdownMenuTrigger
-              render={<button type="button" aria-label="More options" className={SPLIT_MENU} />}
+              render={
+                <button
+                  type="button"
+                  aria-label="More options"
+                  disabled={!!busy}
+                  title={reason}
+                  className={cn(SPLIT_MENU, "disabled:opacity-40")}
+                />
+              }
             >
               <IconChevronDown className="size-3" />
             </DropdownMenuTrigger>
@@ -158,11 +196,21 @@ export function Toolbar({ repo }: { repo: RepoId }) {
             label="Push"
             icon={<IconArrowUp />}
             badge={head?.ahead}
+            disabled={!!busy}
+            tooltip={reason}
             onClick={() => void commands.push(repo)}
           />
           <DropdownMenu>
             <DropdownMenuTrigger
-              render={<button type="button" aria-label="More options" className={SPLIT_MENU} />}
+              render={
+                <button
+                  type="button"
+                  aria-label="More options"
+                  disabled={!!busy}
+                  title={reason}
+                  className={cn(SPLIT_MENU, "disabled:opacity-40")}
+                />
+              }
             >
               <IconChevronDown className="size-3" />
             </DropdownMenuTrigger>
@@ -180,24 +228,29 @@ export function Toolbar({ repo }: { repo: RepoId }) {
         <ToolButton
           label="Fetch"
           icon={<IconRefresh />}
+          disabled={!!busy}
+          tooltip={reason}
           onClick={() => void commands.fetch(repo)}
         />
         <ToolButton
           label="Branch"
           icon={<IconGitBranch />}
-          disabled={!info?.head.hash}
+          disabled={!info?.head.hash || !!busy}
+          tooltip={reason}
           onClick={() => void commands.createBranch(repo, "HEAD", info?.head.branch ?? "HEAD")}
         />
         <ToolButton
           label="Stash"
           icon={<IconPackageImport />}
-          disabled={!dirty}
+          disabled={!dirty || !!busy}
+          tooltip={reason}
           onClick={() => void commands.stash(repo)}
         />
         <ToolButton
           label="Pop"
           icon={<IconPackageExport />}
-          disabled={(refs?.stashes.length ?? 0) === 0}
+          disabled={(refs?.stashes.length ?? 0) === 0 || !!busy}
+          tooltip={reason}
           onClick={() => void commands.pop(repo)}
         />
         <ToolButton
@@ -207,7 +260,8 @@ export function Toolbar({ repo }: { repo: RepoId }) {
         />
       </div>
 
-      <div className="flex flex-1 items-center justify-end gap-1">
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+        {busy && <BusyIndicator repo={repo} busy={busy} />}
         <Button
           variant="ghost"
           size="icon-sm"

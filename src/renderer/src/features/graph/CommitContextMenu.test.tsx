@@ -5,6 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { useBusyStore } from "@/stores/busy";
 import { CommitContextMenu, type MenuTarget } from "./CommitContextMenu";
 
 const mocks = vi.hoisted(() => ({
@@ -176,6 +177,30 @@ it("offers stash actions on stash commits", async () => {
     ["pop", 2],
     ["dropStash", 2],
   ]);
+});
+
+it("disables changing actions while another operation runs", async () => {
+  useBusyStore.getState().start(REPO, { label: "Checking out feature…", cancellable: false });
+  try {
+    await open({ kind: "commit", row, refs: [], stashIndex: null });
+    const disabled = (label: string) => find(label).getAttribute("aria-disabled") === "true";
+    for (const label of [
+      "Checkout this commit (detached)",
+      "Cherry-pick commit",
+      "Revert commit",
+    ]) {
+      expect(disabled(label)).toBe(true);
+      expect(find(label).title).toBe("Checking out feature… Wait for it to finish.");
+      // Hovering shows the title: disabled items keep their pointer events.
+      expect(find(label).className).toContain("data-disabled:pointer-events-auto");
+    }
+    expect(disabled("Copy commit SHA")).toBe(false);
+    await click("Cherry-pick commit");
+    await click("Copy commit SHA");
+    expect(mocks.calls).toEqual([["copy", HASH, "Commit SHA copied"]]);
+  } finally {
+    useBusyStore.getState().finish(REPO);
+  }
 });
 
 it("offers commit actions", async () => {

@@ -87,6 +87,8 @@ export interface Api {
   "repo.reset": (repo: RepoId, hash: string, mode: ResetMode) => void;
   "repo.abortOperation": (repo: RepoId) => void;
   "repo.continueOperation": (repo: RepoId) => void;
+  /** Cancels the running fetch, pull or push, if any. */
+  "repo.cancel": (repo: RepoId) => void;
 
   // Graph visibility
   "repo.hiddenRefs": (repo: RepoId) => string[];

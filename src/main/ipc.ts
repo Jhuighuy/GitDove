@@ -191,6 +191,7 @@ export const handlers: Handlers = {
   "repo.reset": (id, hash, mode) => withRepo(id, (r) => r.reset(hash, mode)),
   "repo.abortOperation": (id) => withRepo(id, (r) => r.abortOperation()),
   "repo.continueOperation": (id) => withRepo(id, (r) => r.continueOperation()),
+  "repo.cancel": (id) => withRepo(id, (r) => r.cancel()),
 
   // Graph visibility ---------------------------------------------------------------
   "repo.hiddenRefs": (id) =>
