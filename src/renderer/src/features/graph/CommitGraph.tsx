@@ -62,6 +62,9 @@ const MAX_AUTO_LANES = 12;
 const CLIPPED =
   "after:pointer-events-none after:absolute after:inset-y-0 after:right-0 after:w-3 after:bg-linear-to-l after:from-black/10 after:to-transparent dark:after:from-black/80";
 
+/** The branch column's minimum width: room for a short name and a `+1`. */
+const MIN_REFS = 80;
+
 const useColumns = create<ColumnsState>()(
   persist(
     (set) => ({
@@ -71,7 +74,14 @@ const useColumns = create<ColumnsState>()(
       date: 104,
       set: (col, width) => set({ [col]: width }),
     }),
-    { name: "gitdove.graph-columns" },
+    {
+      name: "gitdove.graph-columns",
+      // Widths saved before the minimum was raised.
+      merge: (saved, current) => {
+        const merged = { ...current, ...(saved as Partial<ColumnsState>) };
+        return { ...merged, refs: Math.max(MIN_REFS, merged.refs) };
+      },
+    },
   ),
 );
 
@@ -380,7 +390,7 @@ function Header({ graphWidth, onFitGraph }: { graphWidth: number; onFitGraph: ()
     <div className="text-muted-foreground bg-background flex h-7 shrink-0 items-center border-b text-[10px] font-semibold tracking-wider uppercase select-none">
       <div className="relative shrink-0 truncate px-3" style={{ width: columns.refs }}>
         Branch / Tag
-        <Resizer width={columns.refs} min={60} onResize={(w) => columns.set("refs", w)} />
+        <Resizer width={columns.refs} min={MIN_REFS} onResize={(w) => columns.set("refs", w)} />
       </div>
       <div className="relative shrink-0 truncate px-2" style={{ width: graphWidth }}>
         Graph
@@ -494,8 +504,9 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
       }}
       onContextMenu={() => p.onContextMenu(row)}
     >
+      {/* A query container: pills drop their icons as the column narrows. */}
       <div
-        className="flex shrink-0 items-center overflow-hidden pl-2"
+        className="@container flex shrink-0 items-center overflow-hidden pl-2"
         style={{ width: columns.refs }}
       >
         <RefPills
