@@ -186,6 +186,8 @@ it("marks a collapsed folder that contains the checked-out branch", async () => 
   expect(has("release/2023.1")).toBe(false);
   expect(marker()).not.toBeNull();
   expect(row("release/").className).toContain("font-semibold");
+  // Screen readers get it as text, not just the icon's title.
+  expect(marker()!.querySelector(".sr-only")?.textContent).toBe("Contains the checked-out branch");
   // Its visibility toggle stays available.
   expect(row("release/").querySelector('button[title="Hide from graph"]')).not.toBeNull();
   // Opening it again shows the branch with its check instead.

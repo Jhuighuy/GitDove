@@ -153,7 +153,8 @@ export function Sidebar({ repo }: { repo: RepoId }) {
                     className="flex shrink-0 text-emerald-500"
                     title="Contains the checked-out branch"
                   >
-                    <IconSquareCheckFilled />
+                    <IconSquareCheckFilled aria-hidden />
+                    <span className="sr-only">Contains the checked-out branch</span>
                   </span>
                 )}
                 <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
