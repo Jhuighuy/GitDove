@@ -60,7 +60,8 @@ job() {
     (. "./$1.c") <"$1.i" >"$1.o" 2>"$1.e" 3>&- & echo $! >"$1.p"
     [ -f "$1.k" ] && kill $! 2>/dev/null; wait $!; x=$?
   fi
-  # A killed command is reported once everything it started is gone too (see K).
+  # A killed command is reported once everything it started is gone too (see K), without a
+  # deadline: the write lock around it must stay held until that is confirmed.
   if [ -f "$1.t" ]; then while alive "$1.t"; do sleep 0.05 2>/dev/null || sleep 1; done; fi
   : >"$1.p"
   set -- "$1" "$x" $(wc -c "$1.o" "$1.e")

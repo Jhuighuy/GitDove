@@ -82,8 +82,11 @@ export const terminateTree = (child: ChildProcess): Effect.Effect<void> =>
           stdio: "ignore",
           windowsHide: true,
         });
-        // taskkill failing (e.g. the process just exited) falls back to killing the process.
-        killer.on("error", () => child.kill());
+        // Without taskkill, kill the process itself; either way, then wait for it to exit.
+        killer.on("error", () => {
+          child.kill();
+          resume(Effect.void);
+        });
         killer.on("exit", () => resume(Effect.void));
       }).pipe(Effect.andThen(until(exited)), Effect.asVoid);
     }
