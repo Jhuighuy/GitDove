@@ -171,7 +171,10 @@ const evictions = new WeakMap<object, Map<string, number>>();
 export const getOrRetry = <A, E>(map: RcMap.RcMap<string, A, E>, host: string) =>
   Effect.suspend(() => {
     let counts = evictions.get(map);
-    if (!counts) evictions.set(map, (counts = new Map()));
+    if (!counts) {
+      counts = new Map();
+      evictions.set(map, counts);
+    }
     const seen = counts.get(host) ?? 0;
     return RcMap.get(map, host).pipe(
       Effect.tapError(() => {
