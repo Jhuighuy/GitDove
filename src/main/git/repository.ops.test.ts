@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { GraphInfo, RepoLocation } from "@shared/domain";
 import { SshError } from "../exec/errors";
 import { type Host, Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
-import { authorKey, exceptionKey } from "@shared/visibility";
+import { authorKey, exceptionKey, personKey } from "@shared/visibility";
 import { Repository } from "./repository";
 
 const targets: string[] = [LOCAL_HOST];
@@ -487,8 +487,9 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     await sh(`${commitAs("ann", "Ann")} && ${commitAs("bob", "Bob")} && git checkout -q main`);
     const { owners } = await run(repo.refs());
     expect(owners.byRef).toEqual({ "refs/heads/ann": ["ann@x"], "refs/heads/bob": ["bob@x"] });
-    expect(owners.names).toMatchObject({ "ann@x": "Ann", "bob@x": "Bob" });
-    expect(owners.me).toBe("t@x");
+    expect(owners.people["ann@x"]?.name).toBe("Ann");
+    expect(owners.people["bob@x"]?.name).toBe("Bob");
+    expect(owners.me).toEqual({ email: "t@x", name: "T" });
 
     let version = 0;
     /** Rows in the next complete graph. */
@@ -506,6 +507,8 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     expect(await count()).toBe(3);
     repo.setHiddenRefs([authorKey("ann@x"), exceptionKey("refs/heads/ann")]);
     expect(await count()).toBe(4);
+    repo.setHiddenRefs([personKey("bob")]);
+    expect(await count()).toBe(3);
   });
 
   describe("remotes", () => {

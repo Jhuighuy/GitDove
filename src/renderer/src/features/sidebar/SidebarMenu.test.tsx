@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { Ref, RefsSnapshot } from "@shared/domain";
-import { authorKey, exceptionKey, stashKey } from "@shared/visibility";
+import { authorKey, exceptionKey, personKey, stashKey } from "@shared/visibility";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -85,9 +85,16 @@ const base: RefsSnapshot = {
     { path: "libs/b", hash: "b", status: "uninitialized" },
   ],
   owners: {
-    byRef: { "refs/heads/feature": ["ann@x"], "refs/remotes/origin/feature": ["bob@x"] },
-    names: { "ann@x": "Ann", "bob@x": "Bob" },
-    me: "ann@x",
+    byRef: {
+      "refs/heads/feature": ["ann@x", "ann@corp"],
+      "refs/remotes/origin/feature": ["bob@x"],
+    },
+    people: {
+      "ann@x": { name: "Ann", time: 2 },
+      "ann@corp": { name: "Ann", time: 1 },
+      "bob@x": { name: "Bob", time: 1 },
+    },
+    me: { email: "ann@x", name: "Ann" },
   },
 };
 let snapshot = base;
@@ -466,16 +473,25 @@ it("filters worktrees, stashes and submodules", async () => {
 
 it("filters branches by contributor", async () => {
   await render();
-  expect(row("ann@x").textContent).toContain("you");
+  const ann = row("ann@x, ann@corp");
+  expect(ann.textContent).toContain("you");
   await menu(row("bob@x"), "Hide Bob's branches");
   await menu(header("Contributors"), "Show only my branches");
-  await menu(row("ann@x"), "Copy email");
-  expect(mocks.setHidden).toEqual([[authorKey("bob@x")], [authorKey("bob@x")]]);
-  expect(mocks.commands).toEqual([["copy", "ann@x", "Email copied"]]);
+  await menu(row("bob@x"), "Copy email");
+  // Ann's emails are listed on request.
+  expect(document.querySelector('[title="ann@corp"]')).toBeNull();
+  await fire(ann, "click");
+  await menu(row("ann@corp"), "Hide ann@corp branches");
+  expect(mocks.setHidden).toEqual([
+    [personKey("bob")],
+    [personKey("bob")],
+    [personKey("bob"), authorKey("ann@corp")],
+  ]);
+  expect(mocks.commands).toEqual([["copy", "bob@x", "Email copied"]]);
 });
 
 it("grays out branches of hidden contributors and shows them on request", async () => {
-  await render(base, [authorKey("bob@x")]);
+  await render(base, [personKey("bob")]);
   expect(document.body.textContent).toContain("Viewing 5/6");
   const toggle = row("origin/feature").querySelector<HTMLElement>(
     '[title="Hidden with its contributors (click to show anyway)"]',
@@ -483,7 +499,7 @@ it("grays out branches of hidden contributors and shows them on request", async 
   await act(async () => toggle.click());
   await menu(row("bob@x"), "Show all contributors");
   expect(mocks.setHidden).toEqual([
-    [authorKey("bob@x"), exceptionKey("refs/remotes/origin/feature")],
+    [personKey("bob"), exceptionKey("refs/remotes/origin/feature")],
     [],
   ]);
 });

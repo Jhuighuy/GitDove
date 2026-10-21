@@ -33,7 +33,12 @@ export type SidebarTarget =
   | { readonly kind: "stash"; readonly stash: Stash }
   | { readonly kind: "worktree"; readonly worktree: Worktree }
   | { readonly kind: "submodule"; readonly submodule: Submodule }
-  | { readonly kind: "contributor"; readonly contributor: Contributor }
+  | {
+      readonly kind: "contributor";
+      readonly contributor: Contributor;
+      /** One of their emails, for an email row. */
+      readonly email?: string;
+    }
   | {
       readonly kind: "section";
       readonly section: "local" | "remote" | "tags" | "worktrees" | "contributors";
@@ -143,25 +148,25 @@ function ContributorItems({
   readonly vis: Props["vis"];
 }) {
   const me = vis.contributors.find((c) => c.isMe);
-  const anyHidden = vis.contributors.some((c) => vis.isAuthorHidden(c.email));
+  const anyHidden = vis.contributors.some((c) => vis.contributorVisibility(c) !== "visible");
   return (
     <>
       {who && (
         <>
-          <Item onClick={() => vis.toggleAuthor(who.email)}>
-            {vis.isAuthorHidden(who.email)
+          <Item onClick={() => vis.toggleContributor(who)}>
+            {vis.contributorVisibility(who) === "hidden"
               ? `Show ${who.name}'s branches`
               : `Hide ${who.name}'s branches`}
           </Item>
-          <Item onClick={() => vis.soloAuthors([who.email])}>
+          <Item onClick={() => vis.soloContributors([who.person])}>
             Show only {who.isMe ? "my" : `${who.name}'s`} branches
           </Item>
         </>
       )}
       {me && me !== who && (
-        <Item onClick={() => vis.soloAuthors([me.email])}>Show only my branches</Item>
+        <Item onClick={() => vis.soloContributors([me.person])}>Show only my branches</Item>
       )}
-      {anyHidden && <Item onClick={vis.showAllAuthors}>Show all contributors</Item>}
+      {anyHidden && <Item onClick={vis.showAllContributors}>Show all contributors</Item>}
     </>
   );
 }
@@ -427,11 +432,26 @@ export function SidebarMenu({ repo, target, vis }: Props) {
 
     case "contributor": {
       const c = target.contributor;
+      const email = target.email ?? (c.emails.length === 1 ? c.emails[0]!.email : undefined);
       return (
         <Menu>
+          {target.email && (
+            <>
+              <Item onClick={() => vis.toggleEmail(c, target.email!)}>
+                {vis.isEmailHidden(target.email)
+                  ? `Show ${target.email} branches`
+                  : `Hide ${target.email} branches`}
+              </Item>
+              <Sep />
+            </>
+          )}
           <ContributorItems who={c} vis={vis} />
-          <Sep />
-          <Item onClick={() => commands.copy(c.email, "Email copied")}>Copy email</Item>
+          {email && (
+            <>
+              <Sep />
+              <Item onClick={() => commands.copy(email, "Email copied")}>Copy email</Item>
+            </>
+          )}
         </Menu>
       );
     }

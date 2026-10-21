@@ -6,6 +6,8 @@ import {
   IconBox,
   IconBrandBitbucket,
   IconBrandGithub,
+  IconChevronDown,
+  IconChevronRight,
   IconBrandGitlab,
   IconCloud,
   IconDeviceLaptop,
@@ -41,17 +43,26 @@ type Visibility = "visible" | "hidden" | "filtered" | "partial" | "head" | "none
 interface FolderState {
   /** Collapsed branch folders, keyed by `folderKey` (default: expanded). */
   readonly collapsed: Readonly<Record<string, true>>;
+  /** Contributors whose emails are listed, keyed by `folderKey` (default: collapsed). */
+  readonly expanded: Readonly<Record<string, true>>;
   toggle(key: string): void;
+  toggleExpanded(key: string): void;
 }
 
 const useFolderStore = create<FolderState>()(
   persist(
     (set) => ({
       collapsed: {},
+      expanded: {},
       toggle: (key) =>
         set((s) => {
           const { [key]: was, ...rest } = s.collapsed;
           return { collapsed: was ? rest : { ...rest, [key]: true } };
+        }),
+      toggleExpanded: (key) =>
+        set((s) => {
+          const { [key]: was, ...rest } = s.expanded;
+          return { expanded: was ? rest : { ...rest, [key]: true } };
         }),
     }),
     { name: "gitdove.sidebar-folders" },
@@ -69,6 +80,8 @@ export function Sidebar({ repo }: { repo: RepoId }) {
   const [menu, setMenu] = useState<SidebarTarget | null>(null);
   const collapsed = useFolderStore((s) => s.collapsed);
   const toggleFolder = useFolderStore((s) => s.toggle);
+  const expanded = useFolderStore((s) => s.expanded);
+  const toggleExpanded = useFolderStore((s) => s.toggleExpanded);
 
   const f = filter.trim().toLowerCase();
   const match = (s: string) => !f || s.toLowerCase().includes(f);
@@ -111,8 +124,13 @@ export function Sidebar({ repo }: { repo: RepoId }) {
           ? "hidden"
           : "visible";
   const contributors = vis.contributors;
-  const byEmail = useMemo(() => new Map(contributors.map((c) => [c.email, c])), [contributors]);
-  const ownersOf = (r: Ref) => (vis.owners[r.name] ?? []).flatMap((e) => byEmail.get(e) ?? []);
+  const byEmail = useMemo(
+    () => new Map(contributors.flatMap((c) => c.emails.map((e) => [e.email, c] as const))),
+    [contributors],
+  );
+  const ownersOf = (r: Ref) => [
+    ...new Set((vis.owners[r.name] ?? []).flatMap((e) => byEmail.get(e) ?? [])),
+  ];
   const count = (names: readonly string[], hidden = vis.isHidden) => {
     const shown = names.filter((n) => !hidden(n)).length;
     return shown === names.length ? (
@@ -269,22 +287,54 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       title: "Contributors",
       icon: <IconUsers />,
       count: count(
-        contributors.map((c) => c.email),
-        vis.isAuthorHidden,
+        contributors.map((c) => c.person),
+        (person) =>
+          contributors.some(
+            (c) => c.person === person && vis.contributorVisibility(c) === "hidden",
+          ),
       ),
       onHeaderContextMenu: () => setMenu({ kind: "section", section: "contributors" }),
-      children: contributors
-        .filter((c) => match(c.name) || match(c.email))
-        .map((c) => (
+      children: contributors.flatMap((c) => {
+        const emails = c.emails.filter((e) => match(e.email));
+        if (!match(c.name) && emails.length === 0) return [];
+        const multi = c.emails.length > 1;
+        const key = folderKey(repo, `contributor:${c.person}`);
+        // Searching by email shows the matching emails.
+        const open = multi && (expanded[key] || (!!f && emails.length > 0 && !match(c.name)));
+        return [
           <ContributorItem
-            key={c.email}
+            key={c.person}
             contributor={c}
             providers={providers}
-            visibility={vis.isAuthorHidden(c.email) ? "hidden" : "visible"}
-            onToggle={() => vis.toggleAuthor(c.email)}
+            open={multi ? open : undefined}
+            visibility={vis.contributorVisibility(c)}
+            onToggle={() => vis.toggleContributor(c)}
+            onClick={() => multi && toggleExpanded(key)}
             onContextMenu={() => setMenu({ kind: "contributor", contributor: c })}
-          />
-        )),
+          />,
+          ...(open
+            ? (f && !match(c.name) ? emails : c.emails).map((e) => (
+                <Item
+                  key={`${c.person}\n${e.email}`}
+                  depth={1}
+                  icon={<Avatar name={e.name} email={e.email} providers={providers} size={14} />}
+                  label={e.email}
+                  title={e.email}
+                  visibility={vis.isEmailHidden(e.email) ? "hidden" : "visible"}
+                  trailing={
+                    <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
+                      {e.branches}
+                    </span>
+                  }
+                  onToggle={() => vis.toggleEmail(c, e.email)}
+                  onContextMenu={() =>
+                    setMenu({ kind: "contributor", contributor: c, email: e.email })
+                  }
+                />
+              ))
+            : []),
+        ];
+      }),
     },
     {
       id: "worktrees",
@@ -560,7 +610,7 @@ function RefItem({
               className={cn("flex shrink-0", rest.visibility === "filtered" && "opacity-50")}
               title={`By ${owners.map((o) => o.name).join(", ")}`}
             >
-              <Avatar name={owner.name} email={owner.email} providers={providers} size={14} />
+              <Avatar name={owner.name} email={owner.avatarEmail} providers={providers} size={14} />
             </span>
           )}
         </>
@@ -572,10 +622,13 @@ function RefItem({
 function ContributorItem({
   contributor: c,
   providers,
+  open,
   ...rest
 }: Omit<ItemProps, "label" | "icon" | "trailing"> & {
   contributor: Contributor;
   providers: readonly AvatarProvider[];
+  /** Whether the emails are listed, for a contributor with several. */
+  open: boolean | undefined;
 }) {
   const dim = rest.visibility === "hidden";
   return (
@@ -583,14 +636,22 @@ function ContributorItem({
       {...rest}
       icon={
         <span className={cn("flex", dim && "grayscale")}>
-          <Avatar name={c.name} email={c.email} providers={providers} size={14} />
+          <Avatar name={c.name} email={c.avatarEmail} providers={providers} size={14} />
         </span>
       }
       label={c.name}
-      title={c.email}
+      title={c.emails.map((e) => e.email).join(", ")}
       trailing={
         <>
           {c.isMe && <span className="text-muted-foreground shrink-0 text-[10px]">you</span>}
+          {open !== undefined && (
+            <span
+              className="text-muted-foreground flex shrink-0"
+              title={`${c.emails.length} emails`}
+            >
+              {open ? <IconChevronDown /> : <IconChevronRight />}
+            </span>
+          )}
           <span
             className="text-muted-foreground shrink-0 text-[10px] tabular-nums"
             title={`${c.branches} ${c.branches === 1 ? "branch" : "branches"}`}

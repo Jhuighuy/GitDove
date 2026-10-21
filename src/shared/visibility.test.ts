@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   authorKey,
   exceptionKey,
-  hiddenAuthors,
+  isEmailHidden,
   isFilteredOut,
   isHidden,
-  setHiddenAuthors,
+  personKey,
+  personOf,
+  setContributorFilter,
   showNames,
   toggleHidden,
 } from "./visibility";
@@ -54,29 +56,54 @@ describe("visibility", () => {
     ).toEqual(["refs/remotes/origin/release/1", "refs/remotes/origin/release/2"]);
   });
 
+  const people = {
+    "ann@x": { name: "Ann Lee", time: 0 },
+    "ann@corp": { name: "ann  lée", time: 0 },
+    "bob@x": { name: "Bob", time: 0 },
+  };
+  const owners = {
+    byRef: {
+      "refs/heads/a": ["ann@x"],
+      "refs/heads/b": ["bob@x"],
+      "refs/heads/ab": ["ann@corp", "bob@x"],
+    },
+    people,
+  };
+
+  it("groups emails by name", () => {
+    expect(personOf("  Ann  LÉE ")).toBe("ann lee");
+    const hidden = [personKey("ann lee")];
+    expect(isEmailHidden(hidden, "ann@x", people)).toBe(true);
+    expect(isEmailHidden(hidden, "ann@corp", people)).toBe(true);
+    expect(isEmailHidden(hidden, "bob@x", people)).toBe(false);
+    expect(isEmailHidden([authorKey("Bob@X")], "bob@x", people)).toBe(true);
+  });
+
   it("filters branches whose owners are all hidden", () => {
-    const hidden = [authorKey("Ann@x"), authorKey("bob@x")];
-    expect(isFilteredOut(hidden, "refs/heads/a", ["ann@x"])).toBe(true);
-    expect(isFilteredOut(hidden, "refs/heads/a", ["ann@x", "bob@x"])).toBe(true);
-    expect(isFilteredOut(hidden, "refs/heads/a", ["ann@x", "cid@x"])).toBe(false);
-    expect(isFilteredOut(hidden, "refs/heads/main", undefined)).toBe(false);
+    expect(isFilteredOut([personKey("ann lee")], "refs/heads/a", owners)).toBe(true);
+    expect(isFilteredOut([personKey("ann lee")], "refs/heads/ab", owners)).toBe(false);
+    expect(isFilteredOut([personKey("ann lee"), authorKey("bob@x")], "refs/heads/ab", owners)).toBe(
+      true,
+    );
+    expect(isFilteredOut([personKey("ann lee")], "refs/heads/main", owners)).toBe(false);
     expect(
-      isFilteredOut([...hidden, exceptionKey("refs/heads/a")], "refs/heads/a", ["ann@x"]),
+      isFilteredOut([personKey("ann lee"), exceptionKey("refs/heads/a")], "refs/heads/a", owners),
     ).toBe(false);
   });
 
-  it("sets hidden contributors and drops stale exceptions", () => {
-    const owners = { "refs/heads/a": ["ann@x"], "refs/heads/b": ["bob@x"] };
+  it("replaces the contributor filter and drops stale exceptions", () => {
     const hidden = [
       "refs/heads/x",
-      authorKey("ann@x"),
+      personKey("ann lee"),
       authorKey("bob@x"),
       exceptionKey("refs/heads/a"),
       exceptionKey("refs/heads/b"),
     ];
-    const next = setHiddenAuthors(hidden, ["ann@x"], owners);
-    expect(next).toEqual(["refs/heads/x", exceptionKey("refs/heads/a"), authorKey("ann@x")]);
-    expect(hiddenAuthors(next)).toEqual(["ann@x"]);
-    expect(setHiddenAuthors(next, [], owners)).toEqual(["refs/heads/x"]);
+    expect(setContributorFilter(hidden, [authorKey("ann@x")], owners)).toEqual([
+      "refs/heads/x",
+      exceptionKey("refs/heads/a"),
+      authorKey("ann@x"),
+    ]);
+    expect(setContributorFilter(hidden, [], owners)).toEqual(["refs/heads/x"]);
   });
 });

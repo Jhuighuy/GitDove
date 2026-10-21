@@ -45,9 +45,13 @@ const snapshot = {
   ],
   stashes: [{ hash: "s1" }],
   owners: {
-    byRef: { "refs/heads/main": ["ann@x"], "refs/remotes/origin/main": ["ann@x", "bob@x"] },
-    names: { "ann@x": "Ann" },
-    me: "bob@x",
+    byRef: { "refs/heads/main": ["ann@x"], "refs/remotes/origin/main": ["ann@corp", "bob@x"] },
+    people: {
+      "ann@x": { name: "Ann Lee", time: 1 },
+      "ann@corp": { name: "ann lee", time: 5 },
+      "bob@x": { name: "Bob", time: 1 },
+    },
+    me: { email: null, name: "Bob" },
   },
 } as unknown as RefsSnapshot;
 
@@ -159,29 +163,51 @@ it("reports a failed save and reloads the saved state", async () => {
 
 it("filters branches by contributor, with exceptions", async () => {
   await render();
-  expect(probe.vis.contributors).toEqual([
-    { email: "bob@x", name: "bob@x", branches: 1, isMe: true },
-    { email: "ann@x", name: "Ann", branches: 2, isMe: false },
-  ]);
+  const bob = {
+    person: "bob",
+    name: "Bob",
+    avatarEmail: "bob@x",
+    emails: [{ email: "bob@x", name: "Bob", branches: 1 }],
+    branches: 1,
+    isMe: true,
+  };
+  const ann = {
+    person: "ann lee",
+    name: "Ann Lee",
+    avatarEmail: "ann@corp",
+    emails: [
+      { email: "ann@x", name: "Ann Lee", branches: 1 },
+      { email: "ann@corp", name: "ann lee", branches: 1 },
+    ],
+    branches: 2,
+    isMe: false,
+  };
+  expect(probe.vis.contributors).toEqual([bob, ann]);
   const step = async (action: () => void, hidden: string[]) => {
     await act(async () => action());
     await settle();
     expect(probe.vis.hidden).toEqual(hidden);
   };
-  await step(() => probe.vis.toggleAuthor("ann@x"), ["author:ann@x"]);
+  await step(() => probe.vis.toggleContributor(ann), ["person:ann lee"]);
+  expect(probe.vis.contributorVisibility(ann)).toBe("hidden");
   expect(probe.vis.isFiltered("refs/heads/main")).toBe(true);
   expect(probe.vis.isHidden("refs/heads/main")).toBe(true);
   // A branch someone else works on too stays visible.
   expect(probe.vis.isHidden("refs/remotes/origin/main")).toBe(false);
   expect(probe.vis.anyHidden).toBe(true);
   // The eye of a filtered branch makes an exception, and then hides it for real.
-  await step(() => probe.vis.toggle("refs/heads/main"), ["author:ann@x", "show:refs/heads/main"]);
-  expect(probe.vis.isHidden("refs/heads/main")).toBe(false);
-  await step(() => probe.vis.toggle("refs/heads/main"), ["author:ann@x", "refs/heads/main"]);
-  expect(probe.vis.isFiltered("refs/heads/main")).toBe(false);
-  await step(() => probe.vis.toggle("refs/heads/main"), ["author:ann@x", "show:refs/heads/main"]);
-  // Showing the contributor again drops the exception.
-  await step(() => probe.vis.toggleAuthor("ann@x"), []);
-  await step(() => probe.vis.soloAuthors(["bob@x"]), ["author:ann@x"]);
-  await step(() => probe.vis.showAllAuthors(), []);
+  const main = "refs/heads/main";
+  await step(() => probe.vis.toggle(main), ["person:ann lee", `show:${main}`]);
+  expect(probe.vis.isHidden(main)).toBe(false);
+  await step(() => probe.vis.toggle(main), ["person:ann lee", main]);
+  expect(probe.vis.isFiltered(main)).toBe(false);
+  await step(() => probe.vis.toggle(main), ["person:ann lee", `show:${main}`]);
+  // Showing one email splits the contributor, and the stale exception goes.
+  await step(() => probe.vis.toggleEmail(ann, "ann@x"), ["author:ann@corp"]);
+  expect(probe.vis.contributorVisibility(ann)).toBe("partial");
+  await step(() => probe.vis.toggleEmail(ann, "ann@x"), ["author:ann@corp", "author:ann@x"]);
+  expect(probe.vis.contributorVisibility(ann)).toBe("hidden");
+  await step(() => probe.vis.toggleContributor(ann), []);
+  await step(() => probe.vis.soloContributors(["bob"]), ["person:ann lee"]);
+  await step(() => probe.vis.showAllContributors(), []);
 });

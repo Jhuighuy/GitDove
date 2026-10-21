@@ -121,7 +121,8 @@ export interface Submodule {
 /**
  * Who works on each local and remote branch, for the contributor filter. A branch's owners are
  * the authors of its recent commits that are not on a default branch (`main`, `master`, `trunk`
- * or a remote's `HEAD`), or the author of its tip when it has none.
+ * or a remote's `HEAD`), or the author of its tip when it has none. Authors are identified by
+ * email; the contributor list groups emails by name.
  */
 export interface BranchOwners {
   /**
@@ -129,10 +130,10 @@ export interface BranchOwners {
    * branches and the branches tracking them have no owners and are absent.
    */
   readonly byRef: Readonly<Record<string, readonly string[]>>;
-  /** Display name for each owner email. */
-  readonly names: Readonly<Record<string, string>>;
-  /** The configured `user.email`, lowercase. */
-  readonly me: string | null;
+  /** Name and latest author time (Unix seconds) for each owner email, with `.mailmap` applied. */
+  readonly people: Readonly<Record<string, { readonly name: string; readonly time: number }>>;
+  /** The configured `user.email` (lowercase) and `user.name`. */
+  readonly me: { readonly email: string | null; readonly name: string | null };
 }
 
 export interface RefsSnapshot {
