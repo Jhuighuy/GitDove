@@ -1,5 +1,9 @@
 # GitDove
 
+[![CI](https://github.com/Jhuighuy/GitDove/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jhuighuy/GitDove/actions/workflows/ci.yml?query=branch%3Amain)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=Jhuighuy_GitDove&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=Jhuighuy_GitDove)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=Jhuighuy_GitDove&metric=coverage)](https://sonarcloud.io/component_measures?id=Jhuighuy_GitDove&metric=coverage)
+
 A fast, open-source Git GUI with first-class support for repositories on remote machines over SSH.
 
 GitDove starts out as a clean-room reimplementation of the GitKraken workflow (commit graph, branch
@@ -45,6 +49,13 @@ npm run format
 npm run dist       # package installers into release/ (macOS: arm64 only)
 ```
 
+The repository tests create throwaway repositories under `/tmp`. Set `GITDOVE_INT_SSH_HOST` to also
+run them on a remote host over SSH (CI uses an SSH server on localhost):
+
+```bash
+GITDOVE_INT_SSH_HOST=myhost npm test
+```
+
 Run the integration smoke test against real repositories:
 
 ```bash
@@ -55,7 +66,7 @@ CI runs on pull requests and pushes to `main`, including a
 [SonarCloud analysis](https://sonarcloud.io/dashboard?id=Jhuighuy_GitDove) that fails if the quality
 gate fails. The scan imports Vitest coverage from `coverage/lcov.info` and uses the repository's
 `SONAR_TOKEN` Actions secret and the settings in
-`sonar-project.properties`. SonarCloud's Automatic Analysis must be disabled under
+`sonar-project.properties`, which also lists the rules this project ignores and why. SonarCloud's Automatic Analysis must be disabled under
 **Administration > Analysis Method** when using this CI analysis. Pull requests from forks run
 the usual checks but skip SonarCloud because GitHub does not expose repository secrets to them.
 

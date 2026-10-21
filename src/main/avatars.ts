@@ -148,7 +148,7 @@ const fromGitlab = (host: string, email: string, size: number) =>
 
 const fromGravatar = (email: string, size: number) =>
   image(
-    `https://www.gravatar.com/avatar/${createHash("md5").update(email).digest("hex")}?d=404&s=${size}`,
+    `https://www.gravatar.com/avatar/${createHash("sha256").update(email).digest("hex")}?d=404&s=${size}`,
   );
 
 /** Tries every source in order; `null` = definitely no avatar, `undefined` = try again later. */

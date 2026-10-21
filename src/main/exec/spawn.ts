@@ -2,21 +2,24 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { Effect } from "effect";
 import { CommandError } from "./errors";
 
+/** Data written to a command's stdin. */
+export type Stdin = string | Buffer;
+
 export interface SpawnOptions {
-  readonly cwd?: string | undefined;
-  readonly env?: NodeJS.ProcessEnv | undefined;
-  readonly stdin?: string | Buffer | undefined;
+  readonly cwd?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly stdin?: Stdin;
   /** Exit codes considered successful. Defaults to `[0]`. */
-  readonly okCodes?: readonly number[] | undefined;
+  readonly okCodes?: readonly number[];
   /** Kill the process once stdout exceeds this many bytes (output is truncated). */
-  readonly maxBytes?: number | undefined;
+  readonly maxBytes?: number;
   /**
    * Streaming consumer. When set, stdout chunks are handed over as they arrive
    * and are *not* accumulated in the result.
    */
-  readonly onStdout?: ((chunk: Buffer) => void) | undefined;
+  readonly onStdout?: (chunk: Buffer) => void;
   /** Human readable command for error messages. */
-  readonly display?: string | undefined;
+  readonly display?: string;
 }
 
 export interface SpawnResult {
@@ -121,7 +124,7 @@ export const completion = (
     readonly stdout: Buffer;
     readonly stderr: string;
     readonly code: number | null;
-    readonly signal?: string | null | undefined;
+    readonly signal?: string | null;
     readonly truncated: boolean;
   },
   okCodes: readonly number[],

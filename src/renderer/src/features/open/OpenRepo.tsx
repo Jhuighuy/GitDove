@@ -199,17 +199,17 @@ const LAST_HOST_KEY = "gitdove.lastSshHost";
 
 function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone: () => void }) {
   const hosts = useQuery({ queryKey: ["ssh", "hosts"], queryFn: () => api("ssh.hosts") });
-  const [hostDraft, setHost] = useState(() => localStorage.getItem(LAST_HOST_KEY) ?? "");
-  const [chosenHost, setBrowseHost] = useState<string | null>(hostDraft || null);
-  const [path, setPathState] = useState<string | null>(null);
-  const [pathDraft, setPathInput] = useState<string | null>(null);
+  const [hostDraft, setHostDraft] = useState(() => localStorage.getItem(LAST_HOST_KEY) ?? "");
+  const [chosenHost, setChosenHost] = useState<string | null>(hostDraft || null);
+  const [path, setPathValue] = useState<string | null>(null);
+  const [pathDraft, setPathDraft] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
   // Until the user picks a host, default to the first one from ~/.ssh/config.
   const host = hostDraft || hosts.data?.[0] || "";
   const browseHost = chosenHost ?? (hosts.data?.[0] || null);
   const setPath = (p: string | null) => {
-    setPathState(p);
-    setPathInput(null);
+    setPathValue(p);
+    setPathDraft(null);
   };
 
   const listing = useQuery({
@@ -253,7 +253,7 @@ function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone
         onSubmit={(e) => {
           e.preventDefault();
           setPath(null);
-          setBrowseHost(host.trim() || null);
+          setChosenHost(host.trim() || null);
         }}
       >
         <div className="grid flex-1 gap-1.5">
@@ -263,7 +263,7 @@ function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone
             list="ssh-hosts"
             value={host}
             placeholder="user@hostname or ssh config alias"
-            onChange={(e) => setHost(e.target.value)}
+            onChange={(e) => setHostDraft(e.target.value)}
             spellCheck={false}
           />
           <datalist id="ssh-hosts">
@@ -298,7 +298,7 @@ function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone
             </Button>
             <Input
               value={pathInput}
-              onChange={(e) => setPathInput(e.target.value)}
+              onChange={(e) => setPathDraft(e.target.value)}
               className="h-8 font-mono text-xs"
               spellCheck={false}
             />

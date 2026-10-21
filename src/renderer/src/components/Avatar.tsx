@@ -43,7 +43,7 @@ export const Avatar = memo(function Avatar({ name, email, providers, size = 18 }
       }}
       title={`${name} <${email}>`}
     >
-      {loaded !== url && initials(name)}
+      {(url === null || loaded !== url) && initials(name)}
       {showImage && (
         <img
           src={url}

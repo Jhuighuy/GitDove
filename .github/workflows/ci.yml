@@ -23,7 +23,21 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # The repository tests also run over SSH to this machine, which covers the remote paths.
+      - name: Set up SSH to localhost
+        run: |
+          sudo apt-get install -y -qq openssh-server > /dev/null
+          sudo systemctl start ssh
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh && chmod go-w ~
+          ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+          ssh-keyscan -H localhost >> ~/.ssh/known_hosts 2> /dev/null
+          ssh -o BatchMode=yes localhost true
       - run: npm run test:coverage
+        env:
+          GITDOVE_INT_SSH_HOST: localhost
+          GITDOVE_INT_LOCAL: ${{ github.workspace }}
+          GITDOVE_INT_SSH: localhost:${{ github.workspace }}
       - name: Scan and check quality gate
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         env:

@@ -13,6 +13,8 @@ export class SshError extends Data.TaggedError("SshError")<{
   readonly message: string;
   readonly host: string;
   readonly stderr: string;
+  /** The command may have started on the host, so running it again could repeat its effects. */
+  readonly mayHaveRun: boolean;
 }> {}
 
 /** A path is not inside a Git repository. */

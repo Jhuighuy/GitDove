@@ -21,7 +21,8 @@ const waitGraph = (repo: Repository, after = 0) =>
     }
   });
 
-describe.skipIf(!process.env.GITDOVE_INT_WRITE)("Repository write ops (integration)", () => {
+// The local host runs scripts with /bin/sh.
+describe.skipIf(process.platform === "win32")("Repository write ops (integration)", () => {
   const runtime = ManagedRuntime.make(Layer.mergeAll(HostsLive));
 
   for (const [name, hostId] of targets) {
@@ -108,9 +109,9 @@ describe.skipIf(!process.env.GITDOVE_INT_WRITE)("Repository write ops (integrati
               "Release notes\n\n# Highlights\nDetails.",
             );
             yield* repo.createTag("v1-light", "HEAD", null);
-            const tagType = (name: string) =>
+            const tagType = (tag: string) =>
               repo
-                .gitText(["cat-file", "-t", `refs/tags/${name}`])
+                .gitText(["cat-file", "-t", `refs/tags/${tag}`])
                 .pipe(Effect.map((t) => t.trim()));
             expect(yield* tagType("v1-annotated")).toBe("tag");
             expect(yield* tagType("v1-light")).toBe("commit");

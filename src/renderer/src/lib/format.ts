@@ -35,7 +35,8 @@ export const initials = (name: string): string => {
 /** Deterministic hue for a string (e.g. author email). */
 export const hueOf = (s: string): number => {
   let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  // `| 0` wraps to int32 and UTF-16 code units are hashed on purpose.
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; // NOSONAR
   return Math.abs(h) % 360;
 };
 

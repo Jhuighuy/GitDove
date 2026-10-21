@@ -142,7 +142,7 @@ describe.skipIf(process.platform === "win32").each(shells)("runner script under 
         expect(cat.stdout.equals(bin)).toBe(true);
 
         const empty = yield* run(runner, "cat");
-        expect(empty.stdout.length).toBe(0);
+        expect(empty.stdout).toHaveLength(0);
 
         const cwd = yield* run(runner, "cd -- /tmp && pwd -P");
         expect(cwd.stdout.toString().trim()).toBe(
@@ -179,7 +179,7 @@ describe.skipIf(process.platform === "win32").each(shells)("runner script under 
           maxBytes: 100000,
         });
         expect(big.truncated).toBe(true);
-        expect(big.stdout.length).toBe(100000);
+        expect(big.stdout).toHaveLength(100000);
         const small = yield* run(runner, "echo hi", { maxBytes: 3 });
         expect([small.truncated, small.stdout.toString()]).toEqual([false, "hi\n"]);
       }),
@@ -219,5 +219,22 @@ describe.skipIf(process.platform === "win32").each(shells)("runner script under 
     );
     expect(Exit.isFailure(exit)).toBe(true);
     expect(JSON.stringify(exit)).toContain("SshError");
+  });
+
+  it("tells whether a failed command may have run", async () => {
+    const [inFlight, never] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* Runner.start(sh, ["-c", RUNNER_SCRIPT]);
+        const fiber = yield* Effect.forkChild(Effect.flip(run(runner, "sleep 5")));
+        yield* Effect.sleep("100 millis");
+        runner.close();
+        const lost = yield* Fiber.join(fiber);
+        // Sent to a runner that is already dead, the command never reaches the host.
+        const unsent = yield* Effect.flip(run(runner, "echo hi"));
+        return [lost, unsent];
+      }),
+    );
+    expect(inFlight).toMatchObject({ _tag: "SshError", mayHaveRun: true });
+    expect(never).toMatchObject({ _tag: "SshError", mayHaveRun: false });
   });
 });
