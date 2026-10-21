@@ -1,4 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { basename } from "node:path";
 import type { DirEntry, RepoId } from "@shared/domain";
 import {
   type ApiArgs,
@@ -93,6 +95,15 @@ export const handlers: Handlers = {
       const opts = { properties: ["openDirectory" as const, "createDirectory" as const] };
       const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
       return r.canceled ? null : (r.filePaths[0] ?? null);
+    }),
+  "dialog.saveFile": (defaultName, content) =>
+    Effect.promise(async () => {
+      const win = BrowserWindow.getFocusedWindow();
+      const opts = { defaultPath: basename(defaultName) };
+      const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+      if (r.canceled || !r.filePath) return null;
+      await writeFile(r.filePath, content);
+      return r.filePath;
     }),
   "shell.openTerminal": (id) => withRepo(id, openTerminal),
   "shell.revealInFinder": (id, path) =>
@@ -201,12 +212,26 @@ export const handlers: Handlers = {
   "repo.deleteTag": (id, name) => withRepo(id, (r) => r.deleteTag(name)),
   "repo.merge": (id, ref, opts) => withRepo(id, (r) => r.merge(ref, opts)),
   "repo.rebase": (id, onto) => withRepo(id, (r) => r.rebase(onto)),
-  "repo.cherryPick": (id, hash) => withRepo(id, (r) => r.cherryPick(hash)),
+  "repo.cherryPick": (id, hashes, opts) => withRepo(id, (r) => r.cherryPick(hashes, opts)),
   "repo.revert": (id, hash) => withRepo(id, (r) => r.revert(hash)),
   "repo.reset": (id, hash, mode) => withRepo(id, (r) => r.reset(hash, mode)),
   "repo.abortOperation": (id) => withRepo(id, (r) => r.abortOperation()),
   "repo.continueOperation": (id) => withRepo(id, (r) => r.continueOperation()),
+  "repo.skipOperation": (id) => withRepo(id, (r) => r.skipOperation()),
   "repo.cancel": (id) => withRepo(id, (r) => r.cancel()),
+
+  // History editing ----------------------------------------------------------------
+  "repo.editableHistory": (id) => withRepo(id, (r) => r.editableHistory()),
+  "repo.rebaseTodo": (id, base) => withRepo(id, (r) => r.rebaseTodo(base)),
+  "repo.rewrite": (id, plan) => withRepo(id, (r) => r.rewrite(plan)),
+  "repo.reword": (id, hash, message) => withRepo(id, (r) => r.reword(hash, message)),
+  "repo.formatPatch": (id, hashes) => withRepo(id, (r) => r.formatPatch(hashes)),
+  "repo.workingPatch": (id) => withRepo(id, (r) => r.workingPatch()),
+  "repo.checkPatch": (id, patch) => withRepo(id, (r) => r.checkPatch(patch)),
+  "repo.applyPatchFile": (id, patch, mode) => withRepo(id, (r) => r.applyPatchFile(patch, mode)),
+  "repo.undoState": (id) => withRepo(id, (r) => r.undoState()),
+  "repo.undo": (id) => withRepo(id, (r) => r.undo()),
+  "repo.redo": (id) => withRepo(id, (r) => r.redo()),
 
   // Graph visibility ---------------------------------------------------------------
   "repo.hiddenRefs": (id) =>

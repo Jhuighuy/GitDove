@@ -7,18 +7,26 @@
  */
 import type {
   AppState,
+  CherryPickOptions,
   CommitDetails,
   Comparison,
   DiffTarget,
   DirListing,
+  EditableHistory,
   FileDiff,
   FileVersions,
   GraphInfo,
   GraphRow,
+  Outcome,
+  PatchInfo,
+  PatchMode,
+  RebaseTodo,
   RefsSnapshot,
   RepoId,
   RepoInfo,
   RepoLocation,
+  RewritePlan,
+  UndoState,
   UpdaterStatus,
   WorkingStatus,
 } from "./domain";
@@ -37,6 +45,8 @@ export interface Api {
   /** Runs an Edit menu command in the focused window, e.g. from a text field's context menu. */
   "app.edit": (command: EditCommand) => void;
   "dialog.pickDirectory": () => string | null;
+  /** Asks where to save `content` (starting with `defaultName`) and saves it; null if cancelled. */
+  "dialog.saveFile": (defaultName: string, content: string) => string | null;
   "shell.openTerminal": (repo: RepoId) => void;
   "shell.revealInFinder": (repo: RepoId, path?: string) => void;
   "shell.openExternal": (url: string) => void;
@@ -89,13 +99,33 @@ export interface Api {
   "repo.setUpstream": (repo: RepoId, branch: string, upstream: string | null) => void;
   "repo.createTag": (repo: RepoId, name: string, at: string, message: string | null) => void;
   "repo.deleteTag": (repo: RepoId, name: string) => void;
-  "repo.merge": (repo: RepoId, ref: string, opts: { ffOnly?: boolean; noFf?: boolean }) => void;
-  "repo.rebase": (repo: RepoId, onto: string) => void;
-  "repo.cherryPick": (repo: RepoId, hash: string) => void;
-  "repo.revert": (repo: RepoId, hash: string) => void;
+  "repo.merge": (repo: RepoId, ref: string, opts: { ffOnly?: boolean; noFf?: boolean }) => Outcome;
+  "repo.rebase": (repo: RepoId, onto: string) => Outcome;
+  /** Picks `hashes` (in that order) onto a branch, see `CherryPickOptions`. */
+  "repo.cherryPick": (repo: RepoId, hashes: string[], opts: CherryPickOptions) => Outcome;
+  "repo.revert": (repo: RepoId, hash: string) => Outcome;
   "repo.reset": (repo: RepoId, hash: string, mode: ResetMode) => void;
   "repo.abortOperation": (repo: RepoId) => void;
-  "repo.continueOperation": (repo: RepoId) => void;
+  "repo.continueOperation": (repo: RepoId) => Outcome;
+  /** Skips the commit or patch the operation in progress stopped at. */
+  "repo.skipOperation": (repo: RepoId) => Outcome;
+
+  // History editing
+  "repo.editableHistory": (repo: RepoId) => EditableHistory;
+  /** The commits a rebase onto `base` replays; null `base` lists all commits from the root. */
+  "repo.rebaseTodo": (repo: RepoId, base: string | null) => RebaseTodo;
+  "repo.rewrite": (repo: RepoId, plan: RewritePlan) => Outcome;
+  /** Changes a commit's message, without touching the working tree. */
+  "repo.reword": (repo: RepoId, hash: string, message: string) => void;
+  /** Commits as a mailbox patch (`git format-patch`), oldest first. */
+  "repo.formatPatch": (repo: RepoId, hashes: string[]) => string;
+  /** Uncommitted changes to tracked files (staged and not) as a patch. */
+  "repo.workingPatch": (repo: RepoId) => string;
+  "repo.checkPatch": (repo: RepoId, patch: string) => PatchInfo;
+  "repo.applyPatchFile": (repo: RepoId, patch: string, mode: PatchMode) => Outcome;
+  "repo.undoState": (repo: RepoId) => UndoState;
+  "repo.undo": (repo: RepoId) => string;
+  "repo.redo": (repo: RepoId) => string;
   /** Cancels the running fetch, pull or push, if any. */
   "repo.cancel": (repo: RepoId) => void;
 
@@ -173,7 +203,10 @@ export type MenuCommand =
   | "new-branch"
   | "commit-focus"
   | "toggle-sidebar"
-  | "toggle-details";
+  | "toggle-details"
+  | "undo"
+  | "redo"
+  | "apply-patch";
 
 export type EventName = keyof Events;
 

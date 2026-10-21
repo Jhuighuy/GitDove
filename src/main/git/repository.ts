@@ -1,18 +1,28 @@
 import type {
+  CherryPickOptions,
   CommitDetails,
   Comparison,
   FileChange,
   DiffTarget,
+  EditableHistory,
   FileDiff,
   FileVersions,
   GraphInfo,
   GraphRow,
+  OperationInfo,
+  Outcome,
+  PatchInfo,
+  PatchMode,
+  RebaseCommit,
+  RebaseTodo,
   RefsSnapshot,
   RepoId,
   RepoInfo,
   RepoLocation,
   RepoState,
+  RewritePlan,
   Stash,
+  UndoState,
   WorkingStatus,
 } from "@shared/domain";
 import { repoDisplayName, repoIdOf } from "@shared/domain";
@@ -22,6 +32,7 @@ import { Deferred, Effect, Fiber, Semaphore } from "effect";
 import {
   CancelledError,
   CommandError,
+  ConflictError,
   InvalidInputError,
   NotARepositoryError,
   type SshError,
@@ -30,8 +41,30 @@ import {
 } from "../exec/errors";
 import type { ExecOptions, Host } from "../exec/hosts";
 import { shellQuote } from "../exec/shell";
-import type { SpawnResult } from "../exec/spawn";
+import { completion, type SpawnResult } from "../exec/spawn";
 import { GraphBuilder, LOG_FORMAT, LogParser } from "./graph";
+import {
+  isFullHash,
+  normalizeMessage,
+  OPERATION_FIELDS,
+  OPERATION_SCRIPT,
+  parseOperation,
+  PICK_CONFLICT,
+  PICK_INTO_SCRIPT,
+  rebaseTodo,
+  REWORD_SCRIPT,
+  REWRITE_SCRIPT,
+} from "./history";
+import {
+  entryOf,
+  Journal,
+  mismatch,
+  parseSnapshot,
+  restoreCommands,
+  type Snapshot,
+  SNAPSHOT_SCRIPT,
+  type UndoMode,
+} from "./journal";
 import {
   branchOwners,
   type OwnerLogs,
@@ -86,14 +119,8 @@ bare=$(git rev-parse --is-bare-repository)
 top=$(git rev-parse --show-toplevel 2>/dev/null)
 branch=$(git symbolic-ref -q --short HEAD 2>/dev/null)
 head=$(git rev-parse -q --verify HEAD 2>/dev/null)
-state=clean
-if [ -d "$gd/rebase-merge" ] || [ -d "$gd/rebase-apply" ]; then state=rebasing
-elif [ -f "$gd/MERGE_HEAD" ]; then state=merging
-elif [ -f "$gd/CHERRY_PICK_HEAD" ]; then state=cherry-picking
-elif [ -f "$gd/REVERT_HEAD" ]; then state=reverting
-elif [ -f "$gd/BISECT_LOG" ]; then state=bisecting
-fi
-printf '%s\0' "$gd" "$common" "$bare" "$top" "$branch" "$head" "$state"
+${OPERATION_SCRIPT}
+printf '%s\0' "$gd" "$common" "$bare" "$top" "$branch" "$head" ${OPERATION_FIELDS}
 `;
 
 interface Probe {
@@ -104,6 +131,7 @@ interface Probe {
   readonly branch: string | null;
   readonly head: string | null;
   readonly state: RepoState;
+  readonly operation: OperationInfo | null;
 }
 
 const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARepositoryError> =>
@@ -121,7 +149,7 @@ const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARe
           : Effect.fail(e),
     ),
     Effect.map((r) => {
-      const [gitDir, commonDir, bare, top, branch, head, state] = text(r).split("\0");
+      const [gitDir, commonDir, bare, top, branch, head, ...operation] = text(r).split("\0");
       return {
         gitDir: gitDir!,
         commonDir: commonDir || gitDir!,
@@ -129,7 +157,7 @@ const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARe
         workTree: top || gitDir!,
         branch: branch || null,
         head: head || null,
-        state: (state || "clean") as RepoState,
+        ...parseOperation(operation),
       };
     }),
   );
@@ -273,6 +301,7 @@ export class Repository {
   private disposed = false;
   private nextVersion = 1;
   private hiddenRefs: readonly string[] = [];
+  private readonly journal = new Journal();
   private readonly writes = Semaphore.makeUnsafe(1);
   private cancelSignal: Deferred.Deferred<void> | null = null;
 
@@ -376,6 +405,7 @@ export class Repository {
         bare: this.bare,
         head: { branch: p.branch, hash: p.head, detached: p.branch === null && p.head !== null },
         state: p.state,
+        operation: p.operation,
       })),
     );
   }
@@ -949,23 +979,40 @@ export class Repository {
     if (!message.trim() && !opts.amend) {
       return Effect.fail(new InvalidInputError({ message: "Commit message is empty" }));
     }
+    const subject = message.trim().split("\n", 1)[0] ?? "";
     return this.write(
-      this.run(["commit", "--cleanup=strip", "-F", "-", ...(opts.amend ? ["--amend"] : [])], {
-        stdin: message,
-      }),
+      this.recorded(
+        opts.amend ? `Amend “${subject}”` : `Commit “${subject}”`,
+        this.run(["commit", "--cleanup=strip", "-F", "-", ...(opts.amend ? ["--amend"] : [])], {
+          stdin: message,
+        }),
+        "soft",
+      ),
     );
   }
 
   checkout(ref: string) {
     return this.write(
-      validateRev(ref).pipe(Effect.andThen(this.run(["checkout", "-q", ref, "--"]))),
+      validateRev(ref).pipe(
+        Effect.andThen(
+          this.recorded(
+            `Checkout ${isFullHash(ref) ? ref.slice(0, 7) : ref}`,
+            this.run(["checkout", "-q", ref, "--"]),
+          ),
+        ),
+      ),
     );
   }
 
   checkoutRemote(remoteRef: string, localName: string) {
     return this.write(
       Effect.all([validateRev(remoteRef), validateBranchName(localName)]).pipe(
-        Effect.andThen(this.run(["checkout", "-q", "-b", localName, "--track", remoteRef])),
+        Effect.andThen(
+          this.recorded(
+            `Checkout ${remoteRef}`,
+            this.run(["checkout", "-q", "-b", localName, "--track", remoteRef]),
+          ),
+        ),
       ),
     );
   }
@@ -974,7 +1021,12 @@ export class Repository {
     return this.write(
       Effect.all([validateBranchName(name), validateRev(at)]).pipe(
         Effect.andThen(
-          checkout ? this.run(["checkout", "-q", "-b", name, at]) : this.run(["branch", name, at]),
+          this.recorded(
+            `Create branch ${name}`,
+            checkout
+              ? this.run(["checkout", "-q", "-b", name, at])
+              : this.run(["branch", name, at]),
+          ),
         ),
       ),
     );
@@ -983,7 +1035,9 @@ export class Repository {
   deleteBranch(name: string, force: boolean) {
     return this.write(
       validateBranchName(name).pipe(
-        Effect.andThen(this.run(["branch", force ? "-D" : "-d", name])),
+        Effect.andThen(
+          this.recorded(`Delete branch ${name}`, this.run(["branch", force ? "-D" : "-d", name])),
+        ),
       ),
     );
   }
@@ -995,7 +1049,12 @@ export class Repository {
   renameBranch(oldName: string, newName: string) {
     return this.write(
       validateBranchName(newName).pipe(
-        Effect.andThen(this.run(["branch", "-m", oldName, newName])),
+        Effect.andThen(
+          this.recorded(
+            `Rename ${oldName} to ${newName}`,
+            this.run(["branch", "-m", oldName, newName]),
+          ),
+        ),
       ),
     );
   }
@@ -1012,54 +1071,166 @@ export class Repository {
     return this.write(
       validateRev(at).pipe(
         Effect.andThen(
-          message
-            ? // Keep lines starting with "#" (the default cleanup strips them as comments).
-              this.run(["tag", "-a", "--cleanup=whitespace", name, at, "-F", "-"], {
-                stdin: message,
-              })
-            : this.run(["tag", name, at]),
+          this.recorded(
+            `Create tag ${name}`,
+            message
+              ? // Keep lines starting with "#" (the default cleanup strips them as comments).
+                this.run(["tag", "-a", "--cleanup=whitespace", name, at, "-F", "-"], {
+                  stdin: message,
+                })
+              : this.run(["tag", name, at]),
+          ),
         ),
       ),
     );
   }
 
   deleteTag(name: string) {
-    return this.write(this.run(["tag", "-d", name]));
+    return this.write(this.recorded(`Delete tag ${name}`, this.run(["tag", "-d", name])));
   }
 
   merge(ref: string, opts: { ffOnly?: boolean; noFf?: boolean }) {
     return this.write(
       validateRev(ref).pipe(
         Effect.andThen(
-          this.run([
-            "merge",
-            "--no-edit",
-            ...(opts.ffOnly ? ["--ff-only"] : []),
-            ...(opts.noFf ? ["--no-ff"] : []),
-            ref,
-          ]),
+          this.recorded(
+            `Merge ${ref}`,
+            this.stoppable([
+              "merge",
+              "--no-edit",
+              ...(opts.ffOnly ? ["--ff-only"] : []),
+              ...(opts.noFf ? ["--no-ff"] : []),
+              ref,
+            ]),
+          ),
         ),
       ),
     );
   }
 
   rebase(onto: string) {
-    return this.write(validateRev(onto).pipe(Effect.andThen(this.run(["rebase", onto]))));
+    return this.write(
+      validateRev(onto).pipe(
+        Effect.andThen(this.recorded(`Rebase onto ${onto}`, this.stoppable(["rebase", onto]))),
+      ),
+    );
   }
 
-  cherryPick(hash: string) {
-    return this.write(validateRev(hash).pipe(Effect.andThen(this.run(["cherry-pick", hash]))));
+  /**
+   * Picks commits onto the checked out branch with `git cherry-pick`, or onto another branch
+   * without checking it out (see `PICK_INTO_SCRIPT`), failing with a `ConflictError` if one
+   * does not apply cleanly there.
+   */
+  cherryPick(
+    hashes: readonly string[],
+    opts: CherryPickOptions,
+  ): Effect.Effect<Outcome, GitError | InvalidInputError | ConflictError> {
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        if (hashes.length === 0)
+          return yield* Effect.fail(new InvalidInputError({ message: "No commits to pick" }));
+        for (const h of hashes) yield* validateRev(h);
+        const label = yield* this.commitsLabel("Cherry-pick", hashes);
+        const branch = opts.branch;
+        const current = (yield* this.gitText(["symbolic-ref", "-q", "--short", "HEAD"], {
+          okCodes: [0, 1],
+        })).trim();
+        if (branch === null || branch === current) {
+          return yield* this.recorded(
+            label,
+            this.stoppable([
+              "cherry-pick",
+              ...(opts.recordOrigin ? ["-x"] : []),
+              ...(opts.noCommit ? ["--no-commit"] : []),
+              ...hashes,
+            ]),
+          );
+        }
+        yield* validateBranchName(branch);
+        if (opts.noCommit) {
+          return yield* Effect.fail(
+            new InvalidInputError({
+              message: "Changes can only be applied without committing to the checked out branch",
+            }),
+          );
+        }
+        const elsewhere = parseWorktrees(
+          yield* this.gitText(["worktree", "list", "--porcelain"]),
+        ).find((w) => w.branch === branch);
+        if (elsewhere) {
+          return yield* Effect.fail(
+            new InvalidInputError({ message: `${branch} is checked out in ${elsewhere.path}` }),
+          );
+        }
+        yield* this.recorded(
+          `${label} onto ${branch}`,
+          this.host
+            .exec(
+              "sh",
+              [
+                "-c",
+                PICK_INTO_SCRIPT,
+                "sh",
+                `refs/heads/${branch}`,
+                opts.recordOrigin ? "1" : "",
+                `cherry-pick: ${label} onto ${branch}`,
+                ...hashes,
+              ],
+              { cwd: this.workTree },
+            )
+            .pipe(
+              Effect.catchTag(
+                "CommandError",
+                (e): Effect.Effect<never, CommandError | ConflictError> => {
+                  if (e.exitCode === PICK_CONFLICT) {
+                    const commit = e.stderr.trim().split("\n").at(-1) ?? "";
+                    return Effect.fail(
+                      new ConflictError({
+                        message: `${commit.slice(0, 7)} does not apply cleanly onto ${branch}`,
+                        commit,
+                      }),
+                    );
+                  }
+                  if (e.exitCode === 129) {
+                    return Effect.fail(
+                      new CommandError({
+                        ...e,
+                        message:
+                          "Picking onto a branch that is not checked out needs Git 2.40 or newer",
+                      }),
+                    );
+                  }
+                  return Effect.fail(e);
+                },
+              ),
+            ),
+        );
+        return "done" as const;
+      }),
+    );
   }
 
   revert(hash: string) {
     return this.write(
-      validateRev(hash).pipe(Effect.andThen(this.run(["revert", "--no-edit", hash]))),
+      validateRev(hash).pipe(
+        Effect.andThen(this.commitsLabel("Revert", [hash])),
+        Effect.flatMap((label) =>
+          this.recorded(label, this.stoppable(["revert", "--no-edit", hash])),
+        ),
+      ),
     );
   }
 
   reset(hash: string, mode: ResetMode) {
     return this.write(
-      validateRev(hash).pipe(Effect.andThen(this.run(["reset", `--${mode}`, "-q", hash]))),
+      validateRev(hash).pipe(
+        Effect.andThen(
+          this.recorded(
+            `Reset to ${hash.length === 40 ? hash.slice(0, 7) : hash}`,
+            this.run(["reset", `--${mode}`, "-q", hash]),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1067,11 +1238,14 @@ export class Repository {
     return this.write(
       Effect.gen({ self: this }, function* () {
         const info = yield* this.info();
+        this.journal.pending = null;
         switch (info.state) {
           case "merging":
             return yield* this.run(["merge", "--abort"]);
           case "rebasing":
             return yield* this.run(["rebase", "--abort"]);
+          case "applying":
+            return yield* this.run(["am", "--abort"]);
           case "cherry-picking":
             return yield* this.run(["cherry-pick", "--abort"]);
           case "reverting":
@@ -1086,22 +1260,462 @@ export class Repository {
   }
 
   continueOperation() {
+    return this.write(this.proceed("continue"));
+  }
+
+  skipOperation() {
+    return this.write(this.proceed("skip"));
+  }
+
+  /**
+   * Continues the operation in progress, or skips the commit it stopped at. Fails if it did not
+   * get past that commit (say, conflicts are left), with git's reason; once it is done, the
+   * operation is recorded for undo.
+   */
+  private proceed(
+    how: "continue" | "skip",
+  ): Effect.Effect<Outcome, GitError | NotARepositoryError | InvalidInputError> {
+    return Effect.gen({ self: this }, function* () {
+      const before = yield* this.info();
+      let args: string[];
+      switch (before.state) {
+        case "merging":
+          if (how === "skip")
+            return yield* Effect.fail(
+              new InvalidInputError({ message: "A merge cannot be skipped" }),
+            );
+          args = ["commit", "--no-edit"];
+          break;
+        case "rebasing":
+          args = ["rebase", `--${how}`];
+          break;
+        case "applying":
+          args = ["am", `--${how}`];
+          break;
+        case "cherry-picking":
+          args = ["cherry-pick", `--${how}`];
+          break;
+        case "reverting":
+          args = ["revert", `--${how}`];
+          break;
+        default:
+          return "done" as const;
+      }
+      const r = yield* this.git(args, { okCodes: [0, 1, 128] });
+      const after = yield* this.info();
+      const moved =
+        after.state !== before.state ||
+        after.operation?.step !== before.operation?.step ||
+        after.operation?.commit !== before.operation?.commit ||
+        after.operation?.remaining !== before.operation?.remaining;
+      if (r.exitCode !== 0 && !moved)
+        return yield* completion({ ...r, code: r.exitCode }, [0], `git ${args.join(" ")}`).pipe(
+          Effect.as("done" as const),
+        );
+      if (after.state === "clean") {
+        const pending = this.journal.pending;
+        this.journal.pending = null;
+        if (pending) yield* this.settle(pending.label, pending.mode, pending.before);
+        if (r.exitCode !== 0) {
+          yield* completion({ ...r, code: r.exitCode }, [0], `git ${args.join(" ")}`);
+        }
+        return "done" as const;
+      }
+      return r.exitCode === 0 && after.operation?.editing
+        ? ("stopped" as const)
+        : ("conflicts" as const);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // History editing
+  // -------------------------------------------------------------------------
+
+  /** See `EditableHistory`. */
+  editableHistory(): Effect.Effect<EditableHistory, GitError> {
+    const LIMIT = "2000";
+    return Effect.gen({ self: this }, function* () {
+      if (!(yield* this.hasHead())) return { head: null, commits: [], unpushed: 0 };
+      const [chain, local] = yield* Effect.all(
+        [
+          this.gitText(["rev-list", "--first-parent", "--parents", "-n", LIMIT, "HEAD"]),
+          this.gitText(["rev-list", "--first-parent", "-n", LIMIT, "HEAD", "--not", "--remotes"]),
+        ],
+        { concurrency: 2 },
+      );
+      const commits: string[] = [];
+      for (const line of lines(chain)) {
+        const [hash, ...parents] = line.split(" ");
+        if (parents.length > 1) break;
+        commits.push(hash!);
+      }
+      const unpublished = new Set(lines(local));
+      let unpushed = 0;
+      while (unpushed < commits.length && unpublished.has(commits[unpushed]!)) unpushed++;
+      return { head: commits[0] ?? null, commits, unpushed };
+    });
+  }
+
+  /** See `RebaseTodo`. */
+  rebaseTodo(base: string | null): Effect.Effect<RebaseTodo, GitError | InvalidInputError> {
+    return Effect.gen({ self: this }, function* () {
+      if (base !== null) yield* validateRev(base);
+      const range = base === null ? ["HEAD"] : [`${base}..HEAD`];
+      const [log, merges, local, baseSubject] = yield* Effect.all(
+        [
+          this.gitText(
+            [
+              "log",
+              "-z",
+              "--reverse",
+              "--topo-order",
+              "--no-merges",
+              "--format=%H%x00%an%x00%ae%x00%at%x00%B",
+              ...range,
+              "--",
+            ],
+            { maxBytes: 64 * 1024 * 1024 },
+          ),
+          this.gitText(["rev-list", "--count", "--merges", ...range, "--"]),
+          this.gitText(["rev-list", ...range, "--not", "--remotes", "--"]),
+          base === null
+            ? Effect.succeed("")
+            : this.gitText(["log", "-1", "--format=%s", base, "--"]),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const unpublished = new Set(lines(local));
+      const fields = log.split("\0");
+      const commits: RebaseCommit[] = [];
+      for (let i = 0; i + 4 < fields.length; i += 5) {
+        const message = trimTrailingNewlines(fields[i + 4]!);
+        const hash = fields[i]!;
+        commits.push({
+          hash,
+          subject: message.split("\n", 1)[0]!,
+          message,
+          authorName: fields[i + 1]!,
+          authorEmail: fields[i + 2]!,
+          authorTime: Number(fields[i + 3]),
+          pushed: !unpublished.has(hash),
+        });
+      }
+      return {
+        base,
+        baseSubject: base === null ? null : baseSubject.trim(),
+        commits,
+        merges: Number(merges.trim()) || 0,
+      };
+    });
+  }
+
+  /**
+   * Rewrites the commits since `plan.base` with an interactive rebase, see `rebaseTodo`. The
+   * steps must list exactly the commits the rebase replays, so that a plan made for a branch
+   * that moved meanwhile is refused rather than dropping or duplicating commits.
+   */
+  rewrite(plan: RewritePlan): Effect.Effect<Outcome, GitError | InvalidInputError> {
     return this.write(
       Effect.gen({ self: this }, function* () {
-        const info = yield* this.info();
-        switch (info.state) {
-          case "merging":
-            return yield* this.run(["commit", "--no-edit"]);
-          case "rebasing":
-            return yield* this.run(["rebase", "--continue"]);
-          case "cherry-picking":
-            return yield* this.run(["cherry-pick", "--continue"]);
-          case "reverting":
-            return yield* this.run(["revert", "--continue"]);
-          default:
-            return;
+        if (plan.base !== null) yield* validateRev(plan.base);
+        for (const step of plan.steps) {
+          if (!isFullHash(step.hash) || !["pick", "edit", "fixup", "drop"].includes(step.action))
+            return yield* Effect.fail(new InvalidInputError({ message: "Invalid rebase step" }));
+          if (step.message?.includes("\0"))
+            return yield* Effect.fail(new InvalidInputError({ message: "Invalid commit message" }));
         }
+        let todo: string;
+        try {
+          todo = rebaseTodo(plan.steps);
+        } catch (e) {
+          return yield* Effect.fail(new InvalidInputError({ message: (e as Error).message }));
+        }
+        if ((yield* this.state()) !== "clean") {
+          return yield* Effect.fail(
+            new InvalidInputError({ message: "Finish the operation in progress first" }),
+          );
+        }
+        const replayed = lines(
+          yield* this.gitText([
+            "rev-list",
+            "--no-merges",
+            ...(plan.base === null ? ["HEAD"] : [`${plan.base}..HEAD`]),
+            "--",
+          ]),
+        );
+        const planned = new Set(plan.steps.map((s) => s.hash));
+        if (
+          replayed.length !== plan.steps.length ||
+          planned.size !== plan.steps.length ||
+          replayed.some((h) => !planned.has(h))
+        ) {
+          return yield* Effect.fail(
+            new InvalidInputError({
+              message: "The branch has changed since. Look at it again and retry.",
+            }),
+          );
+        }
+        return yield* this.recorded(
+          plan.label.slice(0, 200) || "Rebase",
+          this.host
+            .exec("sh", ["-c", REWRITE_SCRIPT, "sh", this.gitDir, plan.base ?? "--root"], {
+              cwd: this.workTree,
+              stdin: todo,
+              okCodes: [0, 1],
+            })
+            .pipe(Effect.flatMap((r) => this.outcome(r, "git rebase -i"))),
+        );
       }),
+    );
+  }
+
+  /** Changes the message of `hash`, an ancestor of HEAD, see `REWORD_SCRIPT`. */
+  reword(hash: string, message: string): Effect.Effect<void, GitError | InvalidInputError> {
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        if (!isFullHash(hash))
+          return yield* Effect.fail(new InvalidInputError({ message: `Invalid commit: ${hash}` }));
+        if (!message.trim() || message.includes("\0"))
+          return yield* Effect.fail(new InvalidInputError({ message: "Commit message is empty" }));
+        const subject = normalizeMessage(message).split("\n", 1)[0]!;
+        yield* this.recorded(
+          `Reword “${subject}”`,
+          this.host
+            .exec(
+              "sh",
+              [
+                "-c",
+                REWORD_SCRIPT,
+                "sh",
+                hash,
+                `${this.gitDir}/GITDOVE_MESSAGE`,
+                `reword: ${subject}`,
+              ],
+              { cwd: this.workTree, stdin: normalizeMessage(message) },
+            )
+            .pipe(Effect.asVoid),
+        );
+      }),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Patches
+  // -------------------------------------------------------------------------
+
+  formatPatch(hashes: readonly string[]): Effect.Effect<string, GitError | InvalidInputError> {
+    return Effect.gen({ self: this }, function* () {
+      for (const h of hashes) yield* validateRev(h);
+      const patches = yield* Effect.forEach(
+        hashes,
+        (h) =>
+          this.gitText(["format-patch", "-1", "--stdout", "--binary", "--no-signature", h, "--"], {
+            maxBytes: 64 * 1024 * 1024,
+          }),
+        { concurrency: 4 },
+      );
+      return patches.join("");
+    });
+  }
+
+  workingPatch(): Effect.Effect<string, GitError> {
+    return Effect.gen({ self: this }, function* () {
+      const base = (yield* this.hasHead()) ? ["HEAD"] : ["--cached"];
+      return yield* this.gitText(["diff", "--binary", "--no-color", "--no-ext-diff", ...base], {
+        maxBytes: 64 * 1024 * 1024,
+      });
+    });
+  }
+
+  checkPatch(patch: string): Effect.Effect<PatchInfo, GitError> {
+    return Effect.gen({ self: this }, function* () {
+      const apply = (args: readonly string[]) =>
+        this.git(["apply", "--whitespace=nowarn", ...args, "-"], {
+          stdin: patch,
+          okCodes: [0, 1, 128],
+          idempotent: true,
+        });
+      const [numstat, check] = yield* Effect.all([apply(["--numstat", "-z"]), apply(["--check"])], {
+        concurrency: 2,
+      });
+      if (numstat.exitCode !== 0 && numstat.stdout.length === 0) {
+        return {
+          files: [],
+          commits: [],
+          applies: "no" as const,
+          error: summarize(numstat.stderr) ?? "This is not a patch",
+        };
+      }
+      let applies: PatchInfo["applies"] = "clean";
+      let error: string | null = null;
+      if (check.exitCode !== 0) {
+        error = summarize(check.stderr) ?? "The patch does not apply";
+        const threeWay = yield* apply(["--check", "--3way"]);
+        applies = threeWay.exitCode === 0 ? "three-way" : "no";
+      }
+      return {
+        files: parseApplyNumstat(text(numstat)),
+        commits: mailboxSubjects(patch),
+        applies,
+        error,
+      };
+    });
+  }
+
+  /**
+   * Applies a patch: `worktree` and `index` with `git apply` (falling back to a three-way merge,
+   * which leaves conflicts in the working tree), `commit` with `git am`.
+   */
+  applyPatchFile(patch: string, mode: PatchMode): Effect.Effect<Outcome, GitError> {
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        if (mode === "commit") {
+          const subjects = mailboxSubjects(patch);
+          const label =
+            subjects.length === 1 ? `Apply “${subjects[0]}”` : `Apply ${subjects.length} patches`;
+          return yield* this.recorded(
+            label,
+            this.git(["am", "--3way", "--whitespace=nowarn"], {
+              stdin: patch,
+              okCodes: [0, 1, 128],
+            }).pipe(Effect.flatMap((r) => this.outcome(r, "git am"))),
+          );
+        }
+        const apply = (args: readonly string[]) =>
+          this.git(["apply", "--whitespace=nowarn", ...args, "-"], {
+            stdin: patch,
+            okCodes: [0, 1, 128],
+          });
+        const r = yield* apply(mode === "index" ? ["--index"] : []);
+        if (r.exitCode === 0) return "done" as const;
+        const merged = yield* apply(["--3way"]);
+        if (merged.exitCode === 0) return "done" as const;
+        // Conflict markers were written for the files that did not merge cleanly.
+        const conflicted = (yield* this.gitText(["diff", "--name-only", "--diff-filter=U"])).trim();
+        if (conflicted) return "conflicts" as const;
+        return yield* completion({ ...r, code: r.exitCode }, [0], "git apply").pipe(
+          Effect.as("done" as const),
+        );
+      }),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Undo
+  // -------------------------------------------------------------------------
+
+  undoState(): Effect.Effect<UndoState> {
+    return Effect.sync(() => this.journal.state());
+  }
+
+  /** Undoes the last operation recorded; returns its label. */
+  undo(): Effect.Effect<string, GitError | InvalidInputError> {
+    return this.write(this.travel("undo"));
+  }
+
+  /** Redoes the last operation undone; returns its label. */
+  redo(): Effect.Effect<string, GitError | InvalidInputError> {
+    return this.write(this.travel("redo"));
+  }
+
+  private travel(way: "undo" | "redo"): Effect.Effect<string, GitError | InvalidInputError> {
+    return Effect.gen({ self: this }, function* () {
+      const entry = way === "undo" ? this.journal.peekUndo() : this.journal.peekRedo();
+      if (!entry)
+        return yield* Effect.fail(new InvalidInputError({ message: `Nothing to ${way}` }));
+      if ((yield* this.state()) !== "clean") {
+        return yield* Effect.fail(
+          new InvalidInputError({ message: "Finish the operation in progress first" }),
+        );
+      }
+      const [from, to] = way === "undo" ? [entry.after, entry.before] : [entry.before, entry.after];
+      const now = yield* this.snapshot();
+      const why = now ? mismatch(now, from) : "The repository could not be read";
+      if (why) {
+        this.journal.clear();
+        return yield* Effect.fail(
+          new InvalidInputError({ message: `Cannot ${way} “${entry.label}”: ${why}.` }),
+        );
+      }
+      for (const args of restoreCommands(from, to, entry.mode, `gitdove: ${way} ${entry.label}`)) {
+        yield* this.run(args).pipe(Effect.tapError(() => Effect.sync(() => this.journal.clear())));
+      }
+      if (way === "undo") this.journal.undone();
+      else this.journal.redone();
+      return entry.label;
+    });
+  }
+
+  private snapshot(): Effect.Effect<Snapshot | null> {
+    return this.host.sh(SNAPSHOT_SCRIPT, { cwd: this.workTree, idempotent: true }).pipe(
+      Effect.map((r) => parseSnapshot(text(r))),
+      Effect.orElseSucceed(() => null),
+    );
+  }
+
+  private state(): Effect.Effect<RepoState> {
+    return probe(this.host, this.workTree).pipe(
+      Effect.map((p) => p.state),
+      Effect.orElseSucceed(() => "clean" as const),
+    );
+  }
+
+  /**
+   * Runs `effect`, an operation that changes refs, and records it for undo. One that stops part
+   * way (e.g. at conflicts) is recorded once it is continued to the end; callers hold the lock.
+   */
+  private recorded<A, E>(
+    label: string,
+    effect: Effect.Effect<A, E>,
+    mode: UndoMode = "keep",
+  ): Effect.Effect<A, E> {
+    return Effect.gen({ self: this }, function* () {
+      const before = yield* this.snapshot();
+      const result = yield* effect;
+      if (before) yield* this.settle(label, mode, before);
+      return result;
+    });
+  }
+
+  private settle(label: string, mode: UndoMode, before: Snapshot): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const state = yield* this.state();
+      if (state !== "clean" && state !== "bisecting") {
+        this.journal.pending = { label, mode, before };
+        return;
+      }
+      const after = yield* this.snapshot();
+      if (after) this.journal.record(entryOf(label, mode, before, after));
+    });
+  }
+
+  /** Runs a git command that may stop part way, see {@link outcome}. */
+  private stoppable(args: readonly string[]): Effect.Effect<Outcome, GitError> {
+    return this.git(args, { okCodes: [0, 1, 128] }).pipe(
+      Effect.flatMap((r) => this.outcome(r, `git ${args.join(" ")}`)),
+    );
+  }
+
+  /**
+   * How a command that may stop part way ended: stopped (at conflicts when it failed) if it left
+   * an operation in progress, done if it succeeded; otherwise it failed.
+   */
+  private outcome(r: SpawnResult, command: string): Effect.Effect<Outcome, CommandError> {
+    return Effect.gen({ self: this }, function* () {
+      const state = yield* this.state();
+      if (state !== "clean" && state !== "bisecting")
+        return r.exitCode === 0 ? ("stopped" as const) : ("conflicts" as const);
+      if (r.exitCode !== 0) yield* completion({ ...r, code: r.exitCode }, [0], command);
+      return "done" as const;
+    });
+  }
+
+  /** A label like "Cherry-pick “Subject”" or "Cherry-pick 3 commits". */
+  private commitsLabel(verb: string, hashes: readonly string[]): Effect.Effect<string> {
+    if (hashes.length !== 1) return Effect.succeed(`${verb} ${hashes.length} commits`);
+    return this.gitText(["log", "-1", "--format=%s", hashes[0]!, "--"]).pipe(
+      Effect.map((s) => `${verb} “${s.trim()}”`),
+      Effect.orElseSucceed(() => `${verb} ${hashes[0]!.slice(0, 7)}`),
     );
   }
 
@@ -1155,10 +1769,13 @@ export class Repository {
 
   pull(mode: "ff-only" | "merge" | "rebase") {
     return this.cancellableWrite(
-      this.run([
-        "pull",
-        mode === "ff-only" ? "--ff-only" : mode === "rebase" ? "--rebase" : "--no-rebase",
-      ]),
+      this.recorded(
+        "Pull",
+        this.run([
+          "pull",
+          mode === "ff-only" ? "--ff-only" : mode === "rebase" ? "--rebase" : "--no-rebase",
+        ]),
+      ),
     );
   }
 
@@ -1343,6 +1960,49 @@ const toStash = (s: StashEntry): Stash => ({
 });
 
 const lines = (s: string) => s.split("\n").filter(Boolean);
+
+const summarize = (stderr: string) =>
+  lines(stderr)
+    .map((l) => l.replace(/^(error|fatal):\s*/, ""))
+    .slice(0, 3)
+    .join("\n") || null;
+
+/** Files and line counts from `git apply --numstat -z`; renames name the new path. */
+const parseApplyNumstat = (out: string): PatchInfo["files"] => {
+  const files: { path: string; additions: number | null; deletions: number | null }[] = [];
+  const parts = out.split("\0");
+  for (let i = 0; i < parts.length; i++) {
+    const m = /^(-|\d+)\t(-|\d+)\t(.*)$/s.exec(parts[i]!);
+    if (!m) continue;
+    let path = m[3]!;
+    // A rename lists an empty path, then the old and the new path.
+    if (path === "") {
+      path = parts[i + 2] ?? "";
+      i += 2;
+    }
+    const n = (v: string) => (v === "-" ? null : Number(v));
+    files.push({ path, additions: n(m[1]!), deletions: n(m[2]!) });
+  }
+  return files;
+};
+
+/** Subjects of the commits in a mailbox patch, without their "[PATCH n/m]" prefix. */
+const mailboxSubjects = (patch: string): string[] =>
+  patch
+    .split(/^From [0-9a-f]{40,64} .*$/m)
+    .slice(1)
+    .flatMap((message) => {
+      const header = message.replace(/^\n/, "").split("\n\n", 1)[0]!;
+      const m = /^Subject: (.*(?:\n[ \t].*)*)/m.exec(header);
+      return m
+        ? [
+            m[1]!
+              .replace(/\n[ \t]+/g, " ")
+              .replace(/^\[PATCH[^\]]*\]\s*/, "")
+              .trim(),
+          ]
+        : [];
+    });
 
 /** Rejects revisions that could be interpreted as options. */
 /** Like `s.replace(/\n+$/, "")`, without the regex backtracking on interior newlines. */

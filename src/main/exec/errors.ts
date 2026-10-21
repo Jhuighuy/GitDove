@@ -40,6 +40,13 @@ export class WorktreeNeedsForceError extends Data.TaggedError("WorktreeNeedsForc
   readonly stderr: string;
 }> {}
 
+/** A commit does not apply cleanly where it was meant to go without a working tree. */
+export class ConflictError extends Data.TaggedError("ConflictError")<{
+  readonly message: string;
+  /** The commit that conflicts. */
+  readonly commit: string;
+}> {}
+
 export class InvalidInputError extends Data.TaggedError("InvalidInputError")<{
   readonly message: string;
 }> {}
@@ -57,4 +64,5 @@ export type AppError =
   | RepoNotOpenError
   | StaleGraphError
   | InvalidInputError
+  | ConflictError
   | WorktreeNeedsForceError;
