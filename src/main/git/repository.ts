@@ -1084,8 +1084,13 @@ export class Repository {
       Effect.map((out) => out.length > 0),
       Effect.orElseSucceed(() => false),
     );
-    return Effect.all([locked, dirty], { concurrency: "unbounded" }).pipe(
-      Effect.map(([l, d]) => l || d),
+    // Git also refuses worktrees with checked out submodules ("-" marks uninitialized ones).
+    const submodules = this.gitText(["-C", path, "submodule", "status"]).pipe(
+      Effect.map((out) => lines(out).some((l) => !l.startsWith("-"))),
+      Effect.orElseSucceed(() => false),
+    );
+    return Effect.all([locked, dirty, submodules], { concurrency: "unbounded" }).pipe(
+      Effect.map((reasons) => reasons.some(Boolean)),
       Effect.orElseSucceed(() => false),
     );
   }

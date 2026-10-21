@@ -512,6 +512,14 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     await sh("git config protocol.file.allow always");
     await run(repo.updateSubmodule("sub"));
     expect(await sh("cat sub/f.txt")).toBe("a\nb\nc\nd");
+
+    // A worktree with a checked out submodule is clean, but git removes it only by force.
+    const subWt = `${root}/subwt${n}`;
+    await run(repo.addWorktree(subWt, "HEAD", null));
+    await sh(`git -c protocol.file.allow=always -C '${subWt}' submodule update -q --init`);
+    expect(await sh(`git -C '${subWt}' status --porcelain`)).toBe("");
+    expect((await fails(repo.removeWorktree(subWt, false)))._tag).toBe("WorktreeNeedsForceError");
+    await run(repo.removeWorktree(subWt, true));
   });
 });
 
