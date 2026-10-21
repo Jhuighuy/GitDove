@@ -357,9 +357,11 @@ it("fits the graph column to the rows on screen, not the widest point in history
   mocks.info = { version: 1, count: 5, complete: true, maxLanes: 20 };
   await render();
   expect(width(headerCells()[1]!)).toBe(6 * 2 + 3 * 16);
+  // Nothing is cut: no shadow.
+  expect(container.querySelectorAll('[class*="after:bg-linear-to-l"]')).toHaveLength(0);
 });
 
-it("fits the graph column to the lanes, up to a limit, and shades cut-off rows", async () => {
+it("fits the graph column to the lanes, up to a limit, and shades its edge when cut", async () => {
   // 20 lanes are more than the column grows to; one row uses lane 15.
   mocks.info = { version: 1, count: 5, complete: true, maxLanes: 20 };
   mocks.rows = Array.from({ length: 5 }, (_, i) =>
@@ -372,7 +374,9 @@ it("fits the graph column to the lanes, up to a limit, and shades cut-off rows",
   const shaded = [...container.querySelectorAll(`svg[height="28"]`)].map((svg) =>
     svg.parentElement!.className.includes("after:bg-linear-to-l"),
   );
-  expect(shaded).toEqual([false, false, true, false, false]);
+  // One cut row shades the whole column's edge, but not the header.
+  expect(shaded).toEqual([true, true, true, true, true]);
+  expect(graph().className).not.toContain("after:bg-linear-to-l");
 
   // A resized column keeps its width; double-clicking the handle fits the lanes again.
   await dragSteps(graph(), [120, 140]);

@@ -47,9 +47,12 @@ interface ColumnsState {
 const MIN_AUTO_LANES = 3;
 const MAX_AUTO_LANES = 12;
 
-/** A shadow over a cell's right edge (above the lanes), marking content the column cuts off. */
+/**
+ * A shadow over the graph column's right edge (above the lanes) while it cuts off rows on
+ * screen. Every row's cell gets it, so it reads as one edge rather than per-row marks.
+ */
 const CLIPPED =
-  "after:pointer-events-none after:absolute after:inset-y-0 after:right-0 after:w-3 after:bg-linear-to-l after:from-black/40 after:to-transparent";
+  "after:pointer-events-none after:absolute after:inset-y-0 after:right-0 after:w-3 after:bg-linear-to-l after:from-black/10 after:to-transparent dark:after:from-black/80";
 
 const useColumns = create<ColumnsState>()(
   persist(
@@ -100,17 +103,19 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
 
   // Fit the lanes on screen. The width only grows while scrolling, so the columns don't jump
   // back and forth; double-clicking the column border fits it to the rows on screen again.
-  let visibleWidth = graphWidthFor(MIN_AUTO_LANES);
+  let widestRow = 0;
   for (const item of items) {
     const row = rows.get(item.index - offset);
-    if (row) visibleWidth = Math.max(visibleWidth, rowGraphWidth(row));
+    if (row) widestRow = Math.max(widestRow, rowGraphWidth(row));
   }
+  const visibleWidth = Math.max(widestRow, graphWidthFor(MIN_AUTO_LANES));
   const [fitWidth, setFitWidth] = useState(0);
   useLayoutEffect(() => {
     if (visibleWidth > fitWidth) setFitWidth(visibleWidth);
   }, [visibleWidth, fitWidth]);
   const graphWidth =
     columns.graph ?? Math.min(Math.max(fitWidth, visibleWidth), graphWidthFor(MAX_AUTO_LANES));
+  const clipped = widestRow > graphWidth;
   const refit = () => {
     columns.set("graph", null);
     setFitWidth(0);
@@ -203,6 +208,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
                     lane={headRow?.hash === headHash ? (headRow?.lane ?? 0) : 0}
                     color={headRow?.hash === headHash ? (headRow?.color ?? 0) : 0}
                     graphWidth={graphWidth}
+                    clipped={clipped}
                     selected={selection?.kind === "wip"}
                     onSelect={() => select(repo, { kind: "wip" })}
                     onContextMenu={() => onRowContextMenu(null)}
@@ -219,6 +225,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
                   row={row}
                   refs={refsByHash.get(row.hash) ?? EMPTY_REFS}
                   graphWidth={graphWidth}
+                  clipped={clipped}
                   isHead={row.hash === headHash}
                   isStash={stashes.has(row.hash)}
                   wipAbove={offset > 0 && index === 0 && row.hash === headHash}
@@ -350,6 +357,8 @@ interface CommitRowProps {
   readonly row: GraphRow;
   readonly refs: readonly Ref[];
   readonly graphWidth: number;
+  /** The graph column cuts off rows on screen. */
+  readonly clipped: boolean;
   readonly isHead: boolean;
   readonly isStash: boolean;
   readonly wipAbove: boolean;
@@ -382,10 +391,7 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
         />
       </div>
       <div
-        className={cn(
-          "relative shrink-0 overflow-hidden",
-          rowGraphWidth(row) > p.graphWidth && CLIPPED,
-        )}
+        className={cn("relative shrink-0 overflow-hidden", p.clipped && CLIPPED)}
         style={{ width: p.graphWidth }}
       >
         <GraphCell
@@ -432,6 +438,7 @@ function WipRow(p: {
   lane: number;
   color: number;
   graphWidth: number;
+  clipped: boolean;
   selected: boolean;
   onSelect: () => void;
   onContextMenu: () => void;
@@ -445,7 +452,10 @@ function WipRow(p: {
       onContextMenu={p.onContextMenu}
     >
       <div className="shrink-0" style={{ width: columns.refs }} />
-      <div className="shrink-0 overflow-hidden" style={{ width: p.graphWidth }}>
+      <div
+        className={cn("relative shrink-0 overflow-hidden", p.clipped && CLIPPED)}
+        style={{ width: p.graphWidth }}
+      >
         <WipGraphCell lane={p.lane} color={p.color} width={p.graphWidth} />
       </div>
       <div className="text-muted-foreground flex min-w-0 flex-1 items-center gap-2 px-2 italic">
