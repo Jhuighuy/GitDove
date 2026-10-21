@@ -40,9 +40,12 @@ export const webRepo = (url: string): WebRepo | null => {
   } else {
     return null;
   }
-  path = path.replace(/\/+$/, "").replace(/\.git$/, "");
+  const segments = path.split("/");
+  while (segments.at(-1) === "") segments.pop();
+  path = segments.join("/").replace(/\.git$/, "");
   // Dot-less names are LAN/ssh aliases (e.g. "fedora"), with no web page to link to.
-  if (!host.includes(".") || !/^[\w.-]+(\/[\w.-]+)+$/.test(path)) return null;
+  const valid = segments.length >= 2 && segments.every((p) => /^[\w.-]+$/.test(p));
+  if (!host.includes(".") || !valid) return null;
   const forge: Forge =
     host === "github.com"
       ? "github"
@@ -84,7 +87,9 @@ const referenceUrl = (repo: WebRepo, path: string, sigil: string, n: string) => 
 
 export type Segment = { readonly text: string; readonly href?: string };
 
-const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]}]/g;
+const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+/g;
+/** Punctuation that ends a sentence rather than a URL. */
+const TRAILING = new Set([...".,;:!?)]}"]);
 const REF_RE = /(^|[^\w/&#!-])(?:([\w.-]+\/[\w.-]+))?([#!])(\d+)\b/g;
 
 /** Splits a message into plain text and links. */
@@ -110,9 +115,12 @@ export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
   };
   let last = 0;
   for (const m of text.matchAll(URL_RE)) {
+    let end = m[0].length;
+    while (TRAILING.has(m[0][end - 1]!)) end--;
+    const url = m[0].slice(0, end);
     plain(text.slice(last, m.index));
-    out.push({ text: m[0], href: m[0] });
-    last = m.index + m[0].length;
+    out.push({ text: url, href: url });
+    last = m.index + url.length;
   }
   plain(text.slice(last));
   return out;

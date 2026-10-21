@@ -71,6 +71,16 @@ it("links issue and pull request references", () => {
   ]);
 });
 
+it("leaves sentence punctuation out of URLs", () => {
+  expect(links("(see https://x.org/a.b?c=1).", null)).toEqual([
+    ["https://x.org/a.b?c=1", "https://x.org/a.b?c=1"],
+  ]);
+  expect(links("https://x.org/...", null)).toEqual([["https://x.org/", "https://x.org/"]]);
+  // Long runs of punctuation stay fast.
+  const long = `https://x.org/${".".repeat(50_000)}`;
+  expect(links(long, null)).toEqual([["https://x.org/", "https://x.org/"]]);
+});
+
 it("keeps all of the text", () => {
   const text = "Fix (#12): see https://x.org/y, and #3.";
   const segments = linkify(text, webRepo("https://github.com/a/b"));

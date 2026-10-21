@@ -1,5 +1,5 @@
 import type { RepoId } from "@shared/domain";
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import { linkify, referenceRepo } from "@/lib/links";
 import { useRefs } from "@/lib/queries";
 
@@ -11,10 +11,14 @@ export function LinkedText({ repo, text }: { repo: RepoId; text: string }) {
   const { data } = useRefs(repo);
   const remotes = data?.remotes;
   const segments = useMemo(() => linkify(text, referenceRepo(remotes ?? [])), [text, remotes]);
-  return segments.map((s, i) =>
-    s.href ? (
+  // Segments are keyed by where they start in the text.
+  let offset = 0;
+  return segments.map((s) => {
+    const key = offset;
+    offset += s.text.length;
+    return s.href ? (
       <a
-        key={i}
+        key={key}
         href={s.href}
         target="_blank"
         rel="noreferrer"
@@ -24,7 +28,7 @@ export function LinkedText({ repo, text }: { repo: RepoId; text: string }) {
         {s.text}
       </a>
     ) : (
-      s.text
-    ),
-  );
+      <Fragment key={key}>{s.text}</Fragment>
+    );
+  });
 }
