@@ -1,13 +1,14 @@
 import type { GraphInfo, RepoId, UpdaterStatus } from "@shared/domain";
 import { repoLocationOf } from "@shared/domain";
 import {
+  IconAlertTriangle,
   IconCheck,
   IconDeviceLaptop,
   IconInfoCircle,
   IconServer,
   IconX,
 } from "@tabler/icons-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -53,10 +54,16 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
         )}
       </div>
       <div className="flex min-w-0 items-center justify-end gap-3">
-        {graph && !graph.complete && graph.count > 0 && (
-          <span className="shrink-0 tabular-nums">
-            Loading history… {graph.count.toLocaleString()} commits
-          </span>
+        {graph?.error ? (
+          <GraphError repo={repo!} graph={graph} error={graph.error} />
+        ) : (
+          graph &&
+          !graph.complete &&
+          graph.count > 0 && (
+            <span className="shrink-0 tabular-nums">
+              Loading history… {graph.count.toLocaleString()} commits
+            </span>
+          )
         )}
         {busy ? (
           <BusyIndicator repo={repo!} busy={busy} />
@@ -86,6 +93,33 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
         )}
       </div>
     </footer>
+  );
+}
+
+/**
+ * Why the history is cut off or outdated. The main process retries after a lost connection on
+ * its own; Retry asks for the graph again right away.
+ */
+function GraphError({ repo, graph, error }: { repo: RepoId; graph: GraphInfo; error: string }) {
+  const client = useQueryClient();
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-amber-500" title={error}>
+      <IconAlertTriangle />
+      <span className="truncate tabular-nums">
+        {graph.complete
+          ? "History may be outdated"
+          : `History incomplete at ${graph.count.toLocaleString()} commits`}
+        : {error}
+      </span>
+      <Button
+        variant="outline"
+        size="xs"
+        className="-my-1 h-5 px-1.5 text-[11px]"
+        onClick={() => void client.invalidateQueries({ queryKey: keys.repo(repo) })}
+      >
+        Retry
+      </Button>
+    </span>
   );
 }
 

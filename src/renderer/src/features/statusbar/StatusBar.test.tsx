@@ -99,6 +99,30 @@ it("shows history still loading, without asking an unopened repository", async (
   expect(text()).not.toContain("Loading history");
 });
 
+it("says why the history is cut off or outdated, and retries on request", async () => {
+  await render(LOCAL);
+  const info: GraphInfo = {
+    version: 1,
+    count: 2345,
+    complete: false,
+    maxLanes: 2,
+    error: "Lost connection",
+  };
+  await setCached(keys.graphInfo(LOCAL), info);
+  expect(text()).toContain("History incomplete at 2,345 commits: Lost connection");
+  expect(text()).not.toContain("Loading history");
+
+  const invalidate = vi.spyOn(client, "invalidateQueries");
+  const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
+  await act(async () => retry.click());
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: keys.repo(LOCAL) });
+
+  await setCached(keys.graphInfo(LOCAL), { ...info, complete: true });
+  expect(text()).toContain("History may be outdated: Lost connection");
+  await setCached(keys.graphInfo(LOCAL), { ...info, complete: true, error: undefined });
+  expect(text()).not.toContain("History");
+});
+
 it("shows the running operation, with a cancel button for network operations", async () => {
   await render(SSH);
   await act(async () =>
