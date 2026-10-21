@@ -89,6 +89,7 @@ it("keeps the diff of several commits while the same ones stay selected", () => 
     kind: "commits",
     commits: hashes.map((hash, index) => ({ index, row: { hash } as GraphRow })),
     anchor: hashes[0]!,
+    version: 1,
   });
   const diff = { kind: "commit", hash: "a", base: "c", path: "f" } as const;
   const { select, openDiff } = useRepoUiStore.getState();

@@ -198,22 +198,39 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
       for (const [i, r] of rows) if (r.hash === hash) return i;
       return api("repo.findCommit", repo, info.version, hash);
     };
+    // After a reload, commits picked before may have moved, or gone.
+    const reindexed = async (picked: readonly PickedCommit[]) => {
+      const loadedAt = new Map([...rows].map(([i, r]) => [r.hash, i]));
+      const moved = await Promise.all(
+        picked.map(async (p) => ({
+          ...p,
+          index:
+            loadedAt.get(p.row.hash) ??
+            (await api("repo.findCommit", repo, info.version, p.row.hash)),
+        })),
+      );
+      return moved.filter((p) => p.index >= 0);
+    };
     try {
       if (toggle) {
         let picked: readonly PickedCommit[] = [];
-        if (selection?.kind === "commits") picked = selection.commits;
+        if (selection?.kind === "commits")
+          picked =
+            selection.version === info.version
+              ? selection.commits
+              : await reindexed(selection.commits);
         else if (selection?.kind === "commit") {
           const i = await indexOf(selection.hash);
           const r = i >= 0 ? (await fetchRows(i, i)).get(i) : undefined;
           if (r) picked = [{ index: i, row: r }];
         }
-        finish(selectionOf(toggled(picked, { index, row }), row.hash) ?? single);
+        finish(selectionOf(toggled(picked, { index, row }), row.hash, info.version) ?? single);
       } else {
         const a = await indexOf(anchor);
         if (a < 0) return finish(single);
         const [from, to] = rangeIndexes(a, index);
         const range = [...(await fetchRows(from, to))].map(([i, r]) => ({ index: i, row: r }));
-        finish(selectionOf(range, anchor) ?? single);
+        finish(selectionOf(range, anchor, info.version) ?? single);
       }
     } catch {
       finish(single);

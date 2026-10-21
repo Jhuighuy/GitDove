@@ -14,12 +14,13 @@ export type Selection =
   | { readonly kind: "commit"; readonly hash: string }
   /**
    * Two or more commits, newest (topmost) first. `anchor` is the commit last clicked, where a
-   * Shift-click range starts.
+   * Shift-click range starts; the indexes are those of graph `version`.
    */
   | {
       readonly kind: "commits";
       readonly commits: readonly PickedCommit[];
       readonly anchor: string;
+      readonly version: number;
     };
 
 interface RepoUi {

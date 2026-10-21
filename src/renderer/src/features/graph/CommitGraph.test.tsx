@@ -466,3 +466,29 @@ it("drops a multi-selection that comes back after the selection moved on", async
   await settle();
   expect(selection()).toEqual({ kind: "commit", hash: "c3" });
 });
+
+it("finds commits picked before the graph reloaded where they are now", async () => {
+  await render();
+  // Picked when the graph had one commit less on top.
+  const stale = (i: number) => ({ index: i - 1, row: commit(i) });
+  act(() =>
+    useRepoUiStore.getState().select(repo, {
+      kind: "commits",
+      commits: [stale(1), stale(2)],
+      anchor: "c1",
+      version: 0,
+    }),
+  );
+  await act(async () => {
+    rowOf("Commit 0").dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0, metaKey: true }),
+    );
+  });
+  await settle();
+  expect(selection()).toEqual({
+    kind: "commits",
+    commits: [0, 1, 2].map((i) => ({ index: i, row: commit(i) })),
+    anchor: "c0",
+    version: 1,
+  });
+});

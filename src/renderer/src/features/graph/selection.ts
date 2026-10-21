@@ -5,13 +5,20 @@ export const MAX_RANGE = 1000;
 
 const byIndex = (a: PickedCommit, b: PickedCommit) => a.index - b.index;
 
-/** The selection for `picked` commits (any order), clicked last at `anchor`. */
-export const selectionOf = (picked: readonly PickedCommit[], anchor: string): Selection | null => {
+/**
+ * The selection for `picked` commits (any order, indexes of graph `version`), clicked last at
+ * `anchor`.
+ */
+export const selectionOf = (
+  picked: readonly PickedCommit[],
+  anchor: string,
+  version: number,
+): Selection | null => {
   if (picked.length === 0) return null;
   if (picked.length === 1) return { kind: "commit", hash: picked[0]!.row.hash };
   const unique = new Map(picked.map((p) => [p.row.hash, p]));
   if (unique.size === 1) return { kind: "commit", hash: picked[0]!.row.hash };
-  return { kind: "commits", commits: [...unique.values()].toSorted(byIndex), anchor };
+  return { kind: "commits", commits: [...unique.values()].toSorted(byIndex), anchor, version };
 };
 
 /** Adds `commit` to the picked ones, or takes it out when it was picked. */

@@ -5,13 +5,14 @@ import { MAX_RANGE, rangeIndexes, selectionOf, toggled } from "./selection";
 const picked = (index: number) => ({ index, row: { hash: `c${index}` } as GraphRow });
 
 it("makes a selection of one commit, several or none", () => {
-  expect(selectionOf([], "c0")).toBeNull();
-  expect(selectionOf([picked(2)], "c2")).toEqual({ kind: "commit", hash: "c2" });
-  expect(selectionOf([picked(2), picked(2)], "c2")).toEqual({ kind: "commit", hash: "c2" });
-  expect(selectionOf([picked(5), picked(2)], "c5")).toEqual({
+  expect(selectionOf([], "c0", 1)).toBeNull();
+  expect(selectionOf([picked(2)], "c2", 1)).toEqual({ kind: "commit", hash: "c2" });
+  expect(selectionOf([picked(2), picked(2)], "c2", 1)).toEqual({ kind: "commit", hash: "c2" });
+  expect(selectionOf([picked(5), picked(2)], "c5", 1)).toEqual({
     kind: "commits",
     commits: [picked(2), picked(5)],
     anchor: "c5",
+    version: 1,
   });
 });
 
