@@ -34,6 +34,12 @@ export class StaleGraphError extends Data.TaggedError("StaleGraphError")<{
   readonly message: string;
 }> {}
 
+/** A worktree can only be removed by force: it is locked or has changes that would be lost. */
+export class WorktreeNeedsForceError extends Data.TaggedError("WorktreeNeedsForceError")<{
+  readonly message: string;
+  readonly stderr: string;
+}> {}
+
 export class InvalidInputError extends Data.TaggedError("InvalidInputError")<{
   readonly message: string;
 }> {}
@@ -44,4 +50,5 @@ export type AppError =
   | NotARepositoryError
   | RepoNotOpenError
   | StaleGraphError
-  | InvalidInputError;
+  | InvalidInputError
+  | WorktreeNeedsForceError;

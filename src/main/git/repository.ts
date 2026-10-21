@@ -23,6 +23,7 @@ import {
   NotARepositoryError,
   type SshError,
   StaleGraphError,
+  WorktreeNeedsForceError,
 } from "../exec/errors";
 import type { ExecOptions, Host } from "../exec/hosts";
 import { shellQuote } from "../exec/shell";
@@ -1040,9 +1041,34 @@ export class Repository {
     );
   }
 
-  removeWorktree(path: string, force: boolean) {
+  removeWorktree(
+    path: string,
+    force: boolean,
+  ): Effect.Effect<void, GitError | WorktreeNeedsForceError> {
     // Forcing twice also removes a locked worktree.
-    return this.run(["worktree", "remove", ...(force ? ["--force", "--force"] : []), "--", path]);
+    if (force) return this.run(["worktree", "remove", "--force", "--force", "--", path]);
+    return this.run(["worktree", "remove", "--", path]).pipe(
+      Effect.catchTag("CommandError", (e) =>
+        this.worktreeNeedsForce(path).pipe(
+          Effect.flatMap((needs) =>
+            Effect.fail(
+              needs ? new WorktreeNeedsForceError({ message: e.message, stderr: e.stderr }) : e,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /**
+   * Whether forcing would remove a worktree that git refused to: it is locked or has changes.
+   * Checked from the worktree's state rather than git's messages, which are translated.
+   */
+  private worktreeNeedsForce(path: string): Effect.Effect<boolean> {
+    return this.host.sh(WORKTREE_STATE_SCRIPT, { cwd: path, idempotent: true }).pipe(
+      Effect.map((r) => r.stdout.toString("utf8").trim().length > 0),
+      Effect.orElseSucceed(() => false),
+    );
   }
 
   pruneWorktrees() {
@@ -1089,6 +1115,11 @@ const trimTrailingNewlines = (s: string): string => {
   while (end > 0 && s[end - 1] === "\n") end--;
   return s.slice(0, end);
 };
+
+/** Prints something when the worktree it runs in is locked or has changes. */
+const WORKTREE_STATE_SCRIPT = `gd=$(git rev-parse --absolute-git-dir) || exit 1
+test -f "$gd/locked" && echo locked
+git status --porcelain | head -n 1`;
 
 const validateRev = (rev: string) =>
   rev && !rev.startsWith("-") && !/[\0\n]/.test(rev)

@@ -330,10 +330,8 @@ export const commands = {
         await api("repo.removeWorktree", repo, path, false);
         return "removed";
       } catch (e) {
-        // Git suggests forcing for a dirty or locked worktree; other failures are reported.
-        if (e instanceof ApiError && /--force|-f -f/.test(`${e.message}\n${e.detail ?? ""}`)) {
-          return "needs-force";
-        }
+        // A dirty or locked worktree can be forced; other failures are reported.
+        if (e instanceof ApiError && e.tag === "WorktreeNeedsForceError") return "needs-force";
         throw e;
       }
     });

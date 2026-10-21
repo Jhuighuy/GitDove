@@ -481,13 +481,17 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
 
     await run(repo.addWorktree(wt, "main~1", null));
     await sh(`echo dirty > '${wt}/f.txt'`);
-    expect((await fails(repo.removeWorktree(wt, false)))._tag).toBe("CommandError");
+    expect((await fails(repo.removeWorktree(wt, false)))._tag).toBe("WorktreeNeedsForceError");
     await run(repo.removeWorktree(wt, true));
     // Forcing also removes a locked worktree.
     await run(repo.addWorktree(wt, "main~1", null));
     await sh(`git worktree lock '${wt}'`);
-    expect((await fails(repo.removeWorktree(wt, false)))._tag).toBe("CommandError");
+    expect((await fails(repo.removeWorktree(wt, false)))._tag).toBe("WorktreeNeedsForceError");
     await run(repo.removeWorktree(wt, true));
+    // Other failures are not something forcing fixes.
+    expect((await fails(repo.removeWorktree(`${root}/no-such-worktree`, false)))._tag).toBe(
+      "CommandError",
+    );
     expect((await run(repo.refs())).worktrees).toHaveLength(1);
 
     await sh(

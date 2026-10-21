@@ -434,11 +434,10 @@ it("creates worktrees next to the main checkout", async () => {
   expect(mocks.toast.success).toHaveBeenCalledWith("Worktree created", { id: undefined });
 });
 
-/** A failure the way the main process reports git's stderr. */
-const gitError = (message: string, detail = message) =>
-  Object.assign(new Error(message), { detail });
+/** A failure the way the api reports a main-process error. */
+const apiError = (tag: string, message: string) => Object.assign(new Error(message), { tag });
 
-it("removes worktrees, offering to force only when git suggests it", async () => {
+it("removes worktrees, offering to force only when the main process says it helps", async () => {
   mocks.confirm.mockResolvedValueOnce(false);
   await commands.removeWorktree(repo, "/work/wt");
   expect(methods()).toEqual([]);
@@ -447,11 +446,9 @@ it("removes worktrees, offering to force only when git suggests it", async () =>
   expect(apiCalls("repo.removeWorktree")).toEqual([[repo, "/work/wt", false]]);
   expect(mocks.confirm).toHaveBeenCalledTimes(2);
 
-  // Dirty: one prompt to force, no error toast; declining stops there.
+  // Dirty or locked: one prompt to force, no error toast; declining stops there.
   mocks.api.mockClear();
-  mocks.api.mockRejectedValueOnce(
-    gitError("'/work/wt' contains modified or untracked files, use --force to delete it"),
-  );
+  mocks.api.mockRejectedValueOnce(apiError("WorktreeNeedsForceError", "enthält Änderungen"));
   mocks.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
   await commands.removeWorktree(repo, "/work/wt");
   expect(mocks.toast.error).not.toHaveBeenCalled();
@@ -460,14 +457,8 @@ it("removes worktrees, offering to force only when git suggests it", async () =>
   );
   expect(apiCalls("repo.removeWorktree")).toEqual([[repo, "/work/wt", false]]);
 
-  // Locked: git's hint is on the second stderr line.
   mocks.api.mockClear();
-  mocks.api.mockRejectedValueOnce(
-    gitError(
-      "cannot remove a locked working tree;",
-      "fatal: cannot remove a locked working tree;\nuse 'remove -f -f' to override or unlock first",
-    ),
-  );
+  mocks.api.mockRejectedValueOnce(apiError("WorktreeNeedsForceError", "locked"));
   await commands.removeWorktree(repo, "/work/wt");
   expect(apiCalls("repo.removeWorktree")).toEqual([
     [repo, "/work/wt", false],
@@ -477,15 +468,21 @@ it("removes worktrees, offering to force only when git suggests it", async () =>
 });
 
 it("reports other worktree removal failures without offering to force", async () => {
-  mocks.api.mockRejectedValueOnce(gitError("Lost connection to box", ""));
+  // Even when the message mentions --force: only the error's tag counts.
+  mocks.api
+    .mockRejectedValueOnce(apiError("SshError", "Lost connection to box"))
+    .mockRejectedValueOnce(apiError("CommandError", "use --force to delete it"));
   await commands.removeWorktree(repo, "/work/wt");
-  expect(mocks.toast.error).toHaveBeenCalledTimes(1);
-  expect(mocks.toast.error).toHaveBeenCalledWith(
-    "Remove worktree failed",
-    expect.objectContaining({ description: "Lost connection to box" }),
-  );
-  expect(mocks.confirm).toHaveBeenCalledTimes(1);
-  expect(apiCalls("repo.removeWorktree")).toEqual([[repo, "/work/wt", false]]);
+  await commands.removeWorktree(repo, "/work/wt");
+  expect(mocks.toast.error.mock.calls.map(([title, o]) => [title, o.description])).toEqual([
+    ["Remove worktree failed", "Lost connection to box"],
+    ["Remove worktree failed", "use --force to delete it"],
+  ]);
+  expect(mocks.confirm).toHaveBeenCalledTimes(2);
+  expect(apiCalls("repo.removeWorktree")).toEqual([
+    [repo, "/work/wt", false],
+    [repo, "/work/wt", false],
+  ]);
 });
 
 it("opens sibling repositories on the same host", () => {
