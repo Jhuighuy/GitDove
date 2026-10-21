@@ -944,18 +944,15 @@ export class Repository {
           "-z",
         ]).pipe(Effect.map((s) => s.split("\0").filter(Boolean)));
         const before = yield* untracked;
-        // Clean before resetting: a reset may undo ignore rules (an edited .gitignore) that keep
-        // ignored files out of `clean`. The reset then deletes new files that are staged.
-        const clean = this.run(["clean", "-f", "-d", "-q"]);
-        if (yield* this.hasHead()) {
-          yield* clean;
-          yield* this.run(["reset", "--hard", "-q"]);
-        } else {
-          // Without commits, everything is new: unstage it so that `clean` deletes it (forced:
-          // a staged file edited since differs from both the index and the work tree).
-          yield* this.run(["rm", "--cached", "-r", "-q", "-f", "--ignore-unmatch", "."]);
-          yield* clean;
-        }
+        // Clean first: discarding may undo ignore rules (an edited .gitignore) that keep ignored
+        // files out of `clean`, or add rules that would keep staged files from it.
+        yield* this.run(["clean", "-f", "-d", "-q"]);
+        // Then drop staged and unstaged changes, deleting new files that are staged. Without
+        // commits, everything in the index is new (forced: a staged file edited since differs
+        // from both the index and the work tree).
+        yield* (yield* this.hasHead())
+          ? this.run(["reset", "--hard", "-q"])
+          : this.run(["rm", "-r", "-q", "-f", "--ignore-unmatch", "."]);
         // `clean` keeps untracked nested repositories (unless forced twice): say so. Files that
         // were ignored before the reset are kept on purpose.
         const kept = (yield* untracked).filter((p) => before.includes(p));

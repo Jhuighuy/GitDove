@@ -83,9 +83,18 @@ it("leaves sentence punctuation out of URLs", () => {
     ["https://x.org/a.b?c=1", "https://x.org/a.b?c=1"],
   ]);
   expect(links("https://x.org/...", null)).toEqual([["https://x.org/", "https://x.org/"]]);
+  // Brackets the URL opened are part of it.
+  const wiki = "https://en.wikipedia.org/wiki/Git_(software)";
+  expect(links(`See ${wiki}.`, null)).toEqual([[wiki, wiki]]);
+  expect(links(`(see ${wiki})`, null)).toEqual([[wiki, wiki]]);
+  expect(links("[https://x.org/a[1]]", null)).toEqual([
+    ["https://x.org/a[1]", "https://x.org/a[1]"],
+  ]);
   // Long runs of punctuation stay fast.
-  const long = `https://x.org/${".".repeat(50_000)}`;
-  expect(links(long, null)).toEqual([["https://x.org/", "https://x.org/"]]);
+  for (const tail of [".", ")"]) {
+    const long = `https://x.org/${tail.repeat(50_000)}`;
+    expect(links(long, null)).toEqual([["https://x.org/", "https://x.org/"]]);
+  }
 });
 
 it("keeps all of the text", () => {

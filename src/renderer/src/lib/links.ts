@@ -91,6 +91,35 @@ export type Segment = { readonly text: string; readonly href?: string; readonly 
 const URL_RE = /\bhttps?:\/\/[^\s<>"'`]+/g;
 /** Punctuation that ends a sentence rather than a URL. */
 const TRAILING = new Set(".,;:!?)]}");
+/** The closing bracket of each opening one. */
+const CLOSING: Readonly<Record<string, string>> = { "(": ")", "[": "]", "{": "}" };
+const CLOSERS = new Set(Object.values(CLOSING));
+
+/**
+ * The URL at the start of `s`, without the punctuation of the sentence around it. A closing
+ * bracket stays when the URL opened it: https://en.wikipedia.org/wiki/Git_(software).
+ */
+const trimUrl = (s: string) => {
+  // Opened minus closed, keyed by the closing bracket.
+  const balance = new Map<string, number>();
+  const count = (close: string, delta: number) =>
+    balance.set(close, (balance.get(close) ?? 0) + delta);
+  for (const c of s) {
+    if (CLOSING[c]) count(CLOSING[c], 1);
+    else if (CLOSERS.has(c)) count(c, -1);
+  }
+  let end = s.length;
+  while (end > 0 && TRAILING.has(s[end - 1]!)) {
+    const c = s[end - 1]!;
+    if (CLOSERS.has(c)) {
+      // A closing bracket the URL opened.
+      if (balance.get(c)! >= 0) break;
+      count(c, 1);
+    }
+    end--;
+  }
+  return s.slice(0, end);
+};
 /** `#12` or `!12`; what comes before and after is checked by `reference`. */
 const REF_RE = /[#!]\d+/g;
 const WORD = /\w/;
@@ -136,9 +165,7 @@ export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
   };
   let last = 0;
   for (const m of text.matchAll(URL_RE)) {
-    let end = m[0].length;
-    while (TRAILING.has(m[0][end - 1]!)) end--;
-    const url = m[0].slice(0, end);
+    const url = trimUrl(m[0]);
     plain(text.slice(last, m.index));
     out.push({ text: url, href: url });
     last = m.index + url.length;

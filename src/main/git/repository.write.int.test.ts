@@ -155,10 +155,12 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             .toString()
             .trim();
           try {
-            // A staged file edited since differs from both the index and the work tree.
+            // A staged file edited since differs from both the index and the work tree; a staged
+            // ignore rule matches a staged file, and an untracked one.
             yield* host.sh(
               "git init -q -b main . && echo a > a.txt && git add a.txt && echo b >> a.txt && " +
-                "echo u > u.txt",
+                "echo u > u.txt && printf 'a.txt\\n.env\\n' > .gitignore && git add .gitignore && " +
+                "echo s > .env",
               { cwd: dir },
             );
             const location: RepoLocation =
@@ -168,7 +170,10 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             const repo = yield* Repository.open(host, location, { onGraphProgress: () => {} });
             yield* repo.discardAll();
             const st = yield* repo.status();
-            expect([...st.staged, ...st.unstaged, ...st.conflicted]).toEqual([]);
+            expect([...st.staged, ...st.conflicted]).toEqual([]);
+            // Only the file that was ignored is left.
+            expect(st.unstaged.map((f) => [f.path, f.kind])).toEqual([[".env", "untracked"]]);
+            yield* host.sh("rm .env", { cwd: dir });
 
             // Untracked nested repositories are kept, and reported.
             yield* host.sh("mkdir nested && git -C nested init -q && echo n > nested/n.txt", {
