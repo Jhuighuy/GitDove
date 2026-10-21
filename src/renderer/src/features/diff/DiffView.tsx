@@ -90,9 +90,11 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   const stepRef = useRef(step);
   stepRef.current = step;
 
+  // Every repository tab stays mounted; only the visible one's diff takes keys.
+  const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isTextEntry(e.target)) return;
+      if (isTextEntry(e.target) || rootRef.current?.closest("[hidden]")) return;
       if (e.key === "Escape") {
         if (selectionRef.current.size > 0) setSelection(EMPTY_SELECTION);
         else close();
@@ -141,7 +143,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   };
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
+    <div ref={rootRef} className="flex h-full min-w-0 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
         <span className="min-w-0 truncate text-[13px]">
           {dirname(target.path) && (

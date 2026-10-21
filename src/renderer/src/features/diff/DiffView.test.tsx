@@ -202,3 +202,26 @@ it("steps through the files of its list with the up and down arrows", async () =
   act(() => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
   expect(open).not.toHaveBeenCalled();
 });
+
+it("leaves keys alone while its repository tab is hidden", async () => {
+  mocks.status = {
+    staged: [],
+    unstaged: [change("a.ts"), change("b.ts")],
+    conflicted: [],
+    truncated: false,
+  };
+  const open = vi.fn();
+  const { openDiff } = useRepoUiStore.getState();
+  useRepoUiStore.setState({ openDiff: open });
+  onTestFinished(() => useRepoUiStore.setState({ openDiff }));
+  await render("a.ts");
+  const press = (key: string) =>
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key })));
+  container.hidden = true;
+  press("ArrowDown");
+  press("Escape");
+  expect(open).not.toHaveBeenCalled();
+  container.hidden = false;
+  press("ArrowDown");
+  expect(open).toHaveBeenCalledTimes(1);
+});
