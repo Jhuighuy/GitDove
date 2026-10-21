@@ -162,6 +162,21 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             yield* repo.discardAll();
             const st = yield* repo.status();
             expect([...st.staged, ...st.unstaged, ...st.conflicted]).toEqual([]);
+
+            // Untracked nested repositories are kept, and reported.
+            yield* host.sh("mkdir nested && git -C nested init -q && echo n > nested/n.txt", {
+              cwd: dir,
+            });
+            const kept = yield* Effect.flip(repo.discardAll());
+            expect(kept.message).toContain("kept nested repositories: nested/");
+
+            // Nothing is discarded in the middle of a merge (or the like).
+            yield* host.sh("rm -rf nested && echo x > a.txt && touch .git/MERGE_HEAD", {
+              cwd: dir,
+            });
+            const merging = yield* Effect.flip(repo.discardAll());
+            expect(merging.message).toBe("Abort or finish the merging first");
+            expect((yield* repo.status()).unstaged.map((f) => f.path)).toEqual(["a.txt"]);
           } finally {
             yield* host.sh(`rm -rf -- '${dir}'`).pipe(Effect.ignore);
           }

@@ -929,12 +929,34 @@ export class Repository {
   discardAll() {
     return this.write(
       Effect.gen({ self: this }, function* () {
+        // In the middle of a merge or rebase, resetting would drop resolutions half way.
+        const { state } = yield* this.info();
+        if (state !== "clean") {
+          return yield* new InvalidInputError({
+            message: `Abort or finish the ${state.replace("-", " ")} first`,
+          });
+        }
         // Without commits, everything is new: unstage it so that `clean` deletes it (forced:
         // a staged file edited since differs from both the index and the work tree).
         yield* (yield* this.hasHead())
           ? this.run(["reset", "--hard", "-q"])
           : this.run(["rm", "--cached", "-r", "-q", "-f", "--ignore-unmatch", "."]);
         yield* this.run(["clean", "-f", "-d", "-q"]);
+        // `clean` keeps untracked nested repositories (unless forced twice): say so.
+        const kept = (yield* this.gitText([
+          "ls-files",
+          "--others",
+          "--exclude-standard",
+          "--directory",
+          "-z",
+        ]))
+          .split("\0")
+          .filter(Boolean);
+        if (kept.length > 0) {
+          return yield* new InvalidInputError({
+            message: `Discarded the other changes, but kept nested repositories: ${kept.join(", ")}`,
+          });
+        }
       }),
     );
   }

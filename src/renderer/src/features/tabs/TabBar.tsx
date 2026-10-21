@@ -38,11 +38,14 @@ export function TabBar() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
+      window.removeEventListener("blur", up);
       setDragging(null);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
+    // Released outside the window, the pointer may never come back up here.
+    window.addEventListener("blur", up);
   };
 
   return (

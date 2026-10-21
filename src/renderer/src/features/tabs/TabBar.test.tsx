@@ -109,4 +109,11 @@ it("reorders tabs by dragging them", async () => {
   await pointer(window, "pointerup", 260);
   await pointer(window, "pointermove", 0);
   expect(keys()).toEqual(["b", "c", "a"]);
+  // Leaving the window ends a drag too.
+  await pointer(tabs()[0]!, "pointerdown", 50);
+  await pointer(window, "pointermove", 160);
+  expect(keys()).toEqual(["c", "b", "a"]);
+  await act(async () => window.dispatchEvent(new Event("blur")));
+  await pointer(window, "pointermove", 260);
+  expect(keys()).toEqual(["c", "b", "a"]);
 });
