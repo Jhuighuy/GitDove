@@ -105,3 +105,19 @@ it("draws the WIP node with a dashed line down to HEAD", () => {
   expect(circle.getAttribute("cx")).toBe("46");
   expect(circle.getAttribute("stroke-dasharray")).toBe("3 2");
 });
+
+it("draws a line from the ref pills to the dot", () => {
+  render(
+    <GraphCell
+      row={row({ lane: 1, color: 2 })}
+      width={40}
+      isHead={false}
+      isStash={false}
+      wipAbove={false}
+      refLine
+    />,
+  );
+  const line = container.querySelector("path")!;
+  expect(line.getAttribute("d")).toBe(`M0 ${ROW_HEIGHT / 2}H30`);
+  expect(line.getAttribute("stroke")).toBe(laneColor(2));
+});
