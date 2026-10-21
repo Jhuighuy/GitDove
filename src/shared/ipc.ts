@@ -24,11 +24,17 @@ import type {
 
 export type ResetMode = "soft" | "mixed" | "hard";
 
+/** Editing commands of the focused text field or selection, as in the Edit menu. */
+export const EDIT_COMMANDS = ["undo", "redo", "cut", "copy", "paste", "selectAll"] as const;
+export type EditCommand = (typeof EDIT_COMMANDS)[number];
+
 export interface Api {
   // App / window
   "app.getState": () => AppState;
   "app.setState": (state: AppState) => void;
   "app.version": () => { version: string; platform: string };
+  /** Runs an Edit menu command in the focused window, e.g. from a text field's context menu. */
+  "app.edit": (command: EditCommand) => void;
   "dialog.pickDirectory": () => string | null;
   "shell.openTerminal": (repo: RepoId) => void;
   "shell.revealInFinder": (repo: RepoId, path?: string) => void;

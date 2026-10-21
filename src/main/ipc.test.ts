@@ -450,6 +450,18 @@ describe("registerIpc", () => {
     }
   });
 
+  it("runs edit commands in the window that asked", async () => {
+    registerIpc(runtime);
+    const handler = electron.ipcMain.handle.mock.lastCall![1] as Invoke;
+    const sender = { paste: vi.fn() };
+    expect(await handler({ sender }, "app.edit", ["paste"])).toEqual({ ok: true });
+    expect(sender.paste).toHaveBeenCalledOnce();
+    expect(await handler({ sender }, "app.edit", ["destroy"])).toMatchObject({
+      ok: false,
+      error: { tag: "InvalidInputError", message: "Unknown edit command: destroy" },
+    });
+  });
+
   it("returns values", async () => {
     expect(await invoke("app.version", [])).toEqual({
       ok: true,
