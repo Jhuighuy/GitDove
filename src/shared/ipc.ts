@@ -8,6 +8,7 @@
 import type {
   AppState,
   CommitDetails,
+  Comparison,
   DiffTarget,
   DirListing,
   FileDiff,
@@ -59,6 +60,8 @@ export interface Api {
   "repo.search": (repo: RepoId, query: string) => string[];
   "repo.status": (repo: RepoId) => WorkingStatus;
   "repo.commitDetails": (repo: RepoId, hash: string) => CommitDetails;
+  /** The changes from `base` (the empty tree when null) to `tip`. */
+  "repo.compare": (repo: RepoId, base: string | null, tip: string) => Comparison;
   "repo.diff": (repo: RepoId, target: DiffTarget) => FileDiff;
   "repo.fileVersions": (repo: RepoId, target: DiffTarget) => FileVersions;
 

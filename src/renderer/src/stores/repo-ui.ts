@@ -1,11 +1,26 @@
-import type { DiffTarget, RepoId } from "@shared/domain";
+import type { DiffTarget, GraphRow, RepoId } from "@shared/domain";
 import type { DiffViewId } from "@/features/diff/views";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+/** A selected commit and where it sits in the graph. */
+export interface PickedCommit {
+  readonly index: number;
+  readonly row: GraphRow;
+}
+
 export type Selection =
   | { readonly kind: "wip" }
-  | { readonly kind: "commit"; readonly hash: string };
+  | { readonly kind: "commit"; readonly hash: string }
+  /**
+   * Two or more commits, newest (topmost) first. `anchor` is the commit last clicked, where a
+   * Shift-click range starts.
+   */
+  | {
+      readonly kind: "commits";
+      readonly commits: readonly PickedCommit[];
+      readonly anchor: string;
+    };
 
 interface RepoUi {
   readonly selection: Selection | null;
@@ -44,8 +59,27 @@ export const useRepoUiStore = create<RepoUiState>()((set) => ({
     set((s) => ({ byRepo: { ...s.byRepo, [repo]: { ...(s.byRepo[repo] ?? EMPTY), diff } } })),
 }));
 
-const sameSelection = (a: Selection | null, b: Selection | null) =>
-  a?.kind === b?.kind && (a?.kind !== "commit" || a.hash === (b as typeof a).hash);
+const sameSelection = (a: Selection | null, b: Selection | null): boolean => {
+  if (!a || !b) return a === b;
+  if (a.kind === "commit") return b.kind === "commit" && a.hash === b.hash;
+  if (a.kind === "commits")
+    return (
+      b.kind === "commits" &&
+      a.commits.length === b.commits.length &&
+      a.commits.every((c, i) => c.row.hash === b.commits[i]!.row.hash)
+    );
+  return a.kind === b.kind;
+};
+
+/** Hashes of the selected commits. */
+export const selectedHashes = (selection: Selection | null): ReadonlySet<string> =>
+  new Set(
+    selection?.kind === "commit"
+      ? [selection.hash]
+      : selection?.kind === "commits"
+        ? selection.commits.map((c) => c.row.hash)
+        : [],
+  );
 
 export const useRepoUi = (repo: RepoId): RepoUi => useRepoUiStore((s) => s.byRepo[repo] ?? EMPTY);
 

@@ -171,6 +171,7 @@ export const handlers: Handlers = {
   "repo.search": (id, query) => withRepo(id, (r) => r.search(query)),
   "repo.status": (id) => withRepo(id, (r) => r.status()),
   "repo.commitDetails": (id, hash) => withRepo(id, (r) => r.commitDetails(hash)),
+  "repo.compare": (id, base, tip) => withRepo(id, (r) => r.compare(base, tip)),
   "repo.diff": (id, target) => withRepo(id, (r) => r.diff(target)),
   "repo.fileVersions": (id, target) => withRepo(id, (r) => r.fileVersions(target)),
 

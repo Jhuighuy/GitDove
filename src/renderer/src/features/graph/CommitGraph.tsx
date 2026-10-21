@@ -7,7 +7,7 @@ import type { AvatarProvider } from "@shared/avatars";
 import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Spinner } from "@/components/ui/spinner";
-import { api } from "@/lib/api";
+import { api, isMac } from "@/lib/api";
 import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
 import {
   useGraphInfo,
@@ -19,7 +19,7 @@ import {
 } from "@/lib/queries";
 import { laneColor } from "@/lib/graph-colors";
 import { cn } from "@/lib/utils";
-import { type Selection, useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
+import { type PickedCommit, selectedHashes, useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
 import { CommitContextMenu, type MenuTarget } from "./CommitContextMenu";
 import {
@@ -31,6 +31,7 @@ import {
   WipGraphCell,
 } from "./GraphCell";
 import { RefPills } from "./RefPills";
+import { rangeIndexes, selectionOf, toggled } from "./selection";
 
 interface ColumnsState {
   readonly refs: number;
@@ -143,12 +144,73 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealToken]);
 
+  const hashes = useMemo(() => selectedHashes(selection), [selection]);
+  // Arrows move on from the commit last clicked.
+  const anchor =
+    selection?.kind === "commit"
+      ? selection.hash
+      : selection?.kind === "commits"
+        ? selection.anchor
+        : null;
   const selectedIndex = useMemo(() => {
     if (selection?.kind === "wip") return 0;
-    if (selection?.kind !== "commit") return -1;
-    for (const [i, r] of rows) if (r.hash === selection.hash) return i + offset;
+    if (anchor === null) return -1;
+    for (const [i, r] of rows) if (r.hash === anchor) return i + offset;
     return -1;
-  }, [selection, rows, offset]);
+  }, [selection, anchor, rows, offset]);
+
+  // The platform key adds or removes a commit, Shift selects a range from the last clicked.
+  const press = async (row: GraphRow, index: number, e: React.MouseEvent) => {
+    const single = { kind: "commit", hash: row.hash } as const;
+    const toggle = isMac ? e.metaKey : e.ctrlKey;
+    if (!info || !(toggle || e.shiftKey) || anchor === null) return select(repo, single);
+    // A commit far off screen may not be loaded: ask for it.
+    const loaded = (i: number) => rows.get(i);
+    const fetchRows = async (from: number, to: number) => {
+      const out = new Map<number, GraphRow>();
+      let missing = false;
+      for (let i = from; i <= to; i++) {
+        const r = loaded(i);
+        if (r) out.set(i, r);
+        else missing = true;
+      }
+      if (missing) {
+        const fetched = await api("repo.graphRows", repo, info.version, from, to + 1);
+        fetched.forEach((r, j) => out.set(from + j, r));
+      }
+      return out;
+    };
+    const indexOf = async (hash: string) => {
+      for (const [i, r] of rows) if (r.hash === hash) return i;
+      return api("repo.findCommit", repo, info.version, hash);
+    };
+    try {
+      if (toggle) {
+        let picked: readonly PickedCommit[] = [];
+        if (selection?.kind === "commits") picked = selection.commits;
+        else if (selection?.kind === "commit") {
+          const i = await indexOf(selection.hash);
+          const r = i >= 0 ? (await fetchRows(i, i)).get(i) : undefined;
+          if (r) picked = [{ index: i, row: r }];
+        }
+        select(repo, selectionOf(toggled(picked, { index, row }), row.hash) ?? single);
+      } else {
+        const a = await indexOf(anchor);
+        if (a < 0) return select(repo, single);
+        const [from, to] = rangeIndexes(a, index);
+        const range = [...(await fetchRows(from, to))].map(([i, r]) => ({ index: i, row: r }));
+        select(repo, selectionOf(range, anchor) ?? single);
+      }
+    } catch {
+      select(repo, single);
+    }
+  };
+  const pressRef = useRef(press);
+  pressRef.current = press;
+  const onPress = useCallback(
+    (row: GraphRow, index: number, e: React.MouseEvent) => void pressRef.current(row, index, e),
+    [],
+  );
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -234,8 +296,9 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
                   isHead={row.hash === headHash}
                   isStash={stashes.has(row.hash)}
                   wipAbove={offset > 0 && index === 0 && row.hash === headHash}
-                  selected={selection?.kind === "commit" && selection.hash === row.hash}
-                  onSelect={select}
+                  index={index}
+                  selected={hashes.has(row.hash)}
+                  onPress={onPress}
                   onContextMenu={onRowContextMenu}
                   avatarProviders={avatarProviders}
                 />
@@ -362,8 +425,9 @@ interface CommitRowProps {
   readonly isHead: boolean;
   readonly isStash: boolean;
   readonly wipAbove: boolean;
+  readonly index: number;
   readonly selected: boolean;
-  readonly onSelect: (repo: RepoId, selection: Selection) => void;
+  readonly onPress: (row: GraphRow, index: number, e: React.MouseEvent) => void;
   readonly onContextMenu: (row: GraphRow) => void;
   readonly avatarProviders: readonly AvatarProvider[];
 }
@@ -378,7 +442,7 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
       className={rowClass(p.selected)}
       style={p.style}
       onMouseDown={(e) => {
-        if (e.button === 0) p.onSelect(p.repo, { kind: "commit", hash: row.hash });
+        if (e.button === 0) p.onPress(row, p.index, e);
       }}
       onContextMenu={() => p.onContextMenu(row)}
     >

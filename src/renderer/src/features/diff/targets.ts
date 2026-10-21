@@ -6,13 +6,14 @@ import {
   type WorkingStatus,
 } from "@shared/domain";
 import { useMemo } from "react";
-import { useCommitDetails, useStatus } from "@/lib/queries";
+import { useCommitDetails, useCompare, useStatus } from "@/lib/queries";
 
 /** A list of changed files that diffs are opened from. */
 export type FileSource =
   | { readonly kind: "unstaged" }
   | { readonly kind: "staged" }
-  | { readonly kind: "commit"; readonly hash: string };
+  /** A commit's files, or with `base`, those changed from `base` to the commit. */
+  | { readonly kind: "commit"; readonly hash: string; readonly base?: string };
 
 /** The diff of `file` in `source`. */
 export const fileTarget = (source: FileSource, file: FileChange): DiffTarget => {
@@ -22,7 +23,13 @@ export const fileTarget = (source: FileSource, file: FileChange): DiffTarget => 
     case "staged":
       return { kind: "staged", path: file.path, ...renameSource(file) };
     case "commit":
-      return { kind: "commit", hash: source.hash, path: file.path, ...renameSource(file) };
+      return {
+        kind: "commit",
+        hash: source.hash,
+        ...(source.base === undefined ? {} : { base: source.base }),
+        path: file.path,
+        ...renameSource(file),
+      };
   }
 };
 
@@ -57,22 +64,32 @@ export const workingFiles = (
 };
 
 const sourceOf = (target: DiffTarget): FileSource =>
-  target.kind === "commit" ? { kind: "commit", hash: target.hash } : { kind: target.kind };
+  target.kind === "commit"
+    ? {
+        kind: "commit",
+        hash: target.hash,
+        ...(target.base === undefined ? {} : { base: target.base }),
+      }
+    : { kind: target.kind };
 
 /**
  * The files listed alongside `target`, in the order the details panel shows them: a commit's
- * files, or the working tree's unstaged (conflicts first) or staged ones.
+ * (or a range of commits') files, or the working tree's unstaged (conflicts first) or staged ones.
  */
 export function useSiblingFiles(
   repo: RepoId,
   target: DiffTarget,
 ): { readonly source: FileSource; readonly files: readonly FileChange[] } {
-  const commit = useCommitDetails(repo, target.kind === "commit" ? target.hash : null).data;
+  const commitHash = target.kind === "commit" ? target.hash : null;
+  const base = target.kind === "commit" ? target.base : undefined;
+  const commit = useCommitDetails(repo, base === undefined ? commitHash : null).data;
+  const range = useCompare(repo, base ?? null, base === undefined ? null : commitHash).data;
+  const listed = base === undefined ? commit : range;
   const status = useStatus(repo).data;
   const source = useMemo(() => sourceOf(target), [target]);
   const files = useMemo((): readonly FileChange[] => {
-    if (source.kind === "commit") return commit?.files ?? [];
+    if (source.kind === "commit") return listed?.files ?? [];
     return status ? workingFiles(status, source.kind) : [];
-  }, [source, commit, status]);
+  }, [source, listed, status]);
   return { source, files };
 }

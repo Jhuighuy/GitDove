@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
+  isMac: true,
   api: async (method: string, ...args: unknown[]) => {
     mocks.api.push([method, ...args.slice(1)]);
     switch (method) {
@@ -398,4 +399,49 @@ it("ignores wide rows rendered below the viewport", async () => {
   expect(container.textContent).toContain("Commit 20");
   expect(width(headerCells()[1]!)).toBe(6 * 2 + 3 * 16);
   expect(container.querySelectorAll('[class*="after:bg-linear-to-l"]')).toHaveLength(0);
+});
+
+it("selects several commits with the platform key and Shift", async () => {
+  await render();
+  const click = (text: string, init: MouseEventInit = {}) =>
+    act(async () => {
+      rowOf(text).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, ...init }));
+    });
+  const picked = () => {
+    const s = selection();
+    return s?.kind === "commits" ? s.commits.map((c) => [c.index, c.row.hash]) : s;
+  };
+  const highlighted = () =>
+    ["Commit 0", "Commit 1", "Commit 2", "Commit 3", "Commit 4"].filter((t) =>
+      rowOf(t).className.includes("bg-primary/25"),
+    );
+
+  await click("Commit 3");
+  await click("Commit 1", { metaKey: true });
+  // Newest first, whatever the order of the clicks.
+  expect(picked()).toEqual([
+    [1, "c1"],
+    [3, "c3"],
+  ]);
+  expect(highlighted()).toEqual(["Commit 1", "Commit 3"]);
+  await click("Commit 3", { metaKey: true });
+  expect(selection()).toEqual({ kind: "commit", hash: "c1" });
+  // Removing the last one keeps it.
+  await click("Commit 1", { metaKey: true });
+  expect(selection()).toEqual({ kind: "commit", hash: "c1" });
+
+  // Shift selects from the commit last clicked.
+  await click("Commit 4", { shiftKey: true });
+  expect(picked()).toEqual([1, 2, 3, 4].map((i) => [i, `c${i}`]));
+  await click("Commit 0", { shiftKey: true });
+  expect(picked()).toEqual([
+    [0, "c0"],
+    [1, "c1"],
+  ]);
+  // Arrows go on from there with one commit; a plain click selects one too.
+  await key("ArrowDown");
+  expect(selection()).toEqual({ kind: "commit", hash: "c2" });
+  await click("Commit 4", { metaKey: true });
+  await click("Commit 0");
+  expect(selection()).toEqual({ kind: "commit", hash: "c0" });
 });

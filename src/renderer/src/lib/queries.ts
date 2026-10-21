@@ -37,6 +37,8 @@ export const keys = {
   graphPage: (repo: RepoId, version: number, page: number, size: number) =>
     [...keys.graphPages(repo, version, page), size] as const,
   commit: (repo: RepoId, hash: string) => ["repo", repo, "commit", hash] as const,
+  compare: (repo: RepoId, base: string | null, tip: string) =>
+    ["repo", repo, "compare", base, tip] as const,
   diff: (repo: RepoId, target: DiffTarget) => ["repo", repo, "diff", target] as const,
   // Under "diff" so that it goes stale together with diffs.
   fileVersions: (repo: RepoId, target: DiffTarget) =>
@@ -73,6 +75,16 @@ export const useCommitDetails = (repo: RepoId, hash: string | null) =>
     queryKey: keys.commit(repo, hash ?? ""),
     queryFn: () => api("repo.commitDetails", repo, hash!),
     enabled: hash !== null,
+    // Commits are immutable.
+    gcTime: 60 * 1000,
+  });
+
+/** The changes from `base` (the empty tree when null) to `tip`; null `tip` fetches nothing. */
+export const useCompare = (repo: RepoId, base: string | null, tip: string | null) =>
+  useQuery({
+    queryKey: keys.compare(repo, base, tip ?? ""),
+    queryFn: () => api("repo.compare", repo, base, tip!),
+    enabled: tip !== null,
     // Commits are immutable.
     gcTime: 60 * 1000,
   });

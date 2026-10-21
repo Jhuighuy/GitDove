@@ -428,6 +428,42 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     );
   });
 
+  it("compares commits, also from the empty tree", async () => {
+    await sh(
+      "echo x > x.txt && git add x.txt && git commit -qm x && echo y >> f.txt && git commit -qam y",
+    );
+    const tip = await head();
+    const base = await sh("git rev-parse HEAD~2");
+    const range = await run(repo.compare(base, tip));
+    expect(range.base).toBe(base);
+    expect(range.files.map((f) => [f.path, f.kind, f.additions])).toEqual([
+      ["f.txt", "modified", 1],
+      ["x.txt", "added", 1],
+    ]);
+    const all = await run(repo.compare(null, tip));
+    expect(all.base).toMatch(/^[0-9a-f]{40}$/);
+    expect(all.files.map((f) => f.path)).toEqual(["f.txt", "x.txt"]);
+    expect((await fails(repo.compare("-x", tip)))._tag).toBe("InvalidInputError");
+
+    // Diffs over the range, and from the empty tree.
+    const added = (d: { hunks: readonly { lines: readonly { kind: string; text: string }[] }[] }) =>
+      d.hunks.flatMap((h) => h.lines.filter((l) => l.kind === "add").map((l) => l.text));
+    expect(added(await run(repo.diff({ kind: "commit", hash: tip, base, path: "f.txt" })))).toEqual(
+      ["y"],
+    );
+    const fromNothing = await run(
+      repo.diff({ kind: "commit", hash: tip, base: all.base, path: "x.txt" }),
+    );
+    expect(added(fromNothing)).toEqual(["x"]);
+    const versions = await run(
+      repo.fileVersions({ kind: "commit", hash: tip, base, path: "x.txt" }),
+    );
+    expect(versions.old.kind).toBe("missing");
+    expect(
+      (await fails(repo.diff({ kind: "commit", hash: tip, base: "-x", path: "f.txt" })))._tag,
+    ).toBe("InvalidInputError");
+  });
+
   it("serves graph rows by version", async () => {
     let g = await run(repo.graphInfo());
     while (!g.complete) g = await run(repo.graphInfo());
