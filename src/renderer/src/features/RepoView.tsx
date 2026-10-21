@@ -15,6 +15,7 @@ import { DetailsPanel } from "./details/DetailsPanel";
 import { DiffView } from "./diff/DiffView";
 import { CommitGraph } from "./graph/CommitGraph";
 import { Sidebar } from "./sidebar/Sidebar";
+import { StatusBar } from "./statusbar/StatusBar";
 import { Toolbar } from "./toolbar/Toolbar";
 
 export function RepoView({ repo, active }: { repo: RepoId; active: boolean }) {
@@ -138,6 +139,7 @@ function RepoLayout({ repo, active }: { repo: RepoId; active: boolean }) {
           </>
         )}
       </ResizablePanelGroup>
+      <StatusBar repo={repo} />
     </div>
   );
 }

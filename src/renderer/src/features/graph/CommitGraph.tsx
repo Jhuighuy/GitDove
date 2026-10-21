@@ -254,11 +254,6 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
         </ContextMenuTrigger>
         <CommitContextMenu repo={repo} target={menu} stashes={refsData?.stashes ?? []} />
       </ContextMenu>
-      {info && !info.complete && info.count > 0 && (
-        <div className="text-muted-foreground border-t px-3 py-1 text-[11px] tabular-nums">
-          Loading history… {info.count.toLocaleString()} commits
-        </div>
-      )}
     </div>
   );
 }

@@ -9,12 +9,9 @@ import {
   IconPackageExport,
   IconPackageImport,
   IconRefresh,
-  IconServer,
   IconTerminal2,
-  IconX,
 } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,7 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api } from "@/lib/api";
 import { useRefs, useRepoInfo, useStatus } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { type Busy, busyReason, useBusy } from "@/stores/busy";
+import { busyReason, useBusy } from "@/stores/busy";
 import { useLayout } from "@/stores/repo-ui";
 import { commands } from "../commands";
 
@@ -82,30 +79,6 @@ function ToolButton({
   );
 }
 
-/** The running repository-changing operation, with a cancel button for network operations. */
-function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
-  return (
-    <output
-      className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs"
-      title={busy.label}
-    >
-      <Spinner className="size-3.5 shrink-0" role="presentation" aria-hidden />
-      <span className="truncate">{busy.label}</span>
-      {busy.cancellable && (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Cancel"
-          title="Cancel"
-          onClick={() => commands.cancel(repo)}
-        >
-          <IconX />
-        </Button>
-      )}
-    </output>
-  );
-}
-
 export function Toolbar({ repo }: { repo: RepoId }) {
   const { data: info } = useRepoInfo(repo);
   const { data: refs } = useRefs(repo);
@@ -117,20 +90,13 @@ export function Toolbar({ repo }: { repo: RepoId }) {
 
   const head = refs?.refs.find((r) => r.kind === "branch" && r.isHead);
   const dirty = status ? status.staged.length + status.unstaged.length > 0 : false;
-  const remote = info?.location.kind === "ssh" ? info.location.host : null;
 
   return (
     <div className="flex h-14 shrink-0 items-center gap-3 border-b px-3">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <div className="min-w-0">
-          <div className="text-muted-foreground flex items-center gap-1 text-[10px] tracking-wide uppercase">
+          <div className="text-muted-foreground text-[10px] tracking-wide uppercase">
             repository
-            {remote && (
-              <span className="flex items-center gap-0.5 rounded bg-sky-500/15 px-1 text-sky-400 normal-case">
-                <IconServer className="size-3" />
-                {remote}
-              </span>
-            )}
           </div>
           <div className="truncate text-sm font-semibold" title={info?.workTree}>
             {info?.name ?? "…"}
@@ -261,7 +227,6 @@ export function Toolbar({ repo }: { repo: RepoId }) {
       </div>
 
       <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
-        {busy && <BusyIndicator repo={repo} busy={busy} />}
         <Button
           variant="ghost"
           size="icon-sm"
