@@ -308,6 +308,25 @@ it("comes back where it was after being replaced (e.g. by a diff)", async () => 
   expect(mocks.api.filter(([m]) => m === "repo.findCommit")).toHaveLength(1);
 });
 
+it("reveals a commit again when the graph went away before finding it", async () => {
+  mocks.found = 3;
+  let release = () => {};
+  mocks.gate = new Promise((r) => (release = r));
+  await render();
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c3" }, true),
+  );
+  // Replaced (e.g. by a diff) while the commit is looked up.
+  await act(async () => root.unmount());
+  release();
+  await settle();
+  mocks.gate = null;
+  mocks.api = [];
+  root = createRoot(container);
+  await render();
+  expect(mocks.api).toContainEqual(["repo.findCommit", 1, "c3"]);
+});
+
 it("shows loading, empty and error states", async () => {
   mocks.info = { version: 1, count: 0, complete: false, maxLanes: 0 };
   await render("Loading history…");

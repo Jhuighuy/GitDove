@@ -92,6 +92,11 @@ const EMPTY_REFS: readonly Ref[] = [];
  * the scroll offset, the fitted graph width and the last reveal request it handled.
  */
 const views = new Map<RepoId, { scroll: number; fit: number; revealed: number }>();
+const viewOf = (repo: RepoId) => {
+  const v = views.get(repo) ?? { scroll: 0, fit: 0, revealed: 0 };
+  views.set(repo, v);
+  return v;
+};
 
 /** The commit last clicked in `selection`, where ranges and arrow keys start. */
 const anchorOf = (selection: Selection | null) =>
@@ -158,13 +163,8 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     setFitWidth(0);
   };
 
-  const view = () => {
-    let v = views.get(repo);
-    if (!v) views.set(repo, (v = { scroll: 0, fit: 0, revealed: 0 }));
-    return v;
-  };
   useEffect(() => {
-    view().fit = fitWidth;
+    viewOf(repo).fit = fitWidth;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo, fitWidth]);
 
@@ -172,21 +172,23 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   // back from a diff keeps the place instead.
   useEffect(() => {
     if (!revealToken || selection?.kind !== "commit" || !info) return;
-    if (view().revealed === revealToken) return;
-    view().revealed = revealToken;
+    if (viewOf(repo).revealed === revealToken) return;
     let cancelled = false;
     void api("repo.findCommit", repo, info.version, selection.hash).then(
       (index) => {
-        if (!cancelled && index >= 0)
-          virtualizer.scrollToIndex(index + offset, { align: "center" });
+        // Handled once it got here: a lookup cut short (e.g. by a diff) runs again.
+        if (cancelled) return;
+        viewOf(repo).revealed = revealToken;
+        if (index >= 0) virtualizer.scrollToIndex(index + offset, { align: "center" });
       },
       () => {},
     );
     return () => {
       cancelled = true;
     };
+    // A request made before the graph loaded waits for it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revealToken]);
+  }, [revealToken, !info]);
 
   const hashes = useMemo(() => selectedHashes(selection), [selection]);
   // Arrows move on from the commit last clicked.
@@ -337,7 +339,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
               tabIndex={0}
               onKeyDown={onKeyDown}
               onScroll={(e) => {
-                view().scroll = e.currentTarget.scrollTop;
+                viewOf(repo).scroll = e.currentTarget.scrollTop;
               }}
               className="relative min-h-0 flex-1 overflow-auto outline-none [contain:strict]"
             />
