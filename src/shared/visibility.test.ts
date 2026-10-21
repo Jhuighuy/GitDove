@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { isHidden, showNames, toggleHidden } from "./visibility";
+import {
+  authorKey,
+  isEmailHidden,
+  isFilteredOut,
+  isHidden,
+  personKey,
+  personOf,
+  setContributorFilter,
+  showNames,
+  toggleHidden,
+} from "./visibility";
 
 describe("visibility", () => {
   it("matches exact names and group prefixes", () => {
@@ -43,5 +53,50 @@ describe("visibility", () => {
     expect(
       toggleHidden(["refs/remotes/origin/", "refs/remotes/origin/main"], all[0]!, all),
     ).toEqual(["refs/remotes/origin/release/1", "refs/remotes/origin/release/2"]);
+  });
+
+  const people = {
+    "ann@x": { name: "Ann Lee", time: 0 },
+    "ann@corp": { name: "ann  lée", time: 0 },
+    "bob@x": { name: "Bob", time: 0 },
+  };
+  const owners = {
+    byRef: {
+      "refs/heads/a": ["ann@x"],
+      "refs/heads/b": ["bob@x"],
+      "refs/heads/ab": ["ann@corp", "bob@x"],
+    },
+    people,
+  };
+
+  it("groups emails by name", () => {
+    expect(personOf("  Ann  LÉE ")).toBe("ann lee");
+    const hidden = [personKey("ann lee")];
+    expect(isEmailHidden(hidden, "ann@x", people)).toBe(true);
+    expect(isEmailHidden(hidden, "ann@corp", people)).toBe(true);
+    expect(isEmailHidden(hidden, "bob@x", people)).toBe(false);
+    expect(isEmailHidden([authorKey("Bob@X")], "bob@x", people)).toBe(true);
+  });
+
+  it("filters branches whose owners are all hidden", () => {
+    expect(isFilteredOut([personKey("ann lee")], "refs/heads/a", owners)).toBe(true);
+    expect(isFilteredOut([personKey("ann lee")], "refs/heads/ab", owners)).toBe(false);
+    expect(isFilteredOut([personKey("ann lee"), authorKey("bob@x")], "refs/heads/ab", owners)).toBe(
+      true,
+    );
+    expect(isFilteredOut([personKey("ann lee")], "refs/heads/main", owners)).toBe(false);
+    // A branch's own entry does not matter.
+    expect(isFilteredOut([personKey("ann lee"), "refs/heads/a"], "refs/heads/a", owners)).toBe(
+      true,
+    );
+  });
+
+  it("replaces the contributor filter", () => {
+    const hidden = ["refs/heads/x", personKey("ann lee"), authorKey("bob@x")];
+    expect(setContributorFilter(hidden, [authorKey("ann@x")])).toEqual([
+      "refs/heads/x",
+      authorKey("ann@x"),
+    ]);
+    expect(setContributorFilter(hidden, [])).toEqual(["refs/heads/x"]);
   });
 });

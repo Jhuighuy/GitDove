@@ -13,7 +13,7 @@ import {
 import { useRefs, useRepoInfo } from "@/lib/queries";
 import { WriteMenuItem } from "@/components/busy";
 import { commands } from "../commands";
-import type { useVisibility } from "./visibility";
+import type { Contributor, useVisibility } from "./visibility";
 
 export type SidebarTarget =
   | { readonly kind: "branch"; readonly ref: Ref }
@@ -33,7 +33,16 @@ export type SidebarTarget =
   | { readonly kind: "stash"; readonly stash: Stash }
   | { readonly kind: "worktree"; readonly worktree: Worktree }
   | { readonly kind: "submodule"; readonly submodule: Submodule }
-  | { readonly kind: "section"; readonly section: "local" | "remote" | "tags" | "worktrees" };
+  | {
+      readonly kind: "contributor";
+      readonly contributor: Contributor;
+      /** One of their emails, for an email row. */
+      readonly email?: string;
+    }
+  | {
+      readonly kind: "section";
+      readonly section: "local" | "remote" | "tags" | "worktrees" | "contributors";
+    };
 
 interface Props {
   readonly repo: RepoId;
@@ -54,14 +63,30 @@ function VisibilityItems({ name, vis }: { readonly name: string; readonly vis: P
   return (
     <>
       <Sep />
-      <Item onClick={() => (hidden ? vis.show([name]) : vis.hide([name]))}>
-        {hidden ? "Show in graph" : "Hide from graph"}
-      </Item>
-      <Item onClick={() => vis.solo([name])}>Solo (hide everything else)</Item>
+      {vis.isFiltered(name) ? (
+        // Only showing its contributors brings the branch back.
+        <Item onClick={() => vis.showOwners(name)}>
+          Show {possessive(vis.ownersOf(name).map((c) => c.name))} branches
+        </Item>
+      ) : (
+        <>
+          <Item onClick={() => (hidden ? vis.show([name]) : vis.hide([name]))}>
+            {hidden ? "Show in graph" : "Hide from graph"}
+          </Item>
+          <Item onClick={() => vis.solo([name])}>Solo (hide everything else)</Item>
+        </>
+      )}
       {vis.anyHidden && <Item onClick={vis.showAll}>Show all</Item>}
     </>
   );
 }
+
+/** "Ann's", "Ann and Bob's", "Ann, Bob and Cid's". */
+const possessive = (names: readonly string[]): string => {
+  const list =
+    names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names.at(-1) : (names[0] ?? "");
+  return `${list}'s`;
+};
 
 function ResetItems({ repo, hash, head }: { repo: RepoId; hash: string; head: string }) {
   return (
@@ -100,7 +125,9 @@ function RemoteMenu({
   const members = (refs?.refs ?? [])
     .filter((x) => x.name.startsWith(prefix) && !x.short.endsWith("/HEAD"))
     .map((x) => x.name);
-  const allHidden = members.length > 0 && members.every((m) => vis.isHidden(m));
+  // Branches the contributor filter hides keep their state.
+  const active = members.filter((m) => !vis.isFiltered(m));
+  const allHidden = active.length > 0 && active.every((m) => vis.isHiddenByEye(m));
   return (
     <Menu>
       <WriteMenuItem repo={repo} onClick={() => void commands.fetchRemote(repo, r.name)}>
@@ -115,9 +142,11 @@ function RemoteMenu({
       </WriteMenuItem>
       <Item onClick={() => commands.copy(r.fetchUrl, "Remote URL copied")}>Copy URL</Item>
       <Sep />
-      <Item onClick={() => vis.toggleGroup(members, prefix)}>
-        {allHidden ? `Show ${r.name} branches` : `Hide ${r.name} branches`}
-      </Item>
+      {active.length > 0 && (
+        <Item onClick={() => vis.toggleGroup(members, prefix)}>
+          {allHidden ? `Show ${r.name} branches` : `Hide ${r.name} branches`}
+        </Item>
+      )}
       <Sep />
       <WriteMenuItem
         repo={repo}
@@ -130,6 +159,38 @@ function RemoteMenu({
   );
 }
 
+/** Contributor filter entries; `who` is the contributor the menu is for, if any. */
+function ContributorItems({
+  who,
+  vis,
+}: {
+  readonly who?: Contributor;
+  readonly vis: Props["vis"];
+}) {
+  const me = vis.contributors.find((c) => c.isMe);
+  const anyHidden = vis.contributors.some((c) => vis.contributorVisibility(c) !== "visible");
+  return (
+    <>
+      {who && (
+        <>
+          <Item onClick={() => vis.toggleContributor(who)}>
+            {vis.contributorVisibility(who) === "hidden"
+              ? `Show ${who.name}'s branches`
+              : `Hide ${who.name}'s branches`}
+          </Item>
+          <Item onClick={() => vis.soloContributors([who.person])}>
+            Show only {who.isMe ? "my" : `${who.name}'s`} branches
+          </Item>
+        </>
+      )}
+      {me && me !== who && (
+        <Item onClick={() => vis.soloContributors([me.person])}>Show only my branches</Item>
+      )}
+      {anyHidden && <Item onClick={vis.showAllContributors}>Show all contributors</Item>}
+    </>
+  );
+}
+
 function FolderMenu({
   target: { name, names, members, prefix },
   vis,
@@ -137,12 +198,16 @@ function FolderMenu({
   readonly target: Extract<SidebarTarget, { kind: "folder" }>;
   readonly vis: Props["vis"];
 }) {
-  const allHidden = names.length > 0 && names.every((n) => vis.isHidden(n));
+  // Branches the contributor filter hides keep their state.
+  const active = names.filter((n) => !vis.isFiltered(n));
+  const allHidden = active.length > 0 && active.every((n) => vis.isHiddenByEye(n));
   return (
     <Menu>
-      <Item onClick={() => vis.toggleGroup(names, prefix)}>
-        {allHidden ? `Show ${name} in graph` : `Hide ${name} from graph`}
-      </Item>
+      {active.length > 0 && (
+        <Item onClick={() => vis.toggleGroup(names, prefix)}>
+          {allHidden ? `Show ${name} in graph` : `Hide ${name} from graph`}
+        </Item>
+      )}
       <Item onClick={() => vis.solo(members)}>Solo {name} (hide everything else)</Item>
       {vis.anyHidden && <Item onClick={vis.showAll}>Show all</Item>}
     </Menu>
@@ -389,6 +454,32 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       );
     }
 
+    case "contributor": {
+      const c = target.contributor;
+      const email = target.email ?? (c.emails.length === 1 ? c.emails[0]!.email : undefined);
+      return (
+        <Menu>
+          {target.email && (
+            <>
+              <Item onClick={() => vis.toggleEmail(c, target.email!)}>
+                {vis.isEmailHidden(target.email)
+                  ? `Show ${target.email} branches`
+                  : `Hide ${target.email} branches`}
+              </Item>
+              <Sep />
+            </>
+          )}
+          <ContributorItems who={c} vis={vis} />
+          {email && (
+            <>
+              <Sep />
+              <Item onClick={() => commands.copy(email, "Email copied")}>Copy email</Item>
+            </>
+          )}
+        </Menu>
+      );
+    }
+
     case "section": {
       const names = (prefix: string) =>
         (refs?.refs ?? [])
@@ -398,9 +489,12 @@ export function SidebarMenu({ repo, target, vis }: Props) {
         const members = names(prefix);
         return (
           <>
-            <Item onClick={() => vis.show([prefix, ...members])}>Show all</Item>
+            <Item onClick={() => vis.showGroup(members, prefix)}>Show all</Item>
             <Item
-              onClick={() => (prefix === "refs/heads/" ? vis.hide(members) : vis.hide([prefix]))}
+              onClick={() =>
+                // New local branches stay visible.
+                prefix === "refs/heads/" ? vis.hideGroup(members) : vis.hideGroup(members, prefix)
+              }
             >
               Hide all
             </Item>
@@ -483,6 +577,13 @@ export function SidebarMenu({ repo, target, vis }: Props) {
               </WriteMenuItem>
               <Sep />
               {groupItems("refs/tags/")}
+            </Menu>
+          );
+        case "contributors":
+          return (
+            <Menu>
+              <ContributorItems vis={vis} />
+              {vis.contributors.length === 0 && <Item disabled>No contributors</Item>}
             </Menu>
           );
         case "worktrees":

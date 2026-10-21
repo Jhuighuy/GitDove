@@ -1,3 +1,4 @@
+import type { AvatarProvider } from "@shared/avatars";
 import type { Ref, Remote, RepoId, Stash, Submodule, Worktree } from "@shared/domain";
 import { stashKey } from "@shared/visibility";
 import {
@@ -5,6 +6,8 @@ import {
   IconBox,
   IconBrandBitbucket,
   IconBrandGithub,
+  IconChevronDown,
+  IconChevronRight,
   IconBrandGitlab,
   IconCloud,
   IconDeviceLaptop,
@@ -17,10 +20,13 @@ import {
   IconSearch,
   IconSquareCheckFilled,
   IconTag,
+  IconUserOff,
+  IconUsers,
 } from "@tabler/icons-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { useRefs, useRepoInfo } from "@/lib/queries";
@@ -29,24 +35,34 @@ import { commands } from "../commands";
 import { SectionStack } from "./SectionStack";
 import { SidebarMenu, type SidebarTarget } from "./SidebarMenu";
 import { buildTree, type TreeNode } from "./tree";
-import { useVisibility } from "./visibility";
+import { type Contributor, useVisibility } from "./visibility";
 
-type Visibility = "visible" | "hidden" | "partial" | "head" | "none";
+/** `filtered`: hidden by the contributor filter, which its own eye cannot change. */
+type Visibility = "visible" | "hidden" | "filtered" | "partial" | "head" | "none";
 
 interface FolderState {
   /** Collapsed branch folders, keyed by `folderKey` (default: expanded). */
   readonly collapsed: Readonly<Record<string, true>>;
+  /** Contributors whose emails are listed, keyed by `folderKey` (default: collapsed). */
+  readonly expanded: Readonly<Record<string, true>>;
   toggle(key: string): void;
+  toggleExpanded(key: string): void;
 }
 
 const useFolderStore = create<FolderState>()(
   persist(
     (set) => ({
       collapsed: {},
+      expanded: {},
       toggle: (key) =>
         set((s) => {
           const { [key]: was, ...rest } = s.collapsed;
           return { collapsed: was ? rest : { ...rest, [key]: true } };
+        }),
+      toggleExpanded: (key) =>
+        set((s) => {
+          const { [key]: was, ...rest } = s.expanded;
+          return { expanded: was ? rest : { ...rest, [key]: true } };
         }),
     }),
     { name: "gitdove.sidebar-folders" },
@@ -59,10 +75,13 @@ export function Sidebar({ repo }: { repo: RepoId }) {
   const { data } = useRefs(repo);
   const { data: info } = useRepoInfo(repo);
   const vis = useVisibility(repo);
+  const providers = useAvatarProviders(repo);
   const [filter, setFilter] = useState("");
   const [menu, setMenu] = useState<SidebarTarget | null>(null);
   const collapsed = useFolderStore((s) => s.collapsed);
   const toggleFolder = useFolderStore((s) => s.toggle);
+  const expanded = useFolderStore((s) => s.expanded);
+  const toggleExpanded = useFolderStore((s) => s.toggleExpanded);
 
   const f = filter.trim().toLowerCase();
   const match = (s: string) => !f || s.toLowerCase().includes(f);
@@ -97,9 +116,17 @@ export function Sidebar({ repo }: { repo: RepoId }) {
   const reveal = (hash: string) => commands.selectCommit(repo, hash);
 
   const refVisibility = (r: Ref): Visibility =>
-    r.isHead ? "head" : vis.isHidden(r.name) ? "hidden" : "visible";
-  const count = (names: readonly string[]) => {
-    const shown = names.filter((n) => !vis.isHidden(n)).length;
+    r.isHead
+      ? "head"
+      : vis.isFiltered(r.name)
+        ? "filtered"
+        : vis.isHidden(r.name)
+          ? "hidden"
+          : "visible";
+  const contributors = vis.contributors;
+  const ownersOf = (r: Ref) => vis.ownersOf(r.name);
+  const count = (names: readonly string[], hidden = vis.isHidden) => {
+    const shown = names.filter((n) => !hidden(n)).length;
     return shown === names.length ? (
       <span>{names.length}</span>
     ) : (
@@ -111,6 +138,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
   const all = vis.all;
   const visibleTotal = all.filter((n) => !vis.isHidden(n)).length;
   const groupVisibility = (names: readonly string[]): Visibility => {
+    if (names.length > 0 && names.every(vis.isFiltered)) return "filtered";
     const hiddenCount = names.filter((n) => vis.isHidden(n)).length;
     if (names.length === 0 || hiddenCount === 0) return "visible";
     return hiddenCount === names.length ? "hidden" : "partial";
@@ -194,6 +222,8 @@ export function Sidebar({ repo }: { repo: RepoId }) {
           label={label}
           title={r.short}
           icon={<IconGitBranch />}
+          owners={ownersOf(r)}
+          providers={providers}
           visibility={refVisibility(r)}
           onToggle={() => vis.toggle(r.name)}
           onClick={() => reveal(r.hash)}
@@ -234,6 +264,8 @@ export function Sidebar({ repo }: { repo: RepoId }) {
                 label={label}
                 title={r.short}
                 icon={<IconGitBranch />}
+                owners={ownersOf(r)}
+                providers={providers}
                 visibility={refVisibility(r)}
                 onToggle={() => vis.toggle(r.name)}
                 onClick={() => reveal(r.hash)}
@@ -243,6 +275,60 @@ export function Sidebar({ repo }: { repo: RepoId }) {
             ))}
           </div>
         );
+      }),
+    },
+    {
+      id: "contributors",
+      title: "Contributors",
+      icon: <IconUsers />,
+      count: count(
+        contributors.map((c) => c.person),
+        (person) =>
+          contributors.some(
+            (c) => c.person === person && vis.contributorVisibility(c) === "hidden",
+          ),
+      ),
+      onHeaderContextMenu: () => setMenu({ kind: "section", section: "contributors" }),
+      children: contributors.flatMap((c) => {
+        const emails = c.emails.filter((e) => match(e.email));
+        if (!match(c.name) && emails.length === 0) return [];
+        const multi = c.emails.length > 1;
+        const key = folderKey(repo, `contributor:${c.person}`);
+        // Searching by email shows the matching emails.
+        const open = multi && (expanded[key] || (!!f && emails.length > 0 && !match(c.name)));
+        return [
+          <ContributorItem
+            key={c.person}
+            contributor={c}
+            providers={providers}
+            open={multi ? open : undefined}
+            visibility={vis.contributorVisibility(c)}
+            onToggle={() => vis.toggleContributor(c)}
+            onClick={() => multi && toggleExpanded(key)}
+            onContextMenu={() => setMenu({ kind: "contributor", contributor: c })}
+          />,
+          ...(open
+            ? (f && !match(c.name) ? emails : c.emails).map((e) => (
+                <Item
+                  key={`${c.person}\n${e.email}`}
+                  depth={1}
+                  icon={<Avatar name={e.name} email={e.email} providers={providers} size={14} />}
+                  label={e.email}
+                  title={e.email}
+                  visibility={vis.isEmailHidden(e.email) ? "hidden" : "visible"}
+                  trailing={
+                    <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
+                      {e.branches}
+                    </span>
+                  }
+                  onToggle={() => vis.toggleEmail(c, e.email)}
+                  onContextMenu={() =>
+                    setMenu({ kind: "contributor", contributor: c, email: e.email })
+                  }
+                />
+              ))
+            : []),
+        ];
       }),
     },
     {
@@ -384,6 +470,8 @@ interface ItemProps {
   readonly label: string;
   readonly depth?: number;
   readonly visibility?: Visibility;
+  /** Who hides a `filtered` item, for its tooltip. */
+  readonly filteredBy?: string;
   readonly active?: boolean;
   readonly trailing?: ReactNode;
   readonly title?: string;
@@ -398,6 +486,7 @@ function Item({
   label,
   depth = 0,
   visibility = "none",
+  filteredBy,
   active,
   trailing,
   title,
@@ -406,7 +495,7 @@ function Item({
   onDoubleClick,
   onContextMenu,
 }: ItemProps) {
-  const dim = visibility === "hidden";
+  const dim = visibility === "hidden" || visibility === "filtered";
   return (
     <div
       className={cn(
@@ -418,7 +507,7 @@ function Item({
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
     >
-      <VisibilityToggle visibility={visibility} onToggle={onToggle} />
+      <VisibilityToggle visibility={visibility} filteredBy={filteredBy} onToggle={onToggle} />
       <span
         className={cn("text-muted-foreground flex", dim && "opacity-50")}
         style={{ marginLeft: depth * 14 }}
@@ -435,9 +524,11 @@ function Item({
 
 function VisibilityToggle({
   visibility,
+  filteredBy = "their contributors",
   onToggle,
 }: {
   visibility: Visibility;
+  filteredBy?: string;
   onToggle?: () => void;
 }) {
   if (visibility === "none") return <span className="w-5 shrink-0" />;
@@ -452,6 +543,16 @@ function VisibilityToggle({
     );
   }
   const off = visibility === "hidden" || visibility === "partial";
+  if (visibility === "filtered") {
+    return (
+      <span
+        className="text-muted-foreground flex w-5 shrink-0 justify-center"
+        title={`Hidden with ${filteredBy}`}
+      >
+        <IconUserOff />
+      </span>
+    );
+  }
   return (
     <button
       type="button"
@@ -474,20 +575,85 @@ function VisibilityToggle({
 function RefItem({
   refItem: r,
   label,
+  owners = [],
+  providers = [],
   ...rest
-}: Omit<ItemProps, "label" | "active" | "trailing"> & { refItem: Ref; label?: string }) {
+}: Omit<ItemProps, "label" | "active" | "trailing"> & {
+  refItem: Ref;
+  label?: string;
+  /** Who works on the branch, most commits first. */
+  owners?: readonly Contributor[];
+  providers?: readonly AvatarProvider[];
+}) {
   const track = r.upstreamGone
     ? "gone"
     : [r.ahead ? r.ahead + "↑" : "", r.behind ? r.behind + "↓" : ""].join(" ").trim();
+  const owner = owners[0];
   return (
     <Item
       {...rest}
+      filteredBy={owners.map((o) => o.name).join(", ")}
       label={label ?? r.short}
       active={r.isHead}
       trailing={
-        track && (
-          <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">{track}</span>
-        )
+        <>
+          {track && (
+            <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">{track}</span>
+          )}
+          {owner && (
+            <span
+              className={cn("flex shrink-0", rest.visibility === "filtered" && "opacity-50")}
+              title={`By ${owners.map((o) => o.name).join(", ")}`}
+            >
+              <Avatar name={owner.name} email={owner.avatarEmail} providers={providers} size={14} />
+            </span>
+          )}
+        </>
+      }
+    />
+  );
+}
+
+function ContributorItem({
+  contributor: c,
+  providers,
+  open,
+  ...rest
+}: Omit<ItemProps, "label" | "icon" | "trailing"> & {
+  contributor: Contributor;
+  providers: readonly AvatarProvider[];
+  /** Whether the emails are listed, for a contributor with several. */
+  open: boolean | undefined;
+}) {
+  const dim = rest.visibility === "hidden";
+  return (
+    <Item
+      {...rest}
+      icon={
+        <span className={cn("flex", dim && "grayscale")}>
+          <Avatar name={c.name} email={c.avatarEmail} providers={providers} size={14} />
+        </span>
+      }
+      label={c.name}
+      title={c.emails.map((e) => e.email).join(", ")}
+      trailing={
+        <>
+          {c.isMe && <span className="text-muted-foreground shrink-0 text-[10px]">you</span>}
+          {open !== undefined && (
+            <span
+              className="text-muted-foreground flex shrink-0"
+              title={`${c.emails.length} emails`}
+            >
+              {open ? <IconChevronDown /> : <IconChevronRight />}
+            </span>
+          )}
+          <span
+            className="text-muted-foreground shrink-0 text-[10px] tabular-nums"
+            title={`${c.branches} ${c.branches === 1 ? "branch" : "branches"}`}
+          >
+            {c.branches}
+          </span>
+        </>
       }
     />
   );

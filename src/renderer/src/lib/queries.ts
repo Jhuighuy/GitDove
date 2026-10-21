@@ -8,7 +8,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { isHidden } from "@shared/visibility";
+import { isFilteredOut, isHidden } from "@shared/visibility";
 import { api, ApiError, useEvent } from "./api";
 
 export const queryClient = new QueryClient({
@@ -172,7 +172,7 @@ const placeholderPage = (client: QueryClient, repo: RepoId, version: number, pag
   return undefined;
 };
 
-/** Index of refs by commit hash, without refs hidden from the graph. */
+/** Index of refs by commit hash, without refs hidden from the graph (by their eye or contributors). */
 export const useRefsByHash = (repo: RepoId) => {
   const { data } = useRefs(repo);
   const { data: hidden } = useQuery({
@@ -184,7 +184,12 @@ export const useRefsByHash = (repo: RepoId) => {
     const hiddenSet = new Set(hidden ?? []);
     for (const ref of data?.refs ?? []) {
       // The graph always shows HEAD, so the checked-out branch keeps its pill (and its tick).
-      if (!ref.isHead && hiddenSet.size > 0 && isHidden(hiddenSet, ref.name)) continue;
+      if (
+        !ref.isHead &&
+        hiddenSet.size > 0 &&
+        (isHidden(hiddenSet, ref.name) || isFilteredOut(hiddenSet, ref.name, data!.owners))
+      )
+        continue;
       let list = map.get(ref.hash);
       if (!list) {
         list = [];

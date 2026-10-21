@@ -79,6 +79,7 @@ const refs = (extra: Partial<RefsSnapshot> = {}): RefsSnapshot => ({
   remotes: [],
   worktrees: [],
   submodules: [],
+  owners: { byRef: {}, people: {}, me: { email: null, name: null } },
   ...extra,
 });
 

@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { GraphInfo, RepoLocation } from "@shared/domain";
 import { SshError } from "../exec/errors";
 import { type Host, Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
+import { authorKey, personKey } from "@shared/visibility";
 import { Repository } from "./repository";
 
 const targets: string[] = [LOCAL_HOST];
@@ -477,6 +478,39 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     expect((await fails(repo.findCommit(g.version + 1, rows[0]!.hash)))._tag).toBe(
       "StaleGraphError",
     );
+  });
+
+  it("finds branch owners and filters the graph by contributor", async () => {
+    const commitAs = (branch: string, who: string) =>
+      `git checkout -q -b ${branch} main && git -c user.name=${who} -c user.email=${who}@x ` +
+      `commit -q --allow-empty -m ${branch}`;
+    // An unpushed commit on main is not part of the branches made from it.
+    await sh(
+      "git -c user.name=Zed -c user.email=zed@x commit -q --allow-empty -m local && " +
+        `${commitAs("ann", "Ann")} && ${commitAs("bob", "Bob")} && git checkout -q main`,
+    );
+    const { owners } = await run(repo.refs());
+    expect(owners.byRef).toEqual({ "refs/heads/ann": ["ann@x"], "refs/heads/bob": ["bob@x"] });
+    expect(owners.people["ann@x"]?.name).toBe("Ann");
+    expect(owners.people["bob@x"]?.name).toBe("Bob");
+    expect(owners.me).toEqual({ email: "t@x", name: "T" });
+
+    let version = 0;
+    /** Rows in the next complete graph. */
+    const count = async () => {
+      let g = await run(repo.graphInfo());
+      while (!g.complete || g.version <= version) {
+        await new Promise((r) => setTimeout(r, 10));
+        g = await run(repo.graphInfo());
+      }
+      version = g.version;
+      return g.count;
+    };
+    expect(await count()).toBe(5);
+    repo.setHiddenRefs([authorKey("ann@x")]);
+    expect(await count()).toBe(4);
+    repo.setHiddenRefs([personKey("bob")]);
+    expect(await count()).toBe(4);
   });
 
   describe("remotes", () => {

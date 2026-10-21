@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { Ref, RefsSnapshot } from "@shared/domain";
-import { stashKey } from "@shared/visibility";
+import { authorKey, personKey, stashKey } from "@shared/visibility";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -84,6 +84,18 @@ const base: RefsSnapshot = {
     { path: "libs/a", hash: "a", status: "ok" },
     { path: "libs/b", hash: "b", status: "uninitialized" },
   ],
+  owners: {
+    byRef: {
+      "refs/heads/feature": ["ann@x", "ann@corp"],
+      "refs/remotes/origin/feature": ["bob@x"],
+    },
+    people: {
+      "ann@x": { name: "Ann", time: 2 },
+      "ann@corp": { name: "Ann", time: 1 },
+      "bob@x": { name: "Bob", time: 1 },
+    },
+    me: { email: "ann@x", name: "Ann" },
+  },
 };
 let snapshot = base;
 
@@ -457,4 +469,36 @@ it("filters worktrees, stashes and submodules", async () => {
   expect(document.querySelector('[title="libs/a"]')).toBeNull();
   expect(document.querySelector('[title="/repo"]')).toBeNull();
   expect(document.querySelector('[title="stash@{0}: WIP on main"]')).toBeNull();
+});
+
+it("filters branches by contributor", async () => {
+  await render();
+  const ann = row("ann@x, ann@corp");
+  expect(ann.textContent).toContain("you");
+  await menu(row("bob@x"), "Hide Bob's branches");
+  await menu(header("Contributors"), "Show only my branches");
+  await menu(row("bob@x"), "Copy email");
+  // Ann's emails are listed on request.
+  expect(document.querySelector('[title="ann@corp"]')).toBeNull();
+  await fire(ann, "click");
+  await menu(row("ann@corp"), "Hide ann@corp branches");
+  expect(mocks.setHidden).toEqual([
+    [personKey("bob")],
+    [personKey("bob")],
+    [personKey("bob"), authorKey("ann@corp")],
+  ]);
+  expect(mocks.commands).toEqual([["copy", "bob@x", "Email copied"]]);
+});
+
+it("locks the branches of hidden contributors", async () => {
+  await render(base, [personKey("bob"), "refs/remotes/origin/feature"]);
+  expect(document.body.textContent).toContain("Viewing 5/6");
+  const lock = row("origin/feature").querySelector<HTMLElement>('[title="Hidden with Bob"]')!;
+  expect(lock.tagName).toBe("SPAN");
+  await act(async () => lock.click());
+  await fire(row("origin/feature"), "contextmenu");
+  expect(items()).not.toContain("Solo (hide everything else)");
+  await act(async () => item("Show Bob's branches").click());
+  // The branch's own eye is remembered.
+  expect(mocks.setHidden).toEqual([["refs/remotes/origin/feature"]]);
 });

@@ -300,6 +300,11 @@ it("indexes refs by hash, without hidden refs", async () => {
           remotes: [],
           worktrees: [],
           submodules: [],
+          owners: {
+            byRef: { "refs/heads/topic": ["ann@x"] },
+            people: { "ann@x": { name: "Ann", time: 0 } },
+            me: { email: null, name: null },
+          },
         }
       : hidden,
   );
@@ -314,6 +319,14 @@ it("indexes refs by hash, without hidden refs", async () => {
   hidden = ["refs/remotes/", "refs/heads/topic"];
   const second = await renderHook(() => q.useRefsByHash(`${repo}2`), null);
   await until(() => expect(names(second.result.current)).toEqual({ h1: ["main", "v1"] }));
+
+  // Branches of hidden contributors lose their pills too.
+  client.clear();
+  hidden = ["person:ann"];
+  const third = await renderHook(() => q.useRefsByHash(`${repo}3`), null);
+  await until(() =>
+    expect(names(third.result.current)).toEqual({ h1: ["main", "v1", "origin/main"] }),
+  );
 });
 
 it("keeps the checked-out branch even when it is hidden", async () => {
@@ -330,6 +343,7 @@ it("keeps the checked-out branch even when it is hidden", async () => {
           remotes: [],
           worktrees: [],
           submodules: [],
+          owners: { byRef: {}, people: {}, me: { email: null, name: null } },
         }
       : ["refs/heads/"],
   );

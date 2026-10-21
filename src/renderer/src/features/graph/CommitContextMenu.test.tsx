@@ -21,7 +21,14 @@ vi.mock("@/lib/api", () => ({
       case "repo.info":
         return { workTree: "/repo", head: { branch: "main", hash: "h", detached: false } };
       case "repo.refs":
-        return { refs: [], stashes: [], remotes: [], worktrees: [], submodules: [] };
+        return {
+          refs: [],
+          stashes: [],
+          remotes: [],
+          worktrees: [],
+          submodules: [],
+          owners: { byRef: {}, people: {}, me: { email: null, name: null } },
+        };
       case "repo.hiddenRefs":
         return [];
       case "repo.setHiddenRefs":
