@@ -267,6 +267,9 @@ function CommitBox({ repo, stagedCount }: { repo: RepoId; stagedCount: number })
     if (!draft.amend || draft.summary || draft.description) return;
     api("repo.lastCommitMessage", repo).then(
       (msg) => {
+        // Keep what the user typed (or unchecked) while the message was loading.
+        const now = useDrafts.getState().drafts[repo];
+        if (!now?.amend || now.summary || now.description) return;
         const [summary = "", ...rest] = msg.split("\n");
         setDraft(repo, { summary, description: rest.join("\n").replace(/^\n+/, "") });
       },
