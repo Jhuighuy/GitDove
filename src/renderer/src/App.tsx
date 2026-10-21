@@ -6,7 +6,7 @@ import { DialogHost } from "./features/dialogs/dialogs";
 import { OpenRepoPage, RemoteRepoDialog, useOpenCommands } from "./features/open/OpenRepo";
 import { RepoView } from "./features/RepoView";
 import { TabBar } from "./features/tabs/TabBar";
-import { UpdateNotifier } from "./features/UpdateNotifier";
+import { StatusBar } from "./features/statusbar/StatusBar";
 
 export function App() {
   const { tabs, active, loaded, load } = useTabs();
@@ -39,9 +39,9 @@ export function App() {
           </div>
         ))}
       </main>
+      <StatusBar repo={tabs.find((t) => t.key === active)?.repo ?? null} />
       <DialogHost />
       <RemoteRepoDialog />
-      <UpdateNotifier />
     </div>
   );
 }

@@ -154,7 +154,8 @@ export const useRefsByHash = (repo: RepoId) => {
     const map = new Map<string, Ref[]>();
     const hiddenSet = new Set(hidden ?? []);
     for (const ref of data?.refs ?? []) {
-      if (hiddenSet.size > 0 && isHidden(hiddenSet, ref.name)) continue;
+      // The graph always shows HEAD, so the checked-out branch keeps its pill (and its tick).
+      if (!ref.isHead && hiddenSet.size > 0 && isHidden(hiddenSet, ref.name)) continue;
       let list = map.get(ref.hash);
       if (!list) {
         list = [];

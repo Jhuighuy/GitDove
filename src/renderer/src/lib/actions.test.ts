@@ -26,6 +26,8 @@ vi.mock("./api", () => {
 
 const { refuseWhileBusy, runAction } = await import("./actions");
 const { busyOf } = await import("@/stores/busy");
+const { useStatusStore } = await import("@/stores/status");
+const notice = () => useStatusStore.getState().notices[repo];
 const { ApiError } = (await import("./api")) as unknown as {
   ApiError: new (message: string, tag: string, detail?: string) => Error;
 };
@@ -36,6 +38,7 @@ const repo = "local:/repo";
 let invalidated: unknown[][];
 beforeEach(() => {
   vi.clearAllMocks();
+  useStatusStore.setState({ notices: {}, activities: [] });
   invalidated = [];
   vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async (f) => {
     invalidated.push([...(f?.queryKey ?? [])]);
@@ -44,26 +47,22 @@ beforeEach(() => {
 
 it("returns the result and refreshes the repository", async () => {
   await expect(runAction(repo, "Stage", async () => 42)).resolves.toBe(42);
-  expect(mocks.toast.loading).not.toHaveBeenCalled();
-  expect(mocks.toast.success).not.toHaveBeenCalled();
+  expect(notice()).toBeUndefined();
   expect(invalidated).toEqual([[...keys.info(repo)], [...keys.refs(repo)], [...keys.status(repo)]]);
 });
 
-it("shows progress, then success in the same toast", async () => {
+it("reports success in the status bar, not in a toast", async () => {
   await runAction(repo, "Pull", async () => {}, { progress: "Pulling…", success: "Pulled" });
-  expect(mocks.toast.loading).toHaveBeenCalledWith("Pulling…");
-  expect(mocks.toast.success).toHaveBeenCalledWith("Pulled", { id: "toast-1" });
-  expect(mocks.toast.dismiss).not.toHaveBeenCalled();
+  expect(notice()).toMatchObject({ text: "Pulled", kind: "success" });
+  // Progress shows in the status bar too (see the busy state), never as a toast.
+  for (const kind of ["loading", "success", "info", "dismiss"] as const) {
+    expect(mocks.toast[kind]).not.toHaveBeenCalled();
+  }
 });
 
-it("dismisses the progress toast when there is no success message", async () => {
+it("leaves no notice without a success message", async () => {
   await runAction(repo, "Fetch", async () => {}, { progress: "Fetching…" });
-  expect(mocks.toast.dismiss).toHaveBeenCalledWith("toast-1");
-});
-
-it("shows success without a progress toast", async () => {
-  await runAction(repo, "Stash", async () => {}, { success: "Stashed" });
-  expect(mocks.toast.success).toHaveBeenCalledWith("Stashed", { id: undefined });
+  expect(notice()).toBeUndefined();
 });
 
 it("reports failures as error toasts and still refreshes", async () => {
@@ -76,8 +75,8 @@ it("reports failures as error toasts and still refreshes", async () => {
     { progress: "Pushing…" },
   );
   expect(result).toBeUndefined();
+  // Errors need attention: they stay toasts.
   expect(mocks.toast.error).toHaveBeenCalledWith("Push failed", {
-    id: "toast-1",
     description: "push rejected\n\n! [rejected] main -> main",
     duration: 10000,
   });
@@ -90,7 +89,7 @@ it("does not repeat a detail that equals the message", async () => {
   });
   expect(mocks.toast.error).toHaveBeenCalledWith(
     "Merge failed",
-    expect.objectContaining({ id: undefined, description: "conflict" }),
+    expect.objectContaining({ description: "conflict" }),
   );
 });
 
@@ -157,7 +156,8 @@ it("reports a cancelled action without an error", async () => {
     },
     { progress: "Fetching…", cancellable: true },
   );
-  expect(mocks.toast.info).toHaveBeenCalledWith("Fetch cancelled", { id: "toast-1" });
+  expect(notice()).toMatchObject({ text: "Fetch cancelled", kind: "info" });
   expect(mocks.toast.error).not.toHaveBeenCalled();
+  expect(mocks.toast.info).not.toHaveBeenCalled();
   expect(busyOf(repo)).toBeNull();
 });

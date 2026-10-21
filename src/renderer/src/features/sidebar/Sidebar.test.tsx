@@ -171,6 +171,31 @@ it("collapses folders, but not while filtering", async () => {
   expect(has("release/2023.0")).toBe(true);
 });
 
+it("marks a collapsed folder that contains the checked-out branch", async () => {
+  const snap: RefsSnapshot = {
+    ...base,
+    refs: base.refs.map((r) =>
+      r.kind === "branch" ? { ...r, isHead: r.short === "release/2023.1" } : r,
+    ),
+  };
+  await render([], snap);
+  const marker = () => row("release/").querySelector('[title="Contains the checked-out branch"]');
+  // Open: the branch itself shows its check.
+  expect(marker()).toBeNull();
+  await click(row("release/"));
+  expect(has("release/2023.1")).toBe(false);
+  expect(marker()).not.toBeNull();
+  expect(row("release/").className).toContain("font-semibold");
+  // Screen readers get it as text, not just the icon's title.
+  expect(marker()!.querySelector(".sr-only")?.textContent).toBe("Contains the checked-out branch");
+  // Its visibility toggle stays available.
+  expect(row("release/").querySelector('button[title="Hide from graph"]')).not.toBeNull();
+  // Opening it again shows the branch with its check instead.
+  await click(row("release/"));
+  expect(marker()).toBeNull();
+  expect(has("release/2023.1")).toBe(true);
+});
+
 it("hides local folders branch by branch and remote folders by prefix", async () => {
   await render();
   await eye("release/");

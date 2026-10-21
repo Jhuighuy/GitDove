@@ -292,8 +292,7 @@ it("shows progress while history is still streaming in", async () => {
   mocks.rows = Array.from({ length: 3 }, (_, i) => commit(i));
   mocks.info = { version: 1, count: 1234, complete: false, maxLanes: 2 };
   await render();
-  expect(container.textContent).toContain("Loading history… 1,234 commits");
-  // Rows that have not arrived yet are drawn as placeholders.
+  // Rows that have not arrived yet are drawn as placeholders (the status bar shows progress).
   expect(container.querySelectorAll(".bg-muted\\/50").length).toBeGreaterThan(0);
 });
 

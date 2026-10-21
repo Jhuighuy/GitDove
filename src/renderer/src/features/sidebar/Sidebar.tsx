@@ -134,6 +134,8 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       const key = folderKey(repo, n.prefix);
       const open = !!f || !collapsed[key];
       const prefix = byPrefix ? n.prefix : undefined;
+      // A collapsed folder stands in for the checked-out branch inside it.
+      const hidesHead = !open && n.items.some((r) => r.isHead);
       return [
         <Item
           key={n.prefix}
@@ -141,12 +143,24 @@ export function Sidebar({ repo }: { repo: RepoId }) {
           icon={open ? <IconFolderOpen /> : <IconFolder />}
           label={n.name}
           title={n.prefix.replace(/^refs\/(heads|remotes)\//, "")}
+          active={hidesHead}
           visibility={groupVisibility(names)}
           trailing={
             !open && (
-              <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
-                {n.items.length}
-              </span>
+              <>
+                {hidesHead && (
+                  <span
+                    className="flex shrink-0 text-emerald-500"
+                    title="Contains the checked-out branch"
+                  >
+                    <IconSquareCheckFilled aria-hidden />
+                    <span className="sr-only">Contains the checked-out branch</span>
+                  </span>
+                )}
+                <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
+                  {n.items.length}
+                </span>
+              </>
             )
           }
           onToggle={() => vis.toggleGroup(names, prefix)}

@@ -35,8 +35,11 @@ const { commands } = await import("./commands");
 const { keys, queryClient } = await import("@/lib/queries");
 const { useRepoUiStore } = await import("@/stores/repo-ui");
 const { useBusyStore } = await import("@/stores/busy");
+const { APP, useStatusStore } = await import("@/stores/status");
 
 const repo = "local:/work/repo";
+/** The status bar's notice for the repository (or the app). */
+const noticeText = (scope = repo) => useStatusStore.getState().notices[scope]?.text;
 
 const ref = (name: string, extra: Partial<Ref> = {}): Ref => {
   const remote = name.startsWith("refs/remotes/") ? name.split("/")[2]! : null;
@@ -81,6 +84,7 @@ const methods = () => mocks.api.mock.calls.map(([m]) => m as string);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useStatusStore.setState({ notices: {}, activities: [] });
   queryClient.clear();
   mocks.api.mockResolvedValue(undefined);
   mocks.confirm.mockResolvedValue(true);
@@ -140,30 +144,30 @@ it("runs simple commands with their api calls", async () => {
   }
 });
 
-it("shows progress and success toasts", async () => {
+it("reports results in the status bar, not in toasts", async () => {
   await commands.fetch(repo);
-  expect(mocks.toast.loading).toHaveBeenCalledWith("Fetching…");
-  expect(mocks.toast.dismiss).toHaveBeenCalledWith("t");
+  expect(noticeText()).toBeUndefined();
   await commands.cherryPick(repo, "0123456789");
-  expect(mocks.toast.success).toHaveBeenCalledWith("Cherry-picked 0123456", { id: undefined });
+  expect(noticeText()).toBe("Cherry-picked 0123456");
   await commands.revert(repo, "abcdef0123");
-  expect(mocks.toast.success).toHaveBeenCalledWith("Reverted abcdef0", { id: undefined });
+  expect(noticeText()).toBe("Reverted abcdef0");
   await commands.stash(repo);
-  expect(mocks.toast.success).toHaveBeenCalledWith("Changes stashed", { id: undefined });
+  expect(noticeText()).toBe("Changes stashed");
   await commands.updateSubmodule(repo, "lib/x");
-  expect(mocks.toast.loading).toHaveBeenCalledWith("Updating lib/x…");
-  expect(mocks.toast.success).toHaveBeenCalledWith("Updated lib/x", { id: "t" });
+  expect(noticeText()).toBe("Updated lib/x");
+  for (const kind of ["loading", "success", "dismiss"] as const) {
+    expect(mocks.toast[kind]).not.toHaveBeenCalled();
+  }
 });
 
 it("reports failures as error toasts", async () => {
   mocks.api.mockRejectedValue(new Error("could not resolve host"));
   await expect(commands.pull(repo)).resolves.toBeUndefined();
   expect(mocks.toast.error).toHaveBeenCalledWith("Pull failed", {
-    id: "t",
     description: "could not resolve host",
     duration: 10000,
   });
-  expect(mocks.toast.success).not.toHaveBeenCalled();
+  expect(noticeText()).toBeUndefined();
   mocks.prompt.mockResolvedValue({ value: "b", checked: true });
   await commands.createBranch(repo, "abc");
   expect(mocks.toast.error).toHaveBeenLastCalledWith(
@@ -211,7 +215,7 @@ it("pushes the current branch", async () => {
   await commands.push(repo);
   expect(mocks.confirm).not.toHaveBeenCalled();
   expect(apiCalls("repo.push")).toEqual([[repo, { force: false, setUpstream: false }]]);
-  expect(mocks.toast.success).toHaveBeenCalledWith("Pushed main", { id: "t" });
+  expect(noticeText()).toBe("Pushed main");
 });
 
 it("refuses to push without a checked out branch", async () => {
@@ -256,10 +260,10 @@ it("confirms force pushes", async () => {
 it("pushes and pulls other branches without checking them out", async () => {
   await commands.pushBranch(repo, topic);
   expect(apiCalls("repo.pushBranch")).toEqual([[repo, "topic", false]]);
-  expect(mocks.toast.success).toHaveBeenCalledWith("Pushed topic", { id: "t" });
+  expect(noticeText()).toBe("Pushed topic");
   await commands.pullBranch(repo, topic);
   expect(apiCalls("repo.fastForwardBranch")).toEqual([[repo, "topic"]]);
-  expect(mocks.toast.success).toHaveBeenCalledWith("Updated topic", { id: "t" });
+  expect(noticeText()).toBe("Updated topic");
 
   mocks.api.mockClear();
   await commands.pushBranch(repo, main);
@@ -340,7 +344,7 @@ it("deletes local and remote branches after confirming", async () => {
     }),
   );
   expect(apiCalls("repo.deleteRemoteBranch")).toEqual([[repo, "origin", "feature/x"]]);
-  expect(mocks.toast.loading).toHaveBeenCalledWith("Deleting origin/feature/x…");
+  expect(mocks.toast.loading).not.toHaveBeenCalled();
 });
 
 it("deletes tags after confirming", async () => {
@@ -473,7 +477,7 @@ it("creates worktrees next to the main checkout", async () => {
     expect.objectContaining({ defaultValue: "/work/repo-v1" }),
   );
   expect(apiCalls("repo.addWorktree")).toEqual([[repo, "/elsewhere/wt", "abc", null]]);
-  expect(mocks.toast.success).toHaveBeenCalledWith("Worktree created", { id: undefined });
+  expect(noticeText()).toBe("Worktree created");
 });
 
 /** A failure the way the api reports a main-process error. */
@@ -558,7 +562,7 @@ it("reveals files in the file manager", () => {
 it("pushes and deletes tags on the default remote", async () => {
   await commands.pushTag(repo, "v1");
   expect(apiCalls("repo.pushTag")).toEqual([[repo, "origin", "v1"]]);
-  expect(mocks.toast.success).toHaveBeenCalledWith("Pushed v1 to origin", { id: "t" });
+  expect(noticeText()).toBe("Pushed v1 to origin");
 
   mocks.confirm.mockResolvedValueOnce(false);
   await commands.deleteRemoteTag(repo, "v1");
@@ -628,11 +632,11 @@ it("copies text to the clipboard", async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
   commands.copy("abc123", "Commit SHA copied");
+  await vi.waitFor(() => expect(noticeText(APP)).toBe("Commit SHA copied"));
   commands.copy("x");
+  await vi.waitFor(() => expect(noticeText(APP)).toBe("Copied"));
   expect(writeText.mock.calls).toEqual([["abc123"], ["x"]]);
-  await vi.waitFor(() => expect(mocks.toast.success).toHaveBeenCalledTimes(2));
-  expect(mocks.toast.success).toHaveBeenCalledWith("Commit SHA copied", { duration: 1500 });
-  expect(mocks.toast.success).toHaveBeenCalledWith("Copied", { duration: 1500 });
+  expect(mocks.toast.success).not.toHaveBeenCalled();
 });
 
 it("selects and reveals commits", () => {
