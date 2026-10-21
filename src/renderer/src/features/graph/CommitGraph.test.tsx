@@ -467,6 +467,45 @@ it("drops a multi-selection that comes back after the selection moved on", async
   expect(selection()).toEqual({ kind: "commit", hash: "c3" });
 });
 
+it("adds up platform-key clicks made while the selected commit is looked up", async () => {
+  mocks.rows = Array.from({ length: 1000 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 1000, complete: true, maxLanes: 1 };
+  mocks.found = 800;
+  await render();
+  const click = (text: string, init: MouseEventInit = {}) =>
+    act(async () => {
+      rowOf(text).dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, ...init }));
+    });
+  const picked = () => {
+    const s = selection();
+    return s?.kind === "commits" ? s.commits.map((c) => c.row.hash) : s;
+  };
+  // The selected commit is off screen, not loaded: it has to be looked up first.
+  const far = async () => {
+    let release = () => {};
+    mocks.gate = new Promise((r) => (release = r));
+    act(() => useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c800" }));
+    return async () => {
+      await act(async () => release());
+      await settle();
+    };
+  };
+  let release = await far();
+  await click("Commit 1", { metaKey: true });
+  await click("Commit 3", { metaKey: true });
+  await release();
+  expect(picked()).toEqual(["c1", "c3", "c800"]);
+
+  // A plain click drops the clicks still pending, a later one starts from it.
+  release = await far();
+  await click("Commit 1", { metaKey: true });
+  await click("Commit 3", { metaKey: true });
+  await click("Commit 2");
+  await click("Commit 4", { metaKey: true });
+  await release();
+  expect(picked()).toEqual(["c2", "c4"]);
+});
+
 it("finds commits picked before the graph reloaded where they are now", async () => {
   await render();
   // Picked when the graph had one commit less on top.

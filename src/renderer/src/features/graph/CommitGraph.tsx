@@ -77,6 +77,14 @@ const useColumns = create<ColumnsState>()(
 
 const EMPTY_REFS: readonly Ref[] = [];
 
+/** The commit last clicked in `selection`, where ranges and arrow keys start. */
+const anchorOf = (selection: Selection | null) =>
+  selection?.kind === "commit"
+    ? selection.hash
+    : selection?.kind === "commits"
+      ? selection.anchor
+      : null;
+
 export function CommitGraph({ repo }: { repo: RepoId }) {
   const { data: info, isPending, error } = useGraphInfo(repo);
   const { data: status } = useStatus(repo);
@@ -152,12 +160,7 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
 
   const hashes = useMemo(() => selectedHashes(selection), [selection]);
   // Arrows move on from the commit last clicked.
-  const anchor =
-    selection?.kind === "commit"
-      ? selection.hash
-      : selection?.kind === "commits"
-        ? selection.anchor
-        : null;
+  const anchor = anchorOf(selection);
   const selectedIndex = useMemo(() => {
     if (selection?.kind === "wip") return 0;
     if (anchor === null) return -1;
@@ -166,18 +169,38 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   }, [selection, anchor, rows, offset]);
 
   // The platform key adds or removes a commit, Shift selects a range from the last clicked.
-  const pressCount = useRef(0);
-  const press = async (row: GraphRow, index: number, e: React.MouseEvent) => {
-    const single = { kind: "commit", hash: row.hash } as const;
+  // Rows may have to be fetched first, so these presses run one after another, each from the
+  // selection the one before left; a selection made any other way drops those still pending.
+  const presses = useRef({ tail: Promise.resolve(), epoch: 0, owned: null as Selection | null });
+  const press = (row: GraphRow, index: number, e: React.MouseEvent) => {
     const toggle = isMac ? e.metaKey : e.ctrlKey;
-    if (!info || !(toggle || e.shiftKey) || anchor === null) return select(repo, single);
-    // Rows may have to be fetched first: drop the result if the selection changed meanwhile.
-    const seq = ++pressCount.current;
+    if (!toggle && !e.shiftKey) return select(repo, { kind: "commit", hash: row.hash });
     const current = () => useRepoUiStore.getState().byRepo[repo]?.selection ?? null;
-    const before = current();
-    const finish = (next: Selection) => {
-      if (pressCount.current === seq && current() === before) select(repo, next);
-    };
+    const q = presses.current;
+    if (current() !== q.owned) {
+      q.epoch++;
+      q.owned = current();
+    }
+    const epoch = q.epoch;
+    const live = () => q.epoch === epoch && current() === q.owned;
+    q.tail = q.tail.then(async () => {
+      if (!live()) return;
+      const next = await extendRef.current(current(), row, index, toggle);
+      if (!live()) return;
+      select(repo, next);
+      q.owned = current();
+    });
+  };
+  /** The selection `base` becomes with the commit at `index` toggled, or the range up to it. */
+  const extend = async (
+    base: Selection | null,
+    row: GraphRow,
+    index: number,
+    toggle: boolean,
+  ): Promise<Selection> => {
+    const single = { kind: "commit", hash: row.hash } as const;
+    const start = anchorOf(base);
+    if (!info || start === null) return single;
     // A commit far off screen may not be loaded: ask for it.
     const loaded = (i: number) => rows.get(i);
     const fetchRows = async (from: number, to: number) => {
@@ -214,32 +237,31 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     try {
       if (toggle) {
         let picked: readonly PickedCommit[] = [];
-        if (selection?.kind === "commits")
-          picked =
-            selection.version === info.version
-              ? selection.commits
-              : await reindexed(selection.commits);
-        else if (selection?.kind === "commit") {
-          const i = await indexOf(selection.hash);
+        if (base?.kind === "commits")
+          picked = base.version === info.version ? base.commits : await reindexed(base.commits);
+        else if (base?.kind === "commit") {
+          const i = await indexOf(base.hash);
           const r = i >= 0 ? (await fetchRows(i, i)).get(i) : undefined;
           if (r) picked = [{ index: i, row: r }];
         }
-        finish(selectionOf(toggled(picked, { index, row }), row.hash, info.version) ?? single);
-      } else {
-        const a = await indexOf(anchor);
-        if (a < 0) return finish(single);
-        const [from, to] = rangeIndexes(a, index);
-        const range = [...(await fetchRows(from, to))].map(([i, r]) => ({ index: i, row: r }));
-        finish(selectionOf(range, anchor, info.version) ?? single);
+        return selectionOf(toggled(picked, { index, row }), row.hash, info.version) ?? single;
       }
+      const a = await indexOf(start);
+      if (a < 0) return single;
+      const [from, to] = rangeIndexes(a, index);
+      const range = [...(await fetchRows(from, to))].map(([i, r]) => ({ index: i, row: r }));
+      return selectionOf(range, start, info.version) ?? single;
     } catch {
-      finish(single);
+      return single;
     }
   };
+  // Queued presses use the rows and graph version of the latest render.
+  const extendRef = useRef(extend);
+  extendRef.current = extend;
   const pressRef = useRef(press);
   pressRef.current = press;
   const onPress = useCallback(
-    (row: GraphRow, index: number, e: React.MouseEvent) => void pressRef.current(row, index, e),
+    (row: GraphRow, index: number, e: React.MouseEvent) => pressRef.current(row, index, e),
     [],
   );
 
