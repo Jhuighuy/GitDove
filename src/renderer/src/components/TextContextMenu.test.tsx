@@ -125,3 +125,37 @@ it("offers copy for selected text, and nothing without it or over another menu",
   await rightClick(p);
   expect(items()).toEqual([{ label: "Copy", disabled: false }]);
 });
+
+it("gives a field its focus back on Escape, but not when another one is clicked", async () => {
+  await act(async () =>
+    root.render(
+      <>
+        <input defaultValue="summary" />
+        <textarea defaultValue="description" />
+        <TextContextMenu />
+      </>,
+    ),
+  );
+  const input = container.querySelector("input")!;
+  const area = container.querySelector("textarea")!;
+  input.focus();
+  await rightClick(input);
+  expect(document.activeElement).not.toBe(input);
+  await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  await settle();
+  expect(document.activeElement).toBe(input);
+
+  await rightClick(input);
+  await act(async () => {
+    area.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    area.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    area.focus();
+    area.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    area.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    area.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await settle();
+  expect(items()).toEqual([]);
+  expect(document.activeElement).toBe(area);
+  expect(mocks.calls).toEqual([]);
+});

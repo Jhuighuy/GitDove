@@ -80,6 +80,8 @@ export function TextContextMenu() {
   const [target, setTarget] = useState<Target | null>(null);
   const [open, setOpen] = useState(false);
   const pending = useRef<EditCommand | null>(null);
+  /** Whether the menu was dismissed by clicking or tabbing to something else. */
+  const clickedAway = useRef(false);
 
   useEffect(() => {
     const onContextMenu = (e: MouseEvent) => {
@@ -100,11 +102,16 @@ export function TextContextMenu() {
     pending.current = command;
     setOpen(false);
   };
+  const onOpenChange = (isOpen: boolean, details: Menu.Root.ChangeEventDetails) => {
+    clickedAway.current = details.reason === "outside-press" || details.reason === "focus-out";
+    setOpen(isOpen);
+  };
+  // Dismissed with Escape, the field gets its focus back; clicked away, focus stays where it went.
   const onOpenChangeComplete = (isOpen: boolean) => {
     const command = pending.current;
     pending.current = null;
     if (isOpen || !target) return;
-    if (command || target.field) target.restore();
+    if (command || (target.field && !clickedAway.current)) target.restore();
     if (command) void api("app.edit", command).catch(() => {});
   };
 
@@ -122,7 +129,7 @@ export function TextContextMenu() {
   return (
     <Menu.Root
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={onOpenChange}
       onOpenChangeComplete={onOpenChangeComplete}
       modal={false}
     >
