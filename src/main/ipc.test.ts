@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,12 +43,32 @@ const updater = vi.hoisted(() => ({
 vi.mock("./updater", () => ({ updater }));
 /** Terminal launchers are faked; everything else really runs. */
 const terminals = vi.hoisted(() => ({
-  spawn: vi.fn((..._args: unknown[]) => ({ unref: terminals.unref })),
+  /** Programs that are "not installed". */
+  missing: new Set<string>(),
+  spawn: vi.fn((file: string, ..._args: unknown[]) => {
+    const child = Object.assign(new EventEmitter(), { unref: terminals.unref });
+    const fail = terminals.missing.has(file);
+    setImmediate(() =>
+      fail
+        ? child.emit("error", Object.assign(new Error(`spawn ${file} ENOENT`), { code: "ENOENT" }))
+        : child.emit("spawn"),
+    );
+    return child;
+  }),
   unref: vi.fn(),
 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:child_process")>();
-  const launchers = ["osascript", "cmd.exe", "x-terminal-emulator"];
+  const launchers = [
+    "osascript",
+    "cmd.exe",
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "xterm",
+    "my-term",
+  ];
   return {
     ...real,
     spawn: (file: string, ...rest: unknown[]) =>
@@ -147,8 +168,13 @@ beforeEach(() => {
   services.hosts.clear();
   services.connected.length = 0;
   services.hidden.clear();
+  terminals.missing.clear();
+  vi.stubEnv("TERMINAL", "");
 });
-afterEach(() => setPlatform(platform));
+afterEach(() => {
+  setPlatform(platform);
+  vi.unstubAllEnvs();
+});
 afterAll(() => runtime.dispose());
 
 // ---------------------------------------------------------------------------
@@ -231,7 +257,7 @@ describe("shell handlers", () => {
     await call("shell.openTerminal", services.repo.id);
     const script = (terminals.spawn.mock.lastCall![1] as string[])[1]!;
     expect(script).toContain(
-      `do script ${JSON.stringify(`ssh -t fedora 'cd '\\''/srv/my repo'\\'' && exec $SHELL -l'`)}`,
+      `do script "ssh -t -- fedora 'cd '\\\\''/srv/my repo'\\\\'' && exec $SHELL -l'"`,
     );
     expect(terminals.unref).toHaveBeenCalledTimes(2);
   });
@@ -242,19 +268,24 @@ describe("shell handlers", () => {
     await call("shell.openTerminal", services.repo.id);
     expect(terminals.spawn).toHaveBeenLastCalledWith(
       "cmd.exe",
-      ["/c", "start", "cmd", "/k", `cd /d "/work/it's"`],
-      detached,
+      ["/d", "/c", "start", "", "cmd.exe"],
+      { cwd: "/work/it's", ...detached },
     );
     services.repo = remote();
     await call("shell.openTerminal", services.repo.id);
     expect(terminals.spawn).toHaveBeenLastCalledWith(
       "cmd.exe",
-      ["/c", "start", "ssh", "-t", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
-      detached,
+      [`/d /s /c "start "" "ssh" "-t" "--" "fedora" "cd '/srv/my repo' && exec $SHELL -l""`],
+      { windowsVerbatimArguments: true, ...detached },
     );
+    // cmd.exe expands `%VAR%` even in quotes.
+    services.repo = fakeRepo({ kind: "ssh", host: "fedora", path: "/srv/100%" });
+    const exit = await callExit("shell.openTerminal", services.repo.id);
+    expect(JSON.stringify(exit)).toContain("Cannot pass");
+    expect(terminals.spawn).toHaveBeenCalledTimes(2);
   });
 
-  it("opens the default terminal emulator elsewhere", async () => {
+  it("opens the first available terminal emulator elsewhere", async () => {
     setPlatform("linux");
     services.repo = local();
     await call("shell.openTerminal", services.repo.id);
@@ -263,11 +294,38 @@ describe("shell handlers", () => {
       ...detached,
     });
     services.repo = remote();
+    terminals.missing.add("x-terminal-emulator");
     await call("shell.openTerminal", services.repo.id);
     expect(terminals.spawn).toHaveBeenLastCalledWith(
-      "x-terminal-emulator",
-      ["-e", "ssh", "-t", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
-      { cwd: undefined, ...detached },
+      "gnome-terminal",
+      ["--", "ssh", "-t", "--", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
+      detached,
+    );
+    vi.stubEnv("TERMINAL", "my-term");
+    await call("shell.openTerminal", services.repo.id);
+    expect(terminals.spawn).toHaveBeenLastCalledWith(
+      "my-term",
+      ["-e", "ssh", "-t", "--", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
+      detached,
+    );
+  });
+
+  it("fails, instead of crashing, without a terminal emulator", async () => {
+    setPlatform("linux");
+    for (const t of ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm"])
+      terminals.missing.add(t);
+    const exit = await callExit("shell.openTerminal", services.repo.id);
+    expect(exit).toEqual(
+      Exit.fail(
+        new InvalidInputError({
+          message: "No terminal emulator found. Set $TERMINAL to the one to use.",
+        }),
+      ),
+    );
+    setPlatform("darwin");
+    terminals.missing.add("osascript");
+    expect(JSON.stringify(await callExit("shell.openTerminal", services.repo.id))).toContain(
+      "Could not open a terminal: spawn osascript ENOENT",
     );
   });
 });

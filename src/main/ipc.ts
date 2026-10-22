@@ -1,5 +1,5 @@
-import { spawn as nodeSpawn } from "node:child_process";
-import type { DirEntry, RepoId } from "@shared/domain";
+import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
+import type { DirEntry, RepoId, RepoLocation } from "@shared/domain";
 import {
   type ApiArgs,
   type ApiMethod,
@@ -14,7 +14,7 @@ import log from "electron-log/main";
 import { Cause, Context, Effect, Exit, type ManagedRuntime } from "effect";
 import { type AppError, InvalidInputError } from "./exec/errors";
 import { Hosts } from "./exec/hosts";
-import { shellQuote } from "./exec/shell";
+import { shellJoin, shellQuote } from "./exec/shell";
 import type { Repository } from "./git/repository";
 import { RepoSettings, Repos } from "./services";
 import { loadState, saveState } from "./state";
@@ -46,35 +46,95 @@ for f in * .[!.]*; do
 done
 `;
 
-const openTerminal = (repo: Repository) =>
-  Effect.sync(() => {
-    const loc = repo.location;
-    const remoteShell = `cd ${shellQuote(loc.path)} && exec $SHELL -l`;
-    if (process.platform === "darwin") {
-      const command =
-        loc.kind === "local"
-          ? `cd ${shellQuote(loc.path)}`
-          : `ssh -t ${shellQuote(loc.host)} ${shellQuote(remoteShell)}`;
-      const script = `tell application "Terminal"
-  activate
-  do script ${JSON.stringify(command)}
-end tell`;
-      nodeSpawn("osascript", ["-e", script], { detached: true, stdio: "ignore" }).unref();
-    } else if (process.platform === "win32") {
-      const args =
-        loc.kind === "local"
-          ? ["/c", "start", "cmd", "/k", `cd /d "${loc.path}"`]
-          : ["/c", "start", "ssh", "-t", loc.host, remoteShell];
-      nodeSpawn("cmd.exe", args, { detached: true, stdio: "ignore" }).unref();
-    } else {
-      const args = loc.kind === "local" ? [] : ["-e", "ssh", "-t", loc.host, remoteShell];
-      nodeSpawn("x-terminal-emulator", args, {
-        cwd: loc.kind === "local" ? loc.path : undefined,
-        detached: true,
-        stdio: "ignore",
-      }).unref();
+/** A detached program to start, e.g. a terminal emulator. */
+interface Launch {
+  readonly file: string;
+  readonly args: readonly string[];
+  readonly options?: SpawnOptions;
+}
+
+/** Starts a detached program; fails when it cannot be started (e.g. it is not installed). */
+const launch = ({ file, args, options }: Launch) =>
+  Effect.callback<void, Error>((resume) => {
+    let child: ChildProcess;
+    try {
+      child = nodeSpawn(file, args, { ...options, detached: true, stdio: "ignore" });
+    } catch (e) {
+      resume(Effect.fail(e instanceof Error ? e : new Error(String(e))));
+      return;
     }
+    // Without an `error` listener, a missing program would crash the main process.
+    child.on("error", (e) => resume(Effect.fail(e)));
+    child.once("spawn", () => {
+      child.unref();
+      resume(Effect.void);
+    });
   });
+
+/** An AppleScript string literal. */
+const appleScriptString = (s: string) => `"${s.replaceAll(/[\\"]/g, "\\$&")}"`;
+
+/** Quotes an argument for a `cmd.exe` command line, which has no way to escape `"` or `%`. */
+const cmdQuote = (s: string) => {
+  if (/["%\r\n]/.test(s)) throw new Error(`Cannot pass ${JSON.stringify(s)} to cmd.exe`);
+  return `"${s}"`;
+};
+
+/** Ways to open a terminal at a repository, in order of preference. */
+export const terminalLaunches = (loc: RepoLocation): Launch[] => {
+  const remoteShell = `cd ${shellQuote(loc.path)} && exec $SHELL -l`;
+  const ssh = loc.kind === "ssh" ? ["ssh", "-t", "--", loc.host, remoteShell] : [];
+  if (process.platform === "darwin") {
+    const command = loc.kind === "local" ? `cd ${shellQuote(loc.path)}` : shellJoin(ssh);
+    const script = `tell application "Terminal"
+  activate
+  do script ${appleScriptString(command)}
+end tell`;
+    return [{ file: "osascript", args: ["-e", script] }];
+  }
+  if (process.platform === "win32") {
+    // `start` opens a new console window; the empty argument is its title.
+    if (loc.kind === "local") {
+      return [
+        { file: "cmd.exe", args: ["/d", "/c", "start", "", "cmd.exe"], options: { cwd: loc.path } },
+      ];
+    }
+    const line = `/d /s /c "start "" ${ssh.map(cmdQuote).join(" ")}"`;
+    return [{ file: "cmd.exe", args: [line], options: { windowsVerbatimArguments: true } }];
+  }
+  const cwd = loc.kind === "local" ? { cwd: loc.path } : undefined;
+  const emulators: [string | undefined, string][] = [
+    [process.env.TERMINAL, "-e"],
+    ["x-terminal-emulator", "-e"],
+    ["gnome-terminal", "--"],
+    ["konsole", "-e"],
+    ["xfce4-terminal", "-x"],
+    ["xterm", "-e"],
+  ];
+  return emulators.flatMap(([file, exec]) =>
+    file ? [{ file, args: loc.kind === "local" ? [] : [exec, ...ssh], options: cwd }] : [],
+  );
+};
+
+const openTerminal = (repo: Repository) =>
+  Effect.try({
+    try: () => terminalLaunches(repo.location),
+    catch: (e) => new InvalidInputError({ message: (e as Error).message }),
+  }).pipe(
+    Effect.flatMap((launches) =>
+      Effect.firstSuccessOf(launches.map(launch)).pipe(
+        Effect.mapError(
+          (e) =>
+            new InvalidInputError({
+              message:
+                launches.length > 1
+                  ? "No terminal emulator found. Set $TERMINAL to the one to use."
+                  : `Could not open a terminal: ${e.message}`,
+            }),
+        ),
+      ),
+    ),
+  );
 
 export const handlers: Handlers = {
   // App / window -------------------------------------------------------------
