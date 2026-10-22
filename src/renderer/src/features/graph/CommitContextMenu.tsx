@@ -221,14 +221,14 @@ export function CommitContextMenu({
       </ContextMenuItem>
       <ContextMenuItem
         onClick={() => {
-          // The graph has the subject only: copy the whole message.
+          // The graph has the subject only: copy the whole message (the subject, without one).
           client
             .fetchQuery({
               queryKey: keys.commit(repo, hash),
               queryFn: () => api("repo.commitDetails", repo, hash),
             })
             .then(
-              (d) => (d.body ? `${d.subject}\n\n${d.body}` : d.subject),
+              (d) => (!d ? row.subject : d.body ? `${d.subject}\n\n${d.body}` : d.subject),
               () => row.subject,
             )
             .then((message) => commands.copy(message, "Message copied"));

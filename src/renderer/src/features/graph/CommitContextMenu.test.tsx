@@ -11,6 +11,8 @@ import { CommitContextMenu, type MenuTarget } from "./CommitContextMenu";
 const mocks = vi.hoisted(() => ({
   calls: [] as unknown[][],
   api: [] as unknown[][],
+  /** What `repo.commitDetails` answers. */
+  details: { subject: "Fix the thing", body: "Because it was broken." } as object | null,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -35,7 +37,7 @@ vi.mock("@/lib/api", () => ({
       case "repo.stageAll":
         return undefined;
       case "repo.commitDetails":
-        return { subject: "Fix the thing", body: "Because it was broken." };
+        return mocks.details;
     }
     throw new Error(`unexpected ${method}`);
   },
@@ -229,6 +231,18 @@ it("disables changing actions while another operation runs", async () => {
     expect(mocks.calls).toEqual([["copy", HASH, "Commit SHA copied"]]);
   } finally {
     useBusyStore.getState().finish(REPO);
+  }
+});
+
+it("copies the subject when the commit's details are not found", async () => {
+  mocks.details = null;
+  try {
+    await open({ kind: "commit", row, refs: [] });
+    await click("Copy commit message");
+    await act(() => vi.waitFor(() => expect(mocks.calls.length).toBe(1)));
+    expect(mocks.calls).toEqual([["copy", "Fix the thing", "Message copied"]]);
+  } finally {
+    mocks.details = { subject: "Fix the thing", body: "Because it was broken." };
   }
 });
 
