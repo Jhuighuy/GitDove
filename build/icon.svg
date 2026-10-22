@@ -1,51 +1,143 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- GitDove app icon. Source of truth; run `npm run icons` after editing. -->
-  <!-- Canvas follows the macOS grid: an 824px tile centered on a 1024px canvas. -->
+  <!-- GitDove Fold icon. Source of truth; run `npm run icons` after editing. -->
+  <!-- All artwork is editable vector geometry; no embedded raster images. -->
+  <!-- The approved concept is mapped onto the existing 824px macOS tile. -->
   <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#12b886"/>
-      <stop offset="1" stop-color="#047857"/>
+    <linearGradient id="tile" gradientUnits="userSpaceOnUse" x1="376.4" y1="-38.5" x2="877.6" y2="1293.5">
+      <stop offset="0" stop-color="#f0794d"/>
+      <stop offset="0.25" stop-color="#d75f44"/>
+      <stop offset="0.5" stop-color="#c74e3a"/>
+      <stop offset="0.75" stop-color="#bc4232"/>
+      <stop offset="1" stop-color="#af3830"/>
     </linearGradient>
-    <linearGradient id="far-wing" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ecfdf5"/>
-      <stop offset="1" stop-color="#bbf7d0"/>
+    <linearGradient id="rear-wing" gradientUnits="userSpaceOnUse" x1="216.7" y1="564.2" x2="425.2" y2="539.6">
+      <stop offset="0" stop-color="#e7cdb4"/>
+      <stop offset="0.25" stop-color="#ecd8c1"/>
+      <stop offset="0.5" stop-color="#ead4bf"/>
+      <stop offset="0.75" stop-color="#e0c6ae"/>
+      <stop offset="1" stop-color="#d2b192"/>
+    </linearGradient>
+    <linearGradient id="wing-front" gradientUnits="userSpaceOnUse" x1="251.2" y1="416.4" x2="624" y2="469.3">
+      <stop offset="0" stop-color="#f8eee3"/>
+      <stop offset="0.25" stop-color="#f9f1e6"/>
+      <stop offset="0.5" stop-color="#f8f0e4"/>
+      <stop offset="0.75" stop-color="#f3e7d9"/>
+      <stop offset="1" stop-color="#ead6c2"/>
+    </linearGradient>
+    <linearGradient id="wing-edge" gradientUnits="userSpaceOnUse" x1="664.3" y1="488.4" x2="571.2" y2="524.1">
+      <stop offset="0" stop-color="#fbf5eb"/>
+      <stop offset="0.25" stop-color="#fbf5ea"/>
+      <stop offset="0.5" stop-color="#fbf4e9"/>
+      <stop offset="0.75" stop-color="#fbf4e9"/>
+      <stop offset="1" stop-color="#fbf6ed"/>
+    </linearGradient>
+    <linearGradient id="wing-fold" gradientUnits="userSpaceOnUse" x1="496.3" y1="638.5" x2="693.1" y2="673">
+      <stop offset="0" stop-color="#f6bf9c"/>
+      <stop offset="0.25" stop-color="#f7bc99"/>
+      <stop offset="0.5" stop-color="#f6ba97"/>
+      <stop offset="0.75" stop-color="#f4b793"/>
+      <stop offset="1" stop-color="#efaf8b"/>
+    </linearGradient>
+    <linearGradient id="tail-top" gradientUnits="userSpaceOnUse" x1="248.6" y1="828.3" x2="306.7" y2="906">
+      <stop offset="0" stop-color="#fcf6ed"/>
+      <stop offset="0.25" stop-color="#fbf4ea"/>
+      <stop offset="0.5" stop-color="#fbf3e9"/>
+      <stop offset="0.75" stop-color="#fbf3e8"/>
+      <stop offset="1" stop-color="#fbf5e9"/>
+    </linearGradient>
+    <linearGradient id="tail-inner" gradientUnits="userSpaceOnUse" x1="313.6" y1="824.6" x2="540.4" y2="893.7">
+      <stop offset="0" stop-color="#dec3a9"/>
+      <stop offset="0.25" stop-color="#e2cab3"/>
+      <stop offset="0.5" stop-color="#e0c7b0"/>
+      <stop offset="0.75" stop-color="#d4b79c"/>
+      <stop offset="1" stop-color="#cdae93"/>
+    </linearGradient>
+    <linearGradient id="tail-bottom" gradientUnits="userSpaceOnUse" x1="378" y1="1017.2" x2="281.6" y2="897.5">
+      <stop offset="0" stop-color="#faf2e8"/>
+      <stop offset="0.25" stop-color="#f5e9dc"/>
+      <stop offset="0.5" stop-color="#f4e6d8"/>
+      <stop offset="0.75" stop-color="#f0dfcd"/>
+      <stop offset="1" stop-color="#e3cab1"/>
+    </linearGradient>
+    <linearGradient id="neck" gradientUnits="userSpaceOnUse" x1="876.3" y1="586" x2="704.1" y2="666.3">
+      <stop offset="0" stop-color="#fcf5ec"/>
+      <stop offset="0.25" stop-color="#faf2e7"/>
+      <stop offset="0.5" stop-color="#faf1e6"/>
+      <stop offset="0.75" stop-color="#f7ece0"/>
+      <stop offset="1" stop-color="#efdfce"/>
+    </linearGradient>
+    <linearGradient id="breast-top" gradientUnits="userSpaceOnUse" x1="739.4" y1="801" x2="605.8" y2="657.5">
+      <stop offset="0" stop-color="#fdfbf5"/>
+      <stop offset="0.25" stop-color="#fcf8f2"/>
+      <stop offset="0.5" stop-color="#fbf6ee"/>
+      <stop offset="0.75" stop-color="#fbf5eb"/>
+      <stop offset="1" stop-color="#fbf5e9"/>
+    </linearGradient>
+    <linearGradient id="breast-bottom" gradientUnits="userSpaceOnUse" x1="834.6" y1="797.2" x2="483.8" y2="857.6">
+      <stop offset="0" stop-color="#fbf3e9"/>
+      <stop offset="0.25" stop-color="#f8eee3"/>
+      <stop offset="0.5" stop-color="#f4e7d9"/>
+      <stop offset="0.75" stop-color="#efdecd"/>
+      <stop offset="1" stop-color="#ecd8c3"/>
+    </linearGradient>
+    <linearGradient id="belly" gradientUnits="userSpaceOnUse" x1="647.8" y1="919.1" x2="459.8" y2="800.8">
+      <stop offset="0" stop-color="#eedccb"/>
+      <stop offset="0.25" stop-color="#ead6c2"/>
+      <stop offset="0.5" stop-color="#e5d0bb"/>
+      <stop offset="0.75" stop-color="#e4cdb7"/>
+      <stop offset="1" stop-color="#e9d5bc"/>
+    </linearGradient>
+    <linearGradient id="beak-top" gradientUnits="userSpaceOnUse" x1="874" y1="551" x2="934" y2="599">
+      <stop offset="0" stop-color="#fbf4e9"/>
+      <stop offset="0.25" stop-color="#fcf5eb"/>
+      <stop offset="0.5" stop-color="#fcf6ec"/>
+      <stop offset="0.75" stop-color="#fcf6ec"/>
+      <stop offset="1" stop-color="#faf4e9"/>
+    </linearGradient>
+    <linearGradient id="beak-bottom" gradientUnits="userSpaceOnUse" x1="860" y1="580" x2="883" y2="613">
+      <stop offset="0" stop-color="#f4e7d6"/>
+      <stop offset="0.25" stop-color="#f2e3d0"/>
+      <stop offset="0.5" stop-color="#efdec9"/>
+      <stop offset="0.75" stop-color="#ebd6bf"/>
+      <stop offset="1" stop-color="#e8d2b8"/>
     </linearGradient>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>
-  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="4"/>
-  <g transform="translate(100 100) scale(5.885714) translate(4 4)">
-    <!-- Far wing, peeking out behind the body. -->
-    <g fill="url(#far-wing)">
-      <ellipse cx="65.1" cy="36.0" rx="23.5" ry="4.6" transform="rotate(-77.9 65.1 36.0)"/>
-      <ellipse cx="69.7" cy="34.8" rx="26.0" ry="4.6" transform="rotate(-66.6 69.7 34.8)"/>
-      <ellipse cx="74.3" cy="36.1" rx="27.1" ry="4.6" transform="rotate(-54.7 74.3 36.1)"/>
+  <!-- Keep semantic groups separate for future layered icon exports. -->
+  <g transform="translate(100 100) scale(0.731794 0.75114) translate(-64 -79)">
+    <g id="background">
+      <rect x="64" y="79" width="1126" height="1097" rx="208" ry="208" fill="url(#tile)"/>
     </g>
-    <!-- Body and tail. -->
-    <path d="M37 61 C36 54 39 48 45 48 C51 48 56 51 59 56 C66 60 76 63 84 64 C96 66 110 64 124 61 C124 65 122 67 119 69 C122 70 125 71 125 74 C124 77 122 78 119 78 C121 80 122 82 122 85 C108 88 96 88 86 86 C72 88 58 86 50 78 C45 73 41 68 37 64 Z" fill="#ffffff"/>
-    <!-- Near wing: fanned primaries under a covert layer. -->
-    <g fill="#ffffff">
-      <ellipse cx="81.8" cy="37.6" rx="29.8" ry="5.6" transform="rotate(-52.3 81.8 37.6)"/>
-      <ellipse cx="85.4" cy="42.3" rx="29.0" ry="5.6" transform="rotate(-39.0 85.4 42.3)"/>
-      <ellipse cx="86.2" cy="47.9" rx="26.6" ry="5.6" transform="rotate(-26.6 86.2 47.9)"/>
-      <ellipse cx="84.1" cy="53.0" rx="22.7" ry="5.6" transform="rotate(-15.4 84.1 53.0)"/>
-      <ellipse cx="80.0" cy="57.1" rx="18.0" ry="5.6" transform="rotate(-3.6 80.0 57.1)"/>
+    <g id="git-branch" fill="#471a36">
+      <path d="M973 769V640L931 594L1057 461M973 640H1097" fill="none" stroke="#471a36" stroke-width="27" stroke-linejoin="round"/>
+      <circle cx="1057" cy="461" r="44"/>
+      <circle cx="1097" cy="641" r="44"/>
+      <circle cx="973" cy="769" r="45"/>
     </g>
-    <path d="M56 57 C62 46 72 38 82 34 C87 40 87 49 82 57 C76 62 66 62 56 57 Z" fill="#ffffff"/>
-    <g fill="none" stroke-linecap="round">
-      <path d="M92 77 C100 78 108 78 116 76" stroke="#d1fae5" stroke-width="1.3"/>
+    <g id="tail">
+      <path d="M471 783L205 861Q196 863 199 872L224 943L487 881Z" fill="url(#tail-top)"/>
+      <path d="M471 783L540 895L487 881L290 902Z" fill="url(#tail-inner)"/>
+      <path d="M224 943L290 902L487 881L318 1066Q314 1071 310 1066L211 958Q207 954 212 951Z" fill="url(#tail-bottom)"/>
     </g>
-    <circle cx="46" cy="55" r="2.8" fill="#065f46"/>
-    <!-- Olive branch: a line of commits. -->
-    <path d="M31.5 62 C26 75 23 88 25 106" fill="none" stroke="#064e3b" stroke-width="4" stroke-linecap="round"/>
-    <!-- Beak, drawn over the branch so it holds it. -->
-    <path d="M40.5 58.6 C37 59.8 34 60.7 31 61.5 C33.6 62.6 37 62.7 40.5 61.7 Z" fill="#e07b39"/>
-    <path d="M41 51.8 C37 52.8 32.8 55.8 28.6 60.3 C32 60.3 36.4 59.4 40.6 58.5 Z" fill="#f6ad6b"/>
-    <ellipse cx="39.3" cy="54.1" rx="1.7" ry="1.1" fill="#fcd5ae" transform="rotate(-28 39.3 54.1)"/>
-    <ellipse cx="19" cy="73" rx="7.5" ry="3.6" fill="#bbf7d0" transform="rotate(-40 19 73)"/>
-    <ellipse cx="34" cy="88" rx="7.5" ry="3.6" fill="#bbf7d0" transform="rotate(35 34 88)"/>
-    <ellipse cx="16" cy="98" rx="7.5" ry="3.6" fill="#bbf7d0" transform="rotate(-30 16 98)"/>
-    <circle cx="28" cy="74" r="5" fill="#064e3b"/>
-    <circle cx="24" cy="89" r="5" fill="#064e3b"/>
-    <circle cx="25" cy="106" r="5" fill="#064e3b"/>
+    <g id="rear-wing-layer">
+      <path d="M196 354L353 411L448 733L343 638Q329 625 322 611L193 361Q190 355 192 354Q193 353 196 354Z" fill="url(#rear-wing)"/>
+      <path d="M194 355L352 411" fill="none" stroke="#fff9ed" stroke-width="1.5" stroke-opacity=".7"/>
+    </g>
+    <g id="body">
+      <path d="M471 783L690 606C727 577 759 551 785 538L811 525Q818 521 825 524L860 538Q872 542 874 551L841 623C832 651 829 681 824 708C822 731 816 747 810 758C787 808 741 851 710 869C658 898 604 907 540 895Z" fill="url(#breast-bottom)"/>
+      <path d="M690 606C727 577 759 551 785 538L811 525Q818 521 825 524L860 538Q872 542 874 551L867 566L735 572Z" fill="#fcf9f2"/>
+      <path d="M690 606L735 572L867 566L841 623C832 651 829 681 822 724L697 651Z" fill="url(#neck)"/>
+      <path d="M471 783L697 651L822 724Z" fill="url(#breast-top)"/>
+      <path d="M471 783L668 887C626 901 580 903 540 895Z" fill="url(#belly)"/>
+    </g>
+    <g id="foreground-wing">
+      <path d="M291 166L421 254C482 294 565 368 646 444Q653 450 655 464L690 606L697 651L471 783L438 718L286 170Q283 162 291 166Z" fill="url(#wing-front)"/>
+      <path d="M488 307C542 353 596 397 646 444Q653 450 655 464L690 606L697 651L615 533Z" fill="url(#wing-edge)"/>
+      <path d="M615 533L697 651L471 783Z" fill="url(#wing-fold)"/>
+      <path d="M288 165L421 254C482 294 565 368 646 444" fill="none" stroke="#fffaf1" stroke-width="1.3" stroke-opacity=".6"/>
+    </g>
+    <g id="beak">
+      <path d="M874 551L934 599L860 580Z" fill="url(#beak-top)"/>
+      <path d="M860 580L934 599C900 598 871 606 841 623Z" fill="url(#beak-bottom)"/>
+    </g>
   </g>
 </svg>
