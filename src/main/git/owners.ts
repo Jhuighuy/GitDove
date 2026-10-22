@@ -59,31 +59,66 @@ interface Commit {
   readonly email: string;
 }
 
+/** Commits visited by all `ownCommits` walks of one `branchOwners` call. */
+const WALK_BUDGET = 2_000_000;
+
+/** A binary min-heap of log positions. */
+const heapPush = (heap: number[], value: number): void => {
+  heap.push(value);
+  for (let i = heap.length - 1; i > 0;) {
+    const up = (i - 1) >> 1;
+    if (heap[up]! <= heap[i]!) break;
+    [heap[i], heap[up]] = [heap[up]!, heap[i]!];
+    i = up;
+  }
+};
+
+const heapPop = (heap: number[]): number => {
+  const top = heap[0]!;
+  const last = heap.pop()!;
+  if (heap.length > 0) {
+    heap[0] = last;
+    for (let i = 0; ;) {
+      const l = 2 * i + 1;
+      const m = l + 1 < heap.length && heap[l + 1]! < heap[l]! ? l + 1 : l;
+      if (m >= heap.length || heap[i]! <= heap[m]!) break;
+      [heap[i], heap[m]] = [heap[m]!, heap[i]!];
+      i = m;
+    }
+  }
+  return top;
+};
+
 /**
  * The first `limit` commits of `log` that are reachable from `start` but not from a base,
  * by position in the log. Bases are the tips of other branches that `start` was built on
  * (see `isBase`), so that a branch made on top of another one gets its own commits only.
- * As parents come after their children, one pass from `start` finds them.
+ * As parents come after their children, visiting reachable positions in increasing order
+ * sees all children of a commit before it. `null` when `budget` runs out.
  */
 const ownCommits = (
   start: number,
   log: readonly { readonly parents: readonly number[] }[],
   isBase: (position: number) => boolean,
   limit: number,
-): number[] => {
+  budget: { left: number },
+): number[] | null => {
   /** 1: reachable from `start`, 2: reachable from a base. */
   const mark = new Map<number, number>([[start, 1]]);
-  /** Positions marked reachable from `start` and not processed yet. */
+  const heap = [start];
+  /** Positions marked reachable from `start` and not visited yet. */
   let pending = 1;
   const out: number[] = [];
-  for (let i = start; i < log.length && pending > 0 && out.length < limit; i++) {
-    const m = mark.get(i);
-    if (m === undefined) continue;
+  while (heap.length > 0 && pending > 0 && out.length < limit) {
+    if (--budget.left < 0) return null;
+    const i = heapPop(heap);
+    const m = mark.get(i)!;
     if (m === 1) pending--;
     const excluded = m === 2 || (i !== start && isBase(i));
     if (!excluded) out.push(i);
     for (const p of log[i]!.parents) {
       const pm = mark.get(p);
+      if (pm === undefined) heapPush(heap, p);
       if (excluded) {
         if (pm === 1) pending--;
         if (pm !== 2) mark.set(p, 2);
@@ -165,6 +200,9 @@ export const branchOwners = (refsOut: string, logs: OwnerLogs, userOut: string):
    * Many refs may share a commit, so lookups must not scan them all.
    */
   const tipsAt = new Map<number, Map<string | null, string[]>>();
+  /** The position of each branch name's tips, or -1 when they are at several. */
+  const namesAt = new Map<string | null, number>();
+  const refAt = new Map<string, number>();
   for (const tip of tips) {
     const at = position.get(tip.hash);
     if (at === undefined) continue;
@@ -177,8 +215,29 @@ export const branchOwners = (refsOut: string, logs: OwnerLogs, userOut: string):
     const refs = names.get(n);
     if (refs) refs.push(tip.name);
     else names.set(n, [tip.name]);
+    namesAt.set(n, namesAt.has(n) && namesAt.get(n) !== at ? -1 : at);
+    refAt.set(tip.name, at);
   }
 
+  /**
+   * Weighs the authors of a branch's own commits by closeness to its tip: the k-th newest
+   * commit that is not a merge counts 1/k, so whoever works on it now owns it.
+   */
+  const ownerOf = (own: readonly number[] | null): string | undefined | null => {
+    if (own === null) return null;
+    const weights = new Map<string, number>();
+    let k = 0;
+    for (const i of own) {
+      const { email, parents } = commits[i]!;
+      if (!email || parents.length > 1) continue;
+      weights.set(email, (weights.get(email) ?? 0) + 1 / ++k);
+    }
+    return [...weights].toSorted((a, b) => b[1] - a[1])[0]?.[0];
+  };
+
+  /** Owners from the walks so far, by `walkKey`; `null` when the budget ran out. */
+  const walks = new Map<string, string | undefined | null>();
+  const budget = { left: WALK_BUDGET };
   const byRef: Record<string, string> = {};
   const used = new Set<string>();
   for (const tip of tips) {
@@ -192,17 +251,26 @@ export const branchOwners = (refsOut: string, logs: OwnerLogs, userOut: string):
       }
       return false;
     };
-    // Weigh the authors of its own commits by closeness to the tip: the k-th newest commit
-    // that is not a merge counts 1/k, so whoever works on it now owns it.
-    const weights = new Map<string, number>();
     const start = position.get(tip.hash);
-    let k = 0;
-    for (const i of start === undefined ? [] : ownCommits(start, log, isBase, COMMITS_PER_BRANCH)) {
-      const { email, parents } = commits[i]!;
-      if (!email || parents.length > 1) continue;
-      weights.set(email, (weights.get(email) ?? 0) + 1 / ++k);
+    let owner: string | undefined | null;
+    if (start !== undefined) {
+      // Refs on one commit walk alike unless their name or upstream is the tip of a commit
+      // they may reach, so that many refs on one commit cost one walk.
+      const at = namesAt.get(name);
+      const up = refAt.get(tip.upstream);
+      const walkKey = [
+        start,
+        at !== undefined && at !== start ? `n${name}` : "",
+        up !== undefined && up !== start ? `u${tip.upstream}` : "",
+      ].join("\0");
+      if (walks.has(walkKey)) owner = walks.get(walkKey);
+      else {
+        owner = ownerOf(ownCommits(start, log, isBase, COMMITS_PER_BRANCH, budget));
+        walks.set(walkKey, owner);
+      }
     }
-    let owner = [...weights].toSorted((a, b) => b[1] - a[1])[0]?.[0];
+    // Out of budget, the tip is still one of its own commits.
+    if (owner === null) owner = tipEmails.get(tip.hash);
     if (owner === undefined) {
       // Without commits of its own (its tip is one when it is in the log), a branch is merged,
       // or a local copy of a default branch. With merges only, its tip author owns it.

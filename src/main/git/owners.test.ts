@@ -189,6 +189,54 @@ describe("branchOwners", () => {
     expect(o.byRef["refs/heads/b0"]).toBe("two@x");
   });
 
+  it("walks only reachable commits, once per kind of ref", { timeout: 3000 }, () => {
+    // Many refs on a tip whose parent comes after a long run of unrelated commits.
+    const gap = Array.from({ length: 5000 }, (_, i) =>
+      commit(`u${i}`, i + 1 < 5000 ? `u${i + 1}` : "", "Bob", "bob@x", 1e5 - i),
+    );
+    const many = Array.from({ length: 80_000 }, (_, i) => ref(`refs/heads/b${i}`, "t"));
+    const o = branchOwners(
+      [ref("refs/heads/u", "u0"), ...many].join("\n"),
+      {
+        commits: [
+          commit("t", "p", "Ann", "ann@x", 1e6),
+          ...gap,
+          commit("p", "", "Ann", "ann@x", 1),
+        ].join("\n"),
+        tips: "",
+      },
+      "",
+    );
+    expect(o.byRef["refs/heads/b0"]).toBe("ann@x");
+    expect(o.byRef["refs/heads/u"]).toBe("bob@x");
+  });
+
+  it("falls back to tip authors when walks would take too long", { timeout: 3000 }, () => {
+    // Each ref's name is also a remote branch at the base its tip merged, so each walks alone.
+    const base = Array.from({ length: 4000 }, (_, i) =>
+      commit(`x${i}`, i + 1 < 4000 ? `x${i + 1}` : "", "Bob", "bob@x", 1e5 - i),
+    );
+    const many = Array.from({ length: 20_000 }, (_, i) => [
+      ref(`refs/heads/b${i}`, "t"),
+      ref(`refs/remotes/r/b${i}`, "x0"),
+    ]).flat();
+    const o = branchOwners(
+      many.join("\n"),
+      {
+        commits: [
+          commit("t", "x0 o0", "Ann", "ann@x", 1e6),
+          ...base,
+          commit("o0", "m1", "Cid", "cid@x", 5),
+        ].join("\n"),
+        tips: commit("t", "", "Ann", "ann@x", 1e6),
+      },
+      "",
+    );
+    // The first walks find Cid's commit; later ones run out and fall back to Ann's merge.
+    expect(o.byRef["refs/heads/b0"]).toBe("cid@x");
+    expect(o.byRef["refs/heads/b19999"]).toBe("ann@x");
+  });
+
   it("owns a branch with only merges of other branches by its tip", () => {
     // An integration branch tracking main that merged Ann's topic.
     const o = branchOwners(
