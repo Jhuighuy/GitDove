@@ -11,5 +11,6 @@
     }
   },
   "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/preload/api.d.ts"],
-  "exclude": ["src/**/*.test.ts"]
+  // Shared tests use Node APIs; tsconfig.node.json checks them.
+  "exclude": ["src/shared/**/*.test.ts"]
 }

@@ -36,19 +36,20 @@ robustness as the top priorities.
 
 ## Development
 
-Requires Node.js 24+ and `git`; `ssh` is needed for remote repositories.
+Requires Node.js 24.2+ and `git`; `ssh` is needed for remote repositories.
 The macOS app requires macOS 26+ on Apple silicon. Local packaging needs Apple's Command
 Line Tools for the updater helper; a full Xcode installation is optional.
 
 ```bash
 npm install
-npm run dev        # start the app with hot reload
-npm test           # unit tests
-npm run test:coverage # unit tests with LCOV coverage in coverage/lcov.info
+npm run dev           # start the app with hot reload
+npm test              # all tests: unit and integration (real git, shells and file watchers)
+npm run test:unit     # unit tests only, for a fast inner loop
+npm run test:coverage # all tests with LCOV coverage in coverage/lcov.info
 npm run typecheck
 npm run lint
 npm run format
-npm run dist       # package installers into release/ (macOS: arm64 only)
+npm run dist          # package installers into release/ (macOS: arm64 only)
 ```
 
 The icon artwork lives in `build/icon.svg`. Run `npm run icons` after editing it to
@@ -67,8 +68,9 @@ neither Xcode nor Icon Composer. Windows and Linux use the static exports.
 `npm run icons` refreshes the `.icns` fallback on macOS using the system `iconutil`
 (no Xcode needed); on other platforms it preserves the committed `.icns`.
 
-The repository tests create throwaway repositories under `/tmp`. Set `GITDOVE_INT_SSH_HOST` to also
-run them on a remote host over SSH (CI uses an SSH server on localhost):
+The repository tests create throwaway repositories under `/tmp` and ignore your global and system
+git configuration. Set `GITDOVE_INT_SSH_HOST` to also run them on a remote host over SSH (CI uses
+an SSH server on localhost):
 
 ```bash
 GITDOVE_INT_SSH_HOST=myhost npm test
@@ -83,13 +85,14 @@ GITDOVE_INT_LOCAL=~/some/repo GITDOVE_INT_SSH=myhost:/path/to/repo npx vitest ru
 CI runs on pull requests and pushes to `main`, including a
 [SonarCloud analysis](https://sonarcloud.io/dashboard?id=Jhuighuy_GitDove) that fails if the quality
 gate fails. The scan imports Vitest coverage from `coverage/lcov.info` and uses the repository's
-`SONAR_TOKEN` Actions secret and the settings in
-`sonar-project.properties`, which also lists the rules this project ignores and why. SonarCloud's Automatic Analysis must be disabled under
-**Administration > Analysis Method** when using this CI analysis. Pull requests from forks run
-the usual checks but skip SonarCloud because GitHub does not expose repository secrets to them.
+`SONAR_TOKEN` Actions secret and the settings in `sonar-project.properties`, which also lists the
+rules this project ignores and why. SonarCloud's Automatic Analysis must be disabled under
+**Administration > Analysis Method** when using this CI analysis. Pull requests from forks and
+Dependabot run the usual checks but skip the scan because GitHub does not expose repository
+secrets to them.
 
 `scripts/drive.mjs` launches the built app under Playwright for scripted UI checks and
-screenshots. Set `GITDOVE_USER_DATA` to use an isolated profile.
+screenshots. It uses the profile in `GITDOVE_USER_DATA`, or a throwaway one if that is unset.
 
 ## Architecture
 
@@ -100,8 +103,11 @@ screenshots. Set `GITDOVE_USER_DATA` to use an isolated profile.
 | Preload         | `src/preload`  | Exposes a minimal `window.gitdove` bridge (`invoke`, `on`).                                                                                                        |
 | Renderer        | `src/renderer` | React 19, Tailwind 4, shadcn/ui on Base UI, TanStack Query and Virtual, and zustand for UI state.                                                                  |
 
-All git work happens in the main process by spawning `git`, either locally or via `ssh host -- git …`.
-The renderer never touches the file system. Query results are cached with TanStack Query and
+All git work happens in the main process. Local repositories spawn `git` directly. For a remote
+host, GitDove keeps one multiplexed SSH connection (`ControlMaster`) and a persistent POSIX `sh`
+runner on the host that executes commands sent over its stdin, so a git call costs a fork on the
+remote rather than a new SSH session; commands that stream output or take large input use a
+session of their own. The renderer never touches the file system. Query results are cached with TanStack Query and
 invalidated by `repo.changed` events from the watchers, so the UI never polls.
 
 Releases: every push to `main` that passes CI is packaged for macOS (Apple silicon), Windows and

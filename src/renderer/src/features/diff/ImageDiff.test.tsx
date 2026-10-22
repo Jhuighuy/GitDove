@@ -136,8 +136,7 @@ describe("ImageDiff", () => {
       (container.querySelector(`img[alt=${alt}]`)!.parentElement as HTMLElement).style.clipPath;
     expect([clip("Before"), clip("After")]).toEqual(["inset(0 50% 0 0)", "inset(0 0 0 50%)"]);
     await act(async () => {
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-      set.call(slider, "25");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(slider, "25");
       slider.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect([clip("Before"), clip("After")]).toEqual(["inset(0 75% 0 0)", "inset(0 0 0 25%)"]);
@@ -149,6 +148,13 @@ describe("ImageDiff", () => {
     expect(container.querySelector("input[type=range]")).toBeNull();
     expect(container.textContent).toContain("Cannot display this image.");
     expect(container.textContent).toContain("Too large to display (30 MB).");
+  });
+
+  it("recognizes Git LFS pointers", async () => {
+    const pointer = "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n";
+    mocks.versions = { old: blob(pointer), new: blob("a") };
+    await render("split");
+    expect(container.textContent).toContain("Stored in Git LFS: only its pointer is here.");
   });
 
   it("labels added and deleted images", async () => {

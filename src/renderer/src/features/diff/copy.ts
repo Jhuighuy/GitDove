@@ -8,7 +8,8 @@ export interface TextPoint {
 
 /**
  * The text between two points of a diff view, one line per row, without line numbers or signs.
- * In split view `side` picks the column; hunk headers and empty cells are left out.
+ * In split view `side` picks the column; hunk headers, empty cells and no-newline markers are left
+ * out.
  */
 export const copiedText = (
   model: DiffModel,
@@ -22,7 +23,7 @@ export const copiedText = (
     const row = rows[i];
     const id =
       row?.type === "line" ? row.id : row?.type === "split" ? [row.left, row.right][side]! : -1;
-    if (id < 0) continue;
+    if (id < 0 || model.lines[id]!.kind === "meta") continue;
     let text = model.lines[id]!.text;
     if (i === end.row) text = text.slice(0, end.offset);
     if (i === start.row) text = text.slice(start.offset);

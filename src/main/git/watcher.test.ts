@@ -11,6 +11,8 @@ import type { Host } from "../exec/hosts";
 import type { Repository } from "./repository";
 import { watchRepository } from "./watcher";
 
+vi.mock("electron-log/main", () => ({ default: { warn: () => {} } }));
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
@@ -34,36 +36,49 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
       gitDir: fields.gitDir,
       commonDir: fields.commonDir ?? fields.gitDir,
       bare: fields.bare ?? false,
+      fork: (effect: Effect.Effect<unknown, unknown>) => Effect.runFork(effect),
+      // Only `check-ignore` runs, which exits with 1 when nothing is ignored.
+      gitText: (args: readonly string[], options: { stdin?: string }) =>
+        Effect.sync(() => {
+          try {
+            return execFileSync("git", args, {
+              cwd: fields.workTree,
+              input: options.stdin,
+            }).toString();
+          } catch {
+            return "";
+          }
+        }),
     }) as unknown as Repository;
 
   /** Watches a repository and records every notification. */
   const watch = (repo: Repository) => {
     const batches: Set<RepoChangeScope>[] = [];
-    const dispose = watchRepository(repo, (s) => batches.push(s));
+    const { dispose, setVisible } = watchRepository(repo, (s) => batches.push(s));
     disposers.push(dispose);
     const seen = () => new Set(batches.flatMap((b) => [...b]));
     return {
       batches,
       dispose,
+      setVisible,
       /**
        * Repeats `action` until `scope` is reported. Subscriptions start
        * asynchronously, so the first attempts may go unnoticed.
        */
       until: async (scope: RepoChangeScope, action: () => void) => {
         batches.length = 0;
-        for (let i = 0; i < 40 && !seen().has(scope); i++) {
+        for (let i = 0; i < 60 && !seen().has(scope); i++) {
           action();
-          await sleep(250);
+          await sleep(150);
         }
         expect(seen()).toContain(scope);
       },
-      /** Waits until no notification arrived for a while. */
       /** Waits until notifications stop, then clears them; returns how many there were. */
       quiet: async () => {
         let n = -1;
         while (n !== batches.length) {
           n = batches.length;
-          await sleep(500);
+          await sleep(400);
         }
         batches.length = 0;
         return n;
@@ -115,21 +130,43 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
     await w.until("worktree", () => touch(join(dir, "probe")));
     await w.quiet();
     for (let i = 0; i < 20; i++) touch(join(dir, `f${i}`));
-    touch(join(dir, ".git", "FETCH_HEAD"));
     await vi.waitFor(() => expect(w.batches.length).toBeGreaterThan(0));
-    // 21 writes in a few milliseconds end up in at most a couple of batches.
+    // 20 writes in a few milliseconds end up in at most a couple of batches.
     expect(await w.quiet()).toBeLessThanOrEqual(2);
   });
 
-  it("ignores object database writes and unknown git files", async () => {
+  it("ignores object database writes, fetches, ignored files and unknown git files", async () => {
     const dir = freshRepo("objects");
+    writeFileSync(join(dir, ".gitignore"), "target/\n");
     const w = watch(localRepo({ workTree: dir, gitDir: join(dir, ".git") }));
     await w.until("worktree", () => touch(join(dir, "probe")));
     await w.quiet();
     mkdirSync(join(dir, ".git", "objects", "ab"), { recursive: true });
     touch(join(dir, ".git", "objects", "ab", "cdef"));
     touch(join(dir, ".git", "description"));
-    await sleep(800);
+    touch(join(dir, ".git", "FETCH_HEAD"));
+    mkdirSync(join(dir, "target", "debug"), { recursive: true });
+    await sleep(300);
+    for (let i = 0; i < 5; i++) touch(join(dir, "target", "debug", `o${i}`));
+    await sleep(600);
+    expect(w.batches).toEqual([]);
+    // A file that is not ignored still counts.
+    await w.until("worktree", () => {
+      touch(join(dir, "target", "debug", "o0"));
+      touch(join(dir, "src.txt"));
+    });
+  });
+
+  it("drops ignored files whose names read as pathspec magic", async () => {
+    const dir = freshRepo("magic");
+    writeFileSync(join(dir, ".gitignore"), "*.o\n");
+    const w = watch(localRepo({ workTree: dir, gitDir: join(dir, ".git") }));
+    await w.until("worktree", () => touch(join(dir, "probe")));
+    await w.quiet();
+    touch(join(dir, "a.o"));
+    touch(join(dir, ":!x.o"));
+    touch(join(dir, ":(glob)y.o"));
+    await sleep(600);
     expect(w.batches).toEqual([]);
   });
 
@@ -140,7 +177,33 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
     w.dispose();
     await w.quiet();
     touch(join(dir, "after"));
+    await sleep(500);
+    expect(w.batches).toEqual([]);
+  });
+
+  it("holds changes while hidden and reports them once shown", async () => {
+    const dir = freshRepo("hidden");
+    writeFileSync(join(dir, ".gitignore"), "target/\n");
+    const w = watch(localRepo({ workTree: dir, gitDir: join(dir, ".git") }));
+    await w.until("worktree", () => touch(join(dir, "probe")));
+    await w.quiet();
+    w.setVisible(false);
+    touch(join(dir, "a.txt"));
+    git(dir, "add", "a.txt");
     await sleep(800);
+    expect(w.batches).toEqual([]);
+    w.setVisible(true);
+    expect(w.batches).toEqual([new Set(["worktree", "index"])]);
+    w.batches.length = 0;
+
+    // Only ignored files changed meanwhile: still nothing to report.
+    w.setVisible(false);
+    mkdirSync(join(dir, "target"), { recursive: true });
+    await sleep(300);
+    touch(join(dir, "target", "out"));
+    await sleep(800);
+    w.setVisible(true);
+    await sleep(500);
     expect(w.batches).toEqual([]);
   });
 
@@ -177,12 +240,26 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
       mkdirSync(join(main, ".git", "logs", "refs"), { recursive: true });
       touch(join(main, ".git", "logs", "refs", "stash"));
     });
+    // The main worktree's HEAD and index are not this worktree's.
+    await w.quiet();
+    writeFileSync(join(main, ".git", "HEAD"), `ref: refs/heads/z${counter++}\n`);
+    git(main, "add", "a");
+    touch(join(main, ".git", "index"));
+    await sleep(600);
+    expect(w.batches).toEqual([]);
   });
 
-  it("does not throw for a directory that cannot be watched", async () => {
+  it("polls a directory that cannot be watched", async () => {
     const missing = join(root, "missing");
-    const w = watch(localRepo({ workTree: missing, gitDir: join(missing, ".git") }));
-    await sleep(300);
+    const sh = vi.fn(() =>
+      Effect.succeed({ stdout: Buffer.from(""), stderr: "", exitCode: 0, truncated: false }),
+    );
+    const repo = {
+      ...(localRepo({ workTree: missing, gitDir: join(missing, ".git") }) as object),
+      host: { kind: "local", sh } as unknown as Host,
+    } as unknown as Repository;
+    const w = watch(repo);
+    await vi.waitFor(() => expect(sh).toHaveBeenCalled());
     expect(w.batches).toEqual([]);
   });
 });
@@ -192,8 +269,8 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
 // ---------------------------------------------------------------------------
 
 describe("watchRepository on a remote repository", () => {
-  const state = (h: string, i: string, r: string, w: string) =>
-    `H:${h}\nI:${i}\nR:${r}\nW:${w}\nnoise\n`;
+  const state = (h: string, i: string, r: string, w: string, c = "1.1") =>
+    `H:${h}\nI:${i}\nR:${r}\nC:${c}\nW:${w}\nnoise\n`;
 
   /** A repository on a fake SSH host; `polls` counts executions of its poll script. */
   const remoteRepo = (outputs: (string | Error)[]) => {
@@ -215,7 +292,13 @@ describe("watchRepository on a remote repository", () => {
             });
       }),
     );
-    const repo = { host: { kind: "ssh", sh } as unknown as Host, workTree: "/srv/repo" };
+    const repo = {
+      host: { kind: "ssh", sh } as unknown as Host,
+      workTree: "/srv/repo",
+      gitDir: "/srv/repo/.git",
+      commonDir: "/srv/repo/.git",
+      fork: (effect: Effect.Effect<unknown, unknown>) => Effect.runFork(effect),
+    };
     return { repo: repo as unknown as Repository, sh, polls };
   };
 
@@ -232,15 +315,20 @@ describe("watchRepository on a remote repository", () => {
       state("ref: refs/heads/dev", "1.10", "111 5", "333 9"),
       new Error("connection reset"),
       state("ref: refs/heads/dev", "2.20", "444 5", "333 9"),
+      state("ref: refs/heads/dev", "2.20", "444 5", "333 9", "2.2"),
     ]);
     const batches: RepoChangeScope[][] = [];
-    const dispose = watchRepository(repo, (s) => batches.push([...s].toSorted()));
+    const { dispose } = watchRepository(repo, (s) => batches.push([...s].toSorted()));
 
     await vi.advanceTimersByTimeAsync(0);
     expect(polls).toHaveBeenCalledTimes(1);
     // Polling only reads, so it may be retried after a dropped connection.
     expect(sh.mock.calls[0]![1]).toEqual({ cwd: "/srv/repo", idempotent: true });
-    expect(sh.mock.calls[0]![0]).toContain("git status --porcelain=v2");
+    const script = sh.mock.calls[0]![0];
+    expect(script).toContain("git status --porcelain=v2");
+    // The git directories are known: the poll runs no git command to find them.
+    expect(script).toContain("gd=/srv/repo/.git");
+    expect(script).not.toContain("rev-parse");
 
     await vi.advanceTimersByTimeAsync(2000);
     expect(polls).toHaveBeenCalledTimes(2);
@@ -260,27 +348,59 @@ describe("watchRepository on a remote repository", () => {
       ["index", "refs"],
     ]);
 
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(batches.at(-1)).toEqual(["config"]);
+
     dispose();
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(polls).toHaveBeenCalledTimes(5);
+    expect(polls).toHaveBeenCalledTimes(6);
   });
 
-  it("polls less often while the app is in the background", async () => {
+  it("polls less often while the app is in the background, and right away when it is back", async () => {
     vi.useFakeTimers();
     const { repo, polls } = remoteRepo([state("x", "1", "2", "3")]);
     activity.setFocused(false);
-    const dispose = watchRepository(repo, () => {});
+    const { dispose } = watchRepository(repo, () => {});
     await vi.advanceTimersByTimeAsync(0);
     expect(polls).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(14_000);
     expect(polls).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1000);
     expect(polls).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5000);
     activity.setFocused(true);
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(0);
     expect(polls).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(2000);
     expect(polls).toHaveBeenCalledTimes(4);
+    dispose();
+  });
+
+  it("polls a hidden repository rarely, and right away once it is shown", async () => {
+    vi.useFakeTimers();
+    const { repo, polls } = remoteRepo([state("x", "1", "2", "3")]);
+    const { dispose, setVisible } = watchRepository(repo, () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls).toHaveBeenCalledTimes(1);
+    setVisible(false);
+    // The wait that began while it was shown ends as usual; the next ones are long.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(polls).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(polls).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(polls).toHaveBeenCalledTimes(3);
+    // The app coming to the front does not wake hidden repositories…
+    activity.setFocused(false);
+    activity.setFocused(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls).toHaveBeenCalledTimes(3);
+    // …showing them does.
+    setVisible(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(polls).toHaveBeenCalledTimes(5);
     dispose();
   });
 });

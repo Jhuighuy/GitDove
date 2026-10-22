@@ -7,6 +7,88 @@ function ContextMenu({ ...props }: ContextMenuPrimitive.Root.Props) {
   return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />;
 }
 
+/**
+ * The target of a context menu shared by many items (rows of a list). An item calls `capture`
+ * from its `contextmenu` handler, which runs before the trigger's as the event bubbles up to
+ * it; opening anywhere else (empty space, a header without a menu) is cancelled, so the menu
+ * never shows an earlier target. The target is dropped once the menu has closed: render the
+ * menu's content only while there is one.
+ */
+function useContextMenuTarget<T>() {
+  const [target, setTarget] = React.useState<T | null>(null);
+  const pending = React.useRef<T | null>(null);
+  const open = React.useRef(false);
+  const capture = React.useCallback((t: T) => {
+    // An open menu takes the new target as is: it stays open for a right-click inside it.
+    if (open.current) setTarget(t);
+    pending.current = t;
+    // Only for the event being dispatched.
+    queueMicrotask(() => {
+      pending.current = null;
+    });
+  }, []);
+  const onOpenChange = React.useCallback(
+    (next: boolean, details: ContextMenuPrimitive.Root.ChangeEventDetails) => {
+      if (next) {
+        const t = pending.current;
+        pending.current = null;
+        if (t === null) return details.cancel();
+        setTarget(t);
+      }
+      open.current = next;
+    },
+    [],
+  );
+  const onOpenChangeComplete = React.useCallback((next: boolean) => {
+    if (!next && !open.current) setTarget(null);
+  }, []);
+  return { target, capture, rootProps: { onOpenChange, onOpenChangeComplete } };
+}
+
+/** Whether a key press asks for a context menu (the menu key or Shift+F10). */
+const isMenuKey = (e: React.KeyboardEvent) =>
+  e.key === "ContextMenu" || (e.shiftKey && e.key === "F10");
+
+/**
+ * Opens the context menu of `el` (e.g. a list's active row) as a right-click on it would:
+ * lists handle the menu key themselves, as the browser's event goes to the focused list.
+ */
+const openMenuAt = (el: HTMLElement | null) => {
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  el.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: r.left + Math.min(40, r.width / 2),
+      clientY: r.bottom,
+    }),
+  );
+};
+
+/** About two seconds of frames: a row scrolled to may have to be fetched before it renders. */
+const MENU_WAIT_FRAMES = 120;
+
+/**
+ * Opens the context menu of a virtualized list's active row (`aria-activedescendant`), which
+ * may be scrolled out of view and not rendered: `reveal` scrolls to it, and the menu opens once
+ * the row renders, unless the list lost focus or moved on to another row meanwhile.
+ */
+const openActiveMenu = (list: HTMLElement | null, id: string, reveal: () => void) => {
+  const shown = () =>
+    list?.getAttribute("aria-activedescendant") === id ? document.getElementById(id) : null;
+  if (shown()) return openMenuAt(shown());
+  reveal();
+  let frames = MENU_WAIT_FRAMES;
+  const poll = () => {
+    if (!list || document.activeElement !== list) return;
+    const el = shown();
+    if (el) openMenuAt(el);
+    else if (frames-- > 0) requestAnimationFrame(poll);
+  };
+  requestAnimationFrame(poll);
+};
+
 function ContextMenuPortal({ ...props }: ContextMenuPrimitive.Portal.Props) {
   return <ContextMenuPrimitive.Portal data-slot="context-menu-portal" {...props} />;
 }
@@ -236,4 +318,8 @@ export {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
   ContextMenuRadioGroup,
+  useContextMenuTarget,
+  isMenuKey,
+  openActiveMenu,
+  openMenuAt,
 };

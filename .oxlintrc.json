@@ -7,6 +7,7 @@
   },
   "rules": {
     "react/react-in-jsx-scope": "off",
+    "react/rules-of-hooks": "error",
     "react-perf/jsx-no-new-function-as-prop": "off",
     "react-perf/jsx-no-new-object-as-prop": "off",
     "react-perf/jsx-no-new-array-as-prop": "off",
@@ -21,7 +22,17 @@
       }
     ],
     "react/incompatible-library": "off",
-    "import/no-unassigned-import": "off"
+    "import/no-unassigned-import": "off",
+    "typescript/no-unsafe-type-assertion": "off",
+    "typescript/consistent-return": "off"
   },
-  "ignorePatterns": ["out", "dist", "release", "node_modules", "src/renderer/src/components/ui"]
+  "ignorePatterns": ["out", "dist", "release", "node_modules", "src/renderer/src/components/ui"],
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "typescript/unbound-method": "off"
+      }
+    }
+  ]
 }

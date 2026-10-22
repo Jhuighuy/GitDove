@@ -47,3 +47,28 @@ it("copies one column of a split view", () => {
   expect(all(0)).toBe("same\nbefore");
   expect(all(1)).toBe("same\nafter");
 });
+
+it("leaves out no-newline markers", () => {
+  const m = buildModel({
+    path: "a",
+    oldPath: null,
+    binary: false,
+    truncated: false,
+    hunks: [
+      {
+        header: "@@ -1 +1 @@",
+        oldStart: 1,
+        oldLines: 1,
+        newStart: 1,
+        newLines: 1,
+        lines: [
+          { kind: "del", oldNo: 1, newNo: null, text: "x" },
+          { kind: "meta", oldNo: null, newNo: null, text: "\\ No newline at end of file" },
+          { kind: "add", oldNo: null, newNo: 1, text: "y" },
+        ],
+      },
+    ],
+  });
+  const end = { row: m.unified.length - 1, offset: Infinity };
+  expect(copiedText(m, m.unified, { row: 0, offset: 0 }, end, 0)).toBe("x\ny");
+});

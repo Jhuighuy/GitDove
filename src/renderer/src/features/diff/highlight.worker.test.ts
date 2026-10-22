@@ -6,6 +6,8 @@ type Tokens = Extract<HighlightResponse, { type: "tokens" }>;
 
 const posted: HighlightResponse[] = [];
 const transfers: Transferable[][] = [];
+/** Called with each message the worker posts. */
+let onPost: ((msg: HighlightResponse) => void) | null = null;
 let handler: ((e: MessageEvent<HighlightRequest>) => void) | null = null;
 
 // The worker module talks to `self`; stand in for the worker global scope.
@@ -16,16 +18,53 @@ vi.stubGlobal("self", {
   postMessage: (msg: HighlightResponse, transfer: Transferable[]) => {
     posted.push(msg);
     transfers.push(transfer);
+    onPost?.(msg);
   },
 });
 
+/**
+ * Loading shiki, its themes and grammars is by far the slowest part, and under heavy load can
+ * take many seconds: it happens once, up front, with as long as it takes. The tests then wait
+ * on the worker's own work only, which is quick, but never on a clock.
+ */
+const SLOW = 180_000;
+vi.setConfig({ testTimeout: SLOW, hookTimeout: SLOW });
+
+/** Palette entries the warm-up produced. */
+let warmed = 0;
+
 beforeAll(async () => {
   await import("./highlight.worker");
+  const { bundledLanguages } = await import("shiki/langs");
+  await Promise.all([
+    import("shiki/themes/github-light.mjs"),
+    import("shiki/themes/github-dark.mjs"),
+    ...(["typescript", "javascript", "c", "python"] as const).map((l) => bundledLanguages[l]()),
+  ]);
+  // The first tokenization compiles the grammar's patterns; on a loaded machine that can pass
+  // shiki's per-line time limit, which leaves the rest of the line plain. Get it done here, in
+  // the light theme, so that the tests see the dark one's styles arrive as new.
+  let warm: (() => void) | null = null;
+  const done = new Promise<void>((r) => (warm = r));
+  onPost = (m) => m.type === "tokens" && warm?.();
+  send({
+    type: "open",
+    doc: 0,
+    path: "warm.ts",
+    sides: [[], ["const a = 1; // b", "let s = `x${1}`;"]],
+    resets: [[0], [0]],
+  });
+  send({ type: "highlight", doc: 0, theme: "light", side: 1, chunk: 0 });
+  await done;
+  send({ type: "close", doc: 0 });
+  onPost = null;
+  warmed = collectPalette().length;
 });
 
 beforeEach(() => {
   posted.splice(0);
   transfers.splice(0);
+  onPost = null;
 });
 
 let nextDoc = 1;
@@ -46,7 +85,9 @@ const highlight = (doc: number, side: 0 | 1, chunk: number, theme: "dark" | "lig
 
 const tokensOf = (doc: number) =>
   posted.filter((m): m is Tokens => m.type === "tokens" && m.doc === doc);
-const waitFor = (fn: () => void) => vi.waitFor(fn, { timeout: 15_000, interval: 5 });
+/** Waits for the worker, failing a little before the test would time out. */
+const waitFor = (fn: () => void) => vi.waitFor(fn, { timeout: SLOW - 10_000, interval: 5 });
+/** Lets the worker run on; used only to check that nothing more arrives. */
 const idle = () => new Promise((r) => setTimeout(r, 50));
 
 /** Styles of the tokens of line `i` of a chunk, as `[text, style]` pairs. */
@@ -80,7 +121,7 @@ it("highlights a chunk of lines and sends new styles along", async () => {
   expect(msg.starts).toHaveLength(lines.length + 1);
   // Typed arrays are transferred, not copied.
   expect(transfers[0]).toEqual([msg.starts.buffer, msg.tokens.buffer]);
-  expect(msg.paletteBase).toBe(0);
+  expect(msg.paletteBase).toBe(warmed);
   expect(msg.palette!.every((s) => /^#[0-9a-f]{6,8}\|\d+$/i.test(s))).toBe(true);
 
   const styles = collectPalette();
@@ -98,7 +139,7 @@ it("highlights a chunk of lines and sends new styles along", async () => {
   await waitFor(() => expect(tokensOf(doc)).toHaveLength(2));
   const light = tokensOf(doc)[1]!;
   expect(light.theme).toBe("light");
-  expect(light.paletteBase).toBe(msg.palette!.length);
+  expect(light.paletteBase).toBe(warmed + msg.palette!.length);
   send({ type: "close", doc });
 });
 
@@ -126,8 +167,8 @@ it("carries grammar state across chunks, unless a hunk starts there", async () =
     lines[CHUNK - 1]!,
     CHUNK - 1,
   )[0]![1];
-  const [endContinued] = lineTokens(tokensOf(continued)[1]!, styles, lines[CHUNK]!, 0);
-  const [endReset] = lineTokens(tokensOf(reset)[0]!, styles, lines[CHUNK]!, 0);
+  const [endContinued] = lineTokens(tokensOf(continued)[1]!, styles, lines[CHUNK], 0);
+  const [endReset] = lineTokens(tokensOf(reset)[0]!, styles, lines[CHUNK], 0);
   // Inside the comment, `end` is comment text; after a reset it is an identifier.
   expect(endContinued![1]).toBe(commentStyle);
   expect(endReset![1]).not.toBe(commentStyle);
@@ -197,4 +238,38 @@ it("drops closed documents and their pending requests", async () => {
   highlight(12345, 1, 0);
   await idle();
   expect(posted).toEqual([]);
+});
+
+it("highlights a long chain of chunks one at a time, newer requests first", async () => {
+  const lines = Array.from({ length: CHUNK * 31 }, (_, i) => `let x${i} = ${i};`);
+  const doc = open("a.js", [lines, lines]);
+  // The first chunk of the chain lets a newer request in before the rest of it.
+  onPost = (msg) => {
+    if (msg.type === "tokens" && msg.side === 1) {
+      onPost = null;
+      highlight(doc, 0, 3);
+    }
+  };
+  highlight(doc, 1, 30);
+  await waitFor(() => expect(tokensOf(doc).at(-1)?.chunk).toBe(30));
+  // Only the last few chunks before the requested one are highlighted for its state.
+  expect(tokensOf(doc).map((m) => `${m.side}:${m.chunk}`)).toEqual([
+    "1:20",
+    "0:0",
+    "0:1",
+    "0:2",
+    "0:3",
+    ...Array.from({ length: 10 }, (_, i) => `1:${21 + i}`),
+  ]);
+  send({ type: "close", doc });
+});
+
+it("stops a chain when its document closes", async () => {
+  const lines = Array.from({ length: CHUNK * 6 }, (_, i) => `let x${i} = ${i};`);
+  const doc = open("a.js", [[], lines]);
+  onPost = () => send({ type: "close", doc });
+  highlight(doc, 1, 5);
+  await waitFor(() => expect(tokensOf(doc)).toHaveLength(1));
+  await idle();
+  expect(tokensOf(doc)).toHaveLength(1);
 });

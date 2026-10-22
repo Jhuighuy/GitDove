@@ -203,6 +203,52 @@ it("activates and cycles through tabs", async () => {
   expect(s().active).toBe(only);
 });
 
+it("starts with a blank tab when the saved tabs cannot be loaded", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  mocks.api.mockRejectedValue(new Error("corrupt state"));
+  await s().load();
+  expect(s().loaded).toBe(true);
+  expect(repos()).toEqual([null]);
+});
+
+it("forgets everything about a closed repository", async () => {
+  const { keys, queryClient } = await import("@/lib/queries");
+  const { useRepoUiStore } = await import("./repo-ui");
+  const { useDrafts } = await import("./drafts");
+  await load([A, B], A);
+  queryClient.setQueryData(keys.status(A), "status");
+  queryClient.setQueryData(keys.open(A), "open");
+  queryClient.setQueryData(keys.status(B), "status");
+  useRepoUiStore.getState().select(A, { kind: "wip" });
+  useDrafts.getState().set(A, { summary: "Unfinished", amend: true });
+  s().closeTab(s().tabs[0]!.key);
+  expect(queryClient.getQueryData(keys.status(A))).toBeUndefined();
+  expect(queryClient.getQueryData(keys.open(A))).toBeUndefined();
+  expect(queryClient.getQueryData(keys.status(B))).toBe("status");
+  expect(useRepoUiStore.getState().byRepo[A]).toBeUndefined();
+  // A typed message is kept (amending is not).
+  expect(useDrafts.getState().drafts[A]).toMatchObject({ summary: "Unfinished", amend: false });
+  expect(mocks.api).toHaveBeenCalledWith("repo.close", A);
+});
+
+it("drops the previous commit's message prefilled for amending when closing a tab", async () => {
+  const { useDrafts } = await import("./drafts");
+  await load([A, B], A);
+  useDrafts.getState().set(A, { summary: "Old", amend: true, prefill: "Old" });
+  s().closeTab(s().tabs[0]!.key);
+  expect(useDrafts.getState().drafts[A]).toBeUndefined();
+});
+
+it("keeps repositories in background tabs from refetching until shown", async () => {
+  const q = await import("@/lib/queries");
+  const refetch = vi.spyOn(q.queryClient, "refetchQueries").mockResolvedValue();
+  await load([A, B], A);
+  s().activate(s().tabs[1]!.key);
+  // A went to the background; B, shown, catches up on what changed while it was hidden.
+  expect(refetch).toHaveBeenCalledWith(expect.objectContaining({ queryKey: q.keys.repo(B) }));
+  refetch.mockRestore();
+});
+
 it("moves tabs and persists the order", async () => {
   await load([A, B, C], A);
   const order = () => s().tabs.map((t) => t.repo);
@@ -218,4 +264,28 @@ it("moves tabs and persists the order", async () => {
   s().moveTab("unknown", 0);
   s().moveTab(before[0]!.key, 0);
   expect(s().tabs).toBe(before);
+});
+
+it("keeps a repository the active tab shows out of the background", async () => {
+  const invoke = vi.fn(async (..._args: unknown[]) => ({ ok: true, value: undefined }));
+  vi.stubGlobal("window", { gitdove: { invoke } });
+  try {
+    // No tab in the background to begin with.
+    useTabs.setState({ tabs: [{ key: "x", repo: C }], active: "x" });
+    useTabs.setState({
+      tabs: [
+        { key: "a1", repo: A },
+        { key: "a2", repo: A },
+        { key: "b", repo: B },
+      ],
+      active: "a1",
+    });
+    const hidden = () =>
+      invoke.mock.calls
+        .filter(([m, , visible]) => m === "repo.setVisible" && visible === false)
+        .map(([, repo]) => repo);
+    expect(hidden()).toEqual([B]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

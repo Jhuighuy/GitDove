@@ -45,16 +45,26 @@ const BY_NAME: Readonly<Record<string, string>> = {
   makefile: "make",
   gnumakefile: "make",
   "cmakelists.txt": "cmake",
-  "meson.build": "meson",
   gemfile: "ruby",
   rakefile: "ruby",
   podfile: "ruby",
   justfile: "just",
-  "build.bazel": "starlark",
-  workspace: "starlark",
+  // Starlark is a dialect of Python.
+  build: "python",
+  "build.bazel": "python",
+  workspace: "python",
+  "workspace.bazel": "python",
+  "module.bazel": "python",
+  // Lock files are in all sorts of formats.
+  "cargo.lock": "toml",
+  "poetry.lock": "toml",
+  "uv.lock": "toml",
+  "pdm.lock": "toml",
+  "flake.lock": "json",
+  "composer.lock": "json",
+  "yarn.lock": "yaml",
   ".bashrc": "bash",
   ".zshrc": "zsh",
-  ".gitignore": "ignore",
   ".gitattributes": "ini",
   ".editorconfig": "ini",
 };
@@ -104,22 +114,20 @@ const BY_EXT: Readonly<Record<string, string>> = {
   f90: "fortran-free-form",
   f: "fortran-fixed-form",
   tf: "terraform",
-  bzl: "starlark",
+  bzl: "python",
   cfg: "ini",
   conf: "ini",
-  lock: "json",
   txt: "",
 };
 
-/** Picks a shiki language for a path, or null for plain text. */
-export const languageFor = (path: string, available: readonly string[]): string | null => {
+/** Picks one of the `available` shiki languages for a path, or null for plain text. */
+export const languageFor = (path: string, available: ReadonlySet<string>): string | null => {
   const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
   const dot = name.lastIndexOf(".");
   const ext = dot > 0 ? name.slice(dot + 1) : "";
-  const known = new Set(available);
   for (const candidate of [BY_NAME[name], BY_EXT[ext], ext]) {
     if (candidate === "") return null;
-    if (candidate && known.has(candidate)) return candidate;
+    if (candidate && available.has(candidate)) return candidate;
   }
   return null;
 };

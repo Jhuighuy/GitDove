@@ -3,7 +3,16 @@
 // macOS tools are run by absolute path rather than looked up on PATH.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 export const root = join(import.meta.dirname, "..");
@@ -22,11 +31,19 @@ export async function fetchSparkle() {
   const data = Buffer.from(await response.arrayBuffer());
   const sha256 = createHash("sha256").update(data).digest("hex");
   if (sha256 !== config.sha256) throw new Error(`Sparkle checksum mismatch: ${sha256}`);
-  rmSync(dir, { recursive: true, force: true });
-  mkdirSync(dir, { recursive: true });
-  const archive = join(dir, "Sparkle.tar.xz");
-  writeFileSync(archive, data);
-  execFileSync("/usr/bin/tar", ["-xf", archive, "-C", dir]);
+  // Unpack next to the cache and rename it into place, so an interrupted run never leaves a
+  // partial Sparkle.framework that later runs would take for a complete one.
+  mkdirSync(dirname(dir), { recursive: true });
+  const partial = mkdtempSync(`${dir}.partial-`);
+  try {
+    const archive = join(partial, "Sparkle.tar.xz");
+    writeFileSync(archive, data);
+    execFileSync("/usr/bin/tar", ["-xf", archive, "-C", partial]);
+    rmSync(dir, { recursive: true, force: true });
+    renameSync(partial, dir);
+  } finally {
+    rmSync(partial, { recursive: true, force: true });
+  }
   return dir;
 }
 

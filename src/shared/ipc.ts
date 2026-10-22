@@ -1,26 +1,28 @@
 /**
  * Typed IPC contract between the renderer and the main process.
  *
- * All requests go through a single `invoke` channel carrying `{ method, args }`
- * and resolve to an {@link RpcResult}. Push notifications from main go through
- * the `event` channel.
+ * All requests go through a single invoke channel ({@link IPC_INVOKE}) as separate arguments,
+ * `(method, args, requestId?)`, and resolve to an {@link RpcResult}. Push notifications from
+ * main go through the event channel ({@link IPC_EVENT}).
  */
-import type {
-  AppState,
-  CommitDetails,
-  Comparison,
-  DiffTarget,
-  DirListing,
-  FileDiff,
-  FileVersions,
-  GraphInfo,
-  GraphRow,
-  RefsSnapshot,
-  RepoId,
-  RepoInfo,
-  RepoLocation,
-  UpdaterStatus,
-  WorkingStatus,
+import {
+  type AppState,
+  type CommitDetails,
+  type Comparison,
+  type DiffTarget,
+  type DirListing,
+  type FileDiff,
+  type FileVersions,
+  type GraphInfo,
+  type GraphRow,
+  type RefsSnapshot,
+  type RepoId,
+  type RepoInfo,
+  type RepoLocation,
+  type UpdaterStatus,
+  repoIdOf,
+  repoLocationOf,
+  type WorkingStatus,
 } from "./domain";
 
 export type ResetMode = "soft" | "mixed" | "hard";
@@ -29,6 +31,35 @@ export type ResetMode = "soft" | "mixed" | "hard";
 export const EDIT_COMMANDS = ["undo", "redo", "cut", "copy", "paste", "selectAll"] as const;
 export type EditCommand = (typeof EDIT_COMMANDS)[number];
 
+export const APP_THEMES = ["light", "dark", "system"] as const;
+export type AppTheme = (typeof APP_THEMES)[number];
+
+/** Most rows `repo.graphRows` returns at once. */
+export const MAX_GRAPH_ROWS = 4096;
+
+/**
+ * Whether `host` can be an SSH destination: no leading `-` (ssh would take it for an option),
+ * whitespace, slashes or control characters.
+ */
+export const isSshHost = (host: string): boolean =>
+  host.length <= 255 && /^[^\s/\p{Cc}-][^\s/\p{Cc}]*$/u.test(host);
+
+/** Whether `id` is a well-formed repository id (see `repoIdOf`). */
+export const isRepoId = (id: string): boolean => {
+  let loc: RepoLocation;
+  try {
+    loc = repoLocationOf(id);
+  } catch {
+    return false;
+  }
+  return (
+    repoIdOf(loc) === id &&
+    loc.path !== "" &&
+    !loc.path.includes("\0") &&
+    (loc.kind === "local" || isSshHost(loc.host))
+  );
+};
+
 export interface Api {
   // App / window
   "app.getState": () => AppState;
@@ -36,6 +67,11 @@ export interface Api {
   "app.version": () => { version: string; platform: string };
   /** Runs an Edit menu command in the focused window, e.g. from a text field's context menu. */
   "app.edit": (command: EditCommand) => void;
+  /**
+   * The app's theme, for what the main process draws: window backgrounds, title bar buttons,
+   * native menus and dialogs. They follow the system until this is called.
+   */
+  "app.setTheme": (theme: AppTheme) => void;
   "dialog.pickDirectory": () => string | null;
   "shell.openTerminal": (repo: RepoId) => void;
   "shell.revealInFinder": (repo: RepoId, path?: string) => void;
@@ -50,6 +86,12 @@ export interface Api {
   // Repository lifecycle
   "repo.open": (location: RepoLocation) => RepoInfo;
   "repo.close": (repo: RepoId) => void;
+  /**
+   * Whether the caller shows the repository (e.g. in its active tab); repositories start out
+   * shown. Hidden ones do as little as possible: their remote is polled rarely, and file
+   * changes and graph checks wait until they are shown. Does not open the repository.
+   */
+  "repo.setVisible": (repo: RepoId, visible: boolean) => void;
   "repo.init": (location: RepoLocation) => RepoInfo;
   "repo.clone": (url: string, location: RepoLocation) => RepoInfo;
 
@@ -57,8 +99,16 @@ export interface Api {
   "repo.info": (repo: RepoId) => RepoInfo;
   "repo.refs": (repo: RepoId) => RefsSnapshot;
   "repo.graphInfo": (repo: RepoId) => GraphInfo;
+  /**
+   * Reloads the graph even if its refs did not change (e.g. on an explicit refresh); the new
+   * version arrives as a `repo.graphProgress` event.
+   */
+  "repo.reloadGraph": (repo: RepoId) => void;
+  /** Rows `start` to `end` (exclusive), at most {@link MAX_GRAPH_ROWS} of them. */
   "repo.graphRows": (repo: RepoId, version: number, start: number, end: number) => GraphRow[];
   "repo.findCommit": (repo: RepoId, version: number, hash: string) => number;
+  /** Row indexes of several commits (-1 for those not in the graph), e.g. to re-index a selection. */
+  "repo.findCommits": (repo: RepoId, version: number, hashes: string[]) => number[];
   "repo.search": (repo: RepoId, query: string) => string[];
   "repo.status": (repo: RepoId) => WorkingStatus;
   "repo.commitDetails": (repo: RepoId, hash: string) => CommitDetails;
@@ -95,12 +145,14 @@ export interface Api {
   "repo.deleteTag": (repo: RepoId, name: string) => void;
   "repo.merge": (repo: RepoId, ref: string, opts: { ffOnly?: boolean; noFf?: boolean }) => void;
   "repo.rebase": (repo: RepoId, onto: string) => void;
-  "repo.cherryPick": (repo: RepoId, hash: string) => void;
-  "repo.revert": (repo: RepoId, hash: string) => void;
+  /** Applies commits given in graph order (newest first), oldest first. */
+  "repo.cherryPick": (repo: RepoId, hashes: string[]) => void;
+  /** Reverts commits given in graph order (newest first), newest first. */
+  "repo.revert": (repo: RepoId, hashes: string[]) => void;
   "repo.reset": (repo: RepoId, hash: string, mode: ResetMode) => void;
   "repo.abortOperation": (repo: RepoId) => void;
   "repo.continueOperation": (repo: RepoId) => void;
-  /** Cancels the running fetch, pull or push, if any. */
+  /** Cancels the running fetch, pull or push, otherwise a running local write, if any. */
   "repo.cancel": (repo: RepoId) => void;
 
   // Graph visibility
@@ -115,9 +167,13 @@ export interface Api {
 
   // Stash
   "repo.stash": (repo: RepoId, message: string | null, includeUntracked: boolean) => void;
-  "repo.stashPop": (repo: RepoId, index: number) => void;
-  "repo.stashApply": (repo: RepoId, index: number) => void;
-  "repo.stashDrop": (repo: RepoId, index: number) => void;
+  // A stash is named by its index; `hash`, when given, must be its commit, so that an index that
+  // shifted meanwhile (e.g. a stash pushed from a terminal) fails instead of hitting another stash.
+  "repo.stashPop": (repo: RepoId, index: number, hash?: string) => void;
+  "repo.stashApply": (repo: RepoId, index: number, hash?: string) => void;
+  "repo.stashDrop": (repo: RepoId, index: number, hash?: string) => void;
+  /** Creates and checks out a branch at the stash's base commit, then pops the stash onto it. */
+  "repo.stashBranch": (repo: RepoId, name: string, index: number, hash?: string) => void;
 
   // Remotes
   "repo.fetch": (repo: RepoId, remote: string | null) => void;
@@ -140,6 +196,29 @@ export interface Api {
 export type ApiMethod = keyof Api;
 export type ApiArgs<M extends ApiMethod> = Parameters<Api[M]>;
 export type ApiResult<M extends ApiMethod> = ReturnType<Api[M]>;
+
+/**
+ * Methods that only read, whose requests can be cancelled (see `Bridge.invokeCancellable`),
+ * which stops their git commands, e.g. when no view waits for a query any more. Writes never
+ * are: abandoning a query must not stop an operation halfway.
+ */
+export const CANCELLABLE_METHODS = [
+  "repo.info",
+  "repo.refs",
+  "repo.graphInfo",
+  "repo.graphRows",
+  "repo.findCommit",
+  "repo.findCommits",
+  "repo.search",
+  "repo.status",
+  "repo.commitDetails",
+  "repo.compare",
+  "repo.diff",
+  "repo.fileVersions",
+  "repo.lastCommitMessage",
+  "repo.hiddenRefs",
+] as const satisfies readonly ApiMethod[];
+export type CancellableMethod = (typeof CANCELLABLE_METHODS)[number];
 
 /** Serialized error crossing the IPC boundary. */
 export interface RpcError {
@@ -181,12 +260,24 @@ export type MenuCommand =
 
 export type EventName = keyof Events;
 
+/** Requests: `(method, args, requestId?)`; a request id makes the request cancellable. */
 export const IPC_INVOKE = "gitdove:invoke";
+/** Cancels the caller's request with this id (sent, not invoked). */
+export const IPC_CANCEL = "gitdove:cancel";
 export const IPC_EVENT = "gitdove:event";
 
 /** Shape of the bridge exposed by the preload script as `window.gitdove`. */
 export interface Bridge {
   invoke<M extends ApiMethod>(method: M, ...args: ApiArgs<M>): Promise<RpcResult<ApiResult<M>>>;
+  /**
+   * Like {@link invoke}, for a read-only method. `onStart` gets a function that cancels the
+   * request; the request then fails with an "Interrupted" error, unless it was done already.
+   */
+  invokeCancellable<M extends CancellableMethod>(
+    method: M,
+    args: ApiArgs<M>,
+    onStart: (cancel: () => void) => void,
+  ): Promise<RpcResult<ApiResult<M>>>;
   on<E extends EventName>(event: E, listener: (payload: Events[E]) => void): () => void;
   platform: string;
 }

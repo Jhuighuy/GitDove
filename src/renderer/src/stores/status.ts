@@ -24,9 +24,9 @@ interface StatusState {
   readonly notices: Readonly<Record<string, Notice & { readonly id: number }>>;
   /** App-wide work in progress, e.g. "Connecting to fedora…", oldest first. */
   readonly activities: readonly { readonly id: number; readonly text: string }[];
-  notify(scope: Scope, text: string, kind?: Notice["kind"]): void;
+  readonly notify: (scope: Scope, text: string, kind?: Notice["kind"]) => void;
   /** Shows `text` until the returned function is called. */
-  startActivity(text: string): () => void;
+  readonly startActivity: (text: string) => () => void;
 }
 
 let nextId = 0;

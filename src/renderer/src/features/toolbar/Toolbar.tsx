@@ -83,7 +83,10 @@ export function Toolbar({ repo }: { repo: RepoId }) {
   const { data: info } = useRepoInfo(repo);
   const { data: refs } = useRefs(repo);
   const { data: status } = useStatus(repo);
-  const layout = useLayout();
+  const sidebar = useLayout((s) => s.sidebar);
+  const details = useLayout((s) => s.details);
+  const toggleSidebar = useLayout((s) => s.toggleSidebar);
+  const toggleDetails = useLayout((s) => s.toggleDetails);
   const busy = useBusy(repo);
   // While an operation runs, the actions that change the repository wait for it.
   const reason = busy ? busyReason(busy) : undefined;
@@ -136,7 +139,7 @@ export function Toolbar({ repo }: { repo: RepoId }) {
               render={
                 <button
                   type="button"
-                  aria-label="More options"
+                  aria-label="More pull options"
                   disabled={!!busy}
                   title={reason}
                   className={cn(SPLIT_MENU, "disabled:opacity-40")}
@@ -177,7 +180,7 @@ export function Toolbar({ repo }: { repo: RepoId }) {
               render={
                 <button
                   type="button"
-                  aria-label="More options"
+                  aria-label="More push options"
                   disabled={!!busy}
                   title={reason}
                   className={cn(SPLIT_MENU, "disabled:opacity-40")}
@@ -236,18 +239,22 @@ export function Toolbar({ repo }: { repo: RepoId }) {
         <Button
           variant="ghost"
           size="icon-sm"
-          className={cn(!layout.sidebar && "text-muted-foreground")}
-          onClick={layout.toggleSidebar}
+          className={cn(!sidebar && "text-muted-foreground")}
+          onClick={toggleSidebar}
           title="Toggle sidebar"
+          aria-label="Sidebar"
+          aria-pressed={sidebar}
         >
           <IconLayoutSidebar />
         </Button>
         <Button
           variant="ghost"
           size="icon-sm"
-          className={cn(!layout.details && "text-muted-foreground")}
-          onClick={layout.toggleDetails}
+          className={cn(!details && "text-muted-foreground")}
+          onClick={toggleDetails}
           title="Toggle details panel"
+          aria-label="Details panel"
+          aria-pressed={details}
         >
           <IconLayoutSidebarRight />
         </Button>

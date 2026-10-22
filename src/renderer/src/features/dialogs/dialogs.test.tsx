@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { DialogHost, prompt } from "./dialogs";
+import { confirm, DialogHost, prompt, validateRefName } from "./dialogs";
 
 let root: Root;
 
@@ -27,10 +27,10 @@ const type = (el: HTMLInputElement | HTMLTextAreaElement, value: string) => {
   el.dispatchEvent(new Event("input", { bubbles: true }));
 };
 
-const byId = <T extends HTMLElement>(id: string) => {
+const byId = <T extends HTMLElement>(id: string, kind: new () => T): T => {
   const el = document.getElementById(id);
-  if (!el) throw new Error(`#${id} is not rendered`);
-  return el as T;
+  if (!(el instanceof kind)) throw new Error(`#${id} is not a rendered ${kind.name}`);
+  return el;
 };
 
 const button = (label: string) => {
@@ -53,19 +53,19 @@ it("returns the optional multi-line details, trimmed", async () => {
   expect(document.querySelectorAll("#prompt-input")).toHaveLength(1);
 
   await act(async () => {
-    type(byId<HTMLInputElement>("prompt-input"), "v1.0.0");
-    type(byId<HTMLTextAreaElement>("prompt-details"), "  Release 1.0\n\nNotes.  ");
+    type(byId("prompt-input", HTMLInputElement), "v1.0.0");
+    type(byId("prompt-details", HTMLTextAreaElement), "  Release 1.0\n\nNotes.  ");
   });
   // Plain Enter adds a line; Cmd/Ctrl+Enter submits.
   await act(async () => {
-    byId("prompt-details").dispatchEvent(
+    byId("prompt-details", HTMLTextAreaElement).dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
     );
   });
   expect(result).toBeUndefined();
   // Nor does Cmd+Enter while an input method is still composing.
   await act(async () => {
-    byId("prompt-details").dispatchEvent(
+    byId("prompt-details", HTMLTextAreaElement).dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Enter",
         metaKey: true,
@@ -76,7 +76,7 @@ it("returns the optional multi-line details, trimmed", async () => {
   });
   expect(result).toBeUndefined();
   await act(async () => {
-    byId("prompt-details").dispatchEvent(
+    byId("prompt-details", HTMLTextAreaElement).dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
     );
   });
@@ -89,7 +89,67 @@ it("returns empty details when the field is unused", async () => {
     void prompt({ title: "Rename", confirmLabel: "Rename" }).then((r) => (result = r));
   });
   expect(document.getElementById("prompt-details")).toBeNull();
-  await act(async () => type(byId<HTMLInputElement>("prompt-input"), "topic"));
+  await act(async () => type(byId("prompt-input", HTMLInputElement), "topic"));
   await act(async () => button("Rename").click());
   expect(result).toEqual({ value: "topic", checked: false, details: "" });
+});
+
+it("starts each prompt from its own default, also right after another one", async () => {
+  let first: Awaited<ReturnType<typeof prompt>> | undefined;
+  await act(async () => {
+    // Like `commands.addRemote`: the next prompt opens as soon as the first one is answered.
+    void prompt({ title: "Add remote", confirmLabel: "Next", defaultValue: "origin" }).then((r) => {
+      first = r;
+      void prompt({ title: "Add remote upstream", label: "URL", confirmLabel: "Add Remote" });
+    });
+  });
+  await act(async () => type(byId("prompt-input", HTMLInputElement), "upstream"));
+  await act(async () => button("Next").click());
+  expect(first).toMatchObject({ value: "upstream" });
+  expect(document.body.textContent).toContain("Add remote upstream");
+  // It opens in the same place, but must not show "upstream".
+  expect(byId("prompt-input", HTMLInputElement).value).toBe("");
+});
+
+it("focuses Cancel in destructive confirmations", async () => {
+  await act(async () => {
+    void confirm({ title: "Delete topic?", confirmLabel: "Delete", destructive: true });
+  });
+  expect(document.activeElement?.textContent).toBe("Cancel");
+  await act(async () => {
+    void confirm({ title: "Merge topic?", confirmLabel: "Merge" });
+  });
+  expect(document.activeElement?.textContent).toBe("Merge");
+});
+
+it("validates branch and tag names like git", () => {
+  for (const ok of ["main", "feature/x", "v1.0.0", "a.b/c-d_e", "user@host"]) {
+    expect(validateRefName(ok)).toBeNull();
+  }
+  for (const bad of [
+    "a b",
+    "a..b",
+    "a~1",
+    "a^",
+    "a:b",
+    "a?",
+    "a*",
+    "a[b",
+    "a\\b",
+    "a@{1}",
+    "@",
+    "-x",
+    "/x",
+    "x/",
+    "x.",
+    "x.lock",
+    "a//b",
+    ".hidden",
+    "a/.b",
+    "foo.lock/bar",
+    "a\u0001b",
+    "a\u007fb",
+  ]) {
+    expect(validateRefName(bad), bad).not.toBeNull();
+  }
 });

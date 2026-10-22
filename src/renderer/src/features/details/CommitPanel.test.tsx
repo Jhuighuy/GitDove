@@ -77,6 +77,8 @@ let root: Root;
 let container: HTMLElement;
 
 beforeEach(() => {
+  // Gives the virtualized file lists a viewport, so that rows render.
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
   mocks.commit = details();
@@ -90,6 +92,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
 });
 
 async function render(hash = HASH) {
@@ -101,8 +104,14 @@ async function render(hash = HASH) {
       </QueryClientProvider>,
     ),
   );
-  await act(async () => new Promise((r) => setTimeout(r, 0)));
+  await settle();
 }
+
+/** Waits for the selection to settle (see `CommitPanel`) and its details to load. */
+const settle = async () => {
+  await act(async () => new Promise((r) => setTimeout(r, 150)));
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+};
 
 const text = () => container.textContent ?? "";
 const buttonByText = (t: string) =>
@@ -134,10 +143,19 @@ it("shows the commit message, author and file stats", async () => {
   expect(text()).toContain("2 files changed");
   expect(text()).toContain("+10 -5");
   expect(text()).toContain("parent:");
-  expect([...container.querySelectorAll("li")].map((l) => l.title)).toEqual([
-    "src/engine.ts",
-    "docs/old.md → docs/new.md",
-  ]);
+  expect(
+    [...container.querySelectorAll("[role=option]")].map((l) => (l as HTMLElement).title),
+  ).toEqual(["src/engine.ts", "docs/old.md → docs/new.md"]);
+});
+
+it("says how many files a truncated list leaves out", async () => {
+  mocks.commit = details({ truncated: true, totalFiles: 12_345 });
+  await render();
+  expect(text()).toContain("12,345 files changed");
+  expect(text()).toContain("…and 12,343 more files");
+  mocks.commit = details();
+  await render("eeee");
+  expect(text()).not.toContain("more files");
 });
 
 it("shows a separate committer, merge parents and singular counts", async () => {
@@ -154,6 +172,54 @@ it("shows a separate committer, merge parents and singular counts", async () => 
   expect(text()).toContain("1 file changed");
   await act(async () => buttonByText("bbbbbbb").click());
   expect(mocks.selectCommit).toHaveBeenCalledWith(repo, "bbbbbbb2222222");
+});
+
+it("keeps the previous commit, dimmed, until the next one loads", async () => {
+  await render();
+  let release!: () => void;
+  mocks.commit = () =>
+    new Promise((r) => (release = () => r(details({ hash: "f".repeat(40), subject: "Next" }))));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CommitPanel repo={repo} hash={"f".repeat(40)} />
+      </QueryClientProvider>,
+    ),
+  );
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CommitPanel repo={repo} hash={HASH} />
+      </QueryClientProvider>,
+    ),
+  );
+  await settle();
+  // Moving on before the selection settles asks for nothing.
+  let asked = 0;
+  mocks.commit = () => {
+    asked++;
+    return new Promise(
+      (r) => (release = () => r(details({ hash: "e".repeat(40), subject: "Next" }))),
+    );
+  };
+  for (const h of ["a", "b", "c", "e"]) {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CommitPanel repo={repo} hash={h.repeat(40)} />
+        </QueryClientProvider>,
+      ),
+    );
+  }
+  expect(container.querySelector("h2")?.textContent).toBe("Add the engine");
+  await settle();
+  expect(asked).toBe(1);
+  expect(container.firstElementChild?.getAttribute("aria-busy")).toBe("true");
+  await act(async () => release());
+  await settle();
+  expect(container.querySelector("h2")?.textContent).toBe("Next");
+  expect(container.firstElementChild?.getAttribute("aria-busy")).toBe("false");
 });
 
 it("hides parents of root commits", async () => {
@@ -175,7 +241,7 @@ it("names stashes and copies the hash", async () => {
 
 it("opens file diffs and highlights the open one", async () => {
   await render();
-  const rows = () => [...container.querySelectorAll("li")];
+  const rows = () => [...container.querySelectorAll<HTMLElement>("[role=option]")];
   await act(async () => rows()[1]!.click());
   expect(useRepoUiStore.getState().byRepo[repo]?.diff).toEqual({
     kind: "commit",

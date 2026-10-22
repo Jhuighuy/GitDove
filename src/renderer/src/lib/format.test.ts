@@ -54,6 +54,12 @@ it("derives initials from names", () => {
   expect(initials("alice")).toBe("AL");
   expect(initials("Ada King Lovelace")).toBe("AL");
   expect(initials("  linus   torvalds ")).toBe("LT");
+  // Characters outside the BMP are not split in half.
+  expect(initials("𝒜da 𝔏ovelace")).toBe("𝒜𝔏");
+  expect(initials("😀")).toBe("😀");
+  // Nor are combining marks and emoji sequences.
+  expect(initials("e\u0301mile zola")).toBe("E\u0301Z");
+  expect(initials("👩‍💻 dev")).toBe("👩‍💻D");
 });
 
 it("hashes strings to a stable hue", () => {
@@ -80,6 +86,9 @@ it("formats byte counts", () => {
   expect(formatBytes(1023)).toBe("1023 B");
   expect(formatBytes(1024)).toBe("1.0 KB");
   expect(formatBytes(4300)).toBe("4.2 KB");
+  // Rounding up moves to the next unit.
+  expect(formatBytes(10_200)).toBe("10 KB");
+  expect(formatBytes(1024 * 1024 - 1)).toBe("1.0 MB");
   expect(formatBytes(200 * 1024)).toBe("200 KB");
   expect(formatBytes(13 * 1024 * 1024)).toBe("13 MB");
   expect(formatBytes(2.5 * 1024 ** 3)).toBe("2.5 GB");

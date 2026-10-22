@@ -90,6 +90,28 @@ describe("visibility", () => {
     );
   });
 
+  it("looks names up in a compiled copy of the list", () => {
+    const hidden = ["refs/heads/a", "refs/tags/"];
+    expect(isHidden(hidden, "refs/tags/v1")).toBe(true);
+    expect(isHidden(new Set(hidden), "refs/heads/a")).toBe(true);
+    // A list changed in place is compiled again.
+    hidden.push("refs/heads/b");
+    expect(isHidden(hidden, "refs/heads/b")).toBe(true);
+    // Without contributor entries no branch is filtered, whatever its owners.
+    expect(isFilteredOut(hidden, "refs/heads/a", owners)).toBe(false);
+    expect(isEmailHidden(hidden, "ann@x", people)).toBe(false);
+  });
+
+  it("checks many names against many entries quickly", () => {
+    // E.g. after "Solo" then "Show all" on a group, or names of deleted branches.
+    const hidden = Array.from({ length: 5000 }, (_, i) => `refs/heads/gone-${i}`);
+    hidden.push("refs/remotes/origin/");
+    const names = Array.from({ length: 5000 }, (_, i) => `refs/heads/b-${i}`);
+    const start = performance.now();
+    for (let k = 0; k < 20; k++) for (const n of names) isHidden(hidden, n);
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
   it("replaces the contributor filter", () => {
     const hidden = ["refs/heads/x", personKey("ann lee"), authorKey("bob@x")];
     expect(setContributorFilter(hidden, [authorKey("ann@x")])).toEqual([

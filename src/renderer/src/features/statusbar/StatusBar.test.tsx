@@ -4,16 +4,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { keys } from "@/lib/queries";
+import { keys, useGraphInfo } from "@/lib/queries";
 import { useBusyStore } from "@/stores/busy";
 import { APP, notify, useStatusStore } from "@/stores/status";
-import { StatusBar } from "./StatusBar";
+import { LOCAL_CANCEL_MS, StatusBar } from "./StatusBar";
 
 const mocks = vi.hoisted(() => ({
   api: [] as unknown[][],
   commands: [] as unknown[][],
   updater: { kind: "idle" } as UpdaterStatus,
-  graphInfo: undefined as GraphInfo | undefined,
+  graphInfo: undefined as GraphInfo | Error | undefined,
   listeners: new Map<string, (payload: never) => void>(),
 }));
 
@@ -25,7 +25,10 @@ vi.mock("@/lib/api", () => ({
     mocks.api.push([method, ...args]);
     if (method === "updater.status") return mocks.updater;
     if (method === "updater.install") return undefined;
-    if (method === "repo.graphInfo") return mocks.graphInfo;
+    if (method === "repo.graphInfo") {
+      if (mocks.graphInfo instanceof Error) throw mocks.graphInfo;
+      return mocks.graphInfo;
+    }
     throw new Error(`unexpected ${method}`);
   },
 }));
@@ -62,15 +65,24 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-const render = (repo: string | null) =>
-  act(async () =>
+/** Stands for the graph view, which asks for the graph's info. */
+function GraphView({ repo }: { repo: string }) {
+  useGraphInfo(repo);
+  return null;
+}
+
+const render = (repo: string | null, withGraph = false) =>
+  act(async () => {
     root.render(
       <QueryClientProvider client={client}>
+        {withGraph && repo && <GraphView repo={repo} />}
         <StatusBar repo={repo} />
       </QueryClientProvider>,
-    ),
-  );
+    );
+  });
 const text = () => container.textContent ?? "";
+/** Waits until the status bar shows `s` (fetched data takes a few ticks to arrive). */
+const shows = (s: string) => act(() => vi.waitFor(() => expect(text()).toContain(s)));
 /** Sets cached query data; the query delivers updates on the next tick. */
 const setCached = (key: readonly unknown[], data: unknown) =>
   act(async () => {
@@ -114,8 +126,6 @@ it("shows history still loading, without asking an unopened repository", async (
 });
 
 it("says why the history is cut off or outdated, and retries on request", async () => {
-  // As with a diff open: the graph view is gone and only the status bar's query remains.
-  await render(LOCAL);
   const info: GraphInfo = {
     version: 1,
     count: 2345,
@@ -123,18 +133,21 @@ it("says why the history is cut off or outdated, and retries on request", async 
     maxLanes: 2,
     error: "Lost connection",
   };
-  await setCached(keys.graphInfo(LOCAL), info);
-  expect(text()).toContain("History incomplete at 2,345 commits: Lost connection");
+  mocks.graphInfo = info;
+  await render(LOCAL, true);
+  await shows("History incomplete at 2,345 commits: Lost connection");
   expect(text()).not.toContain("Loading history");
 
   const invalidate = vi.spyOn(client, "invalidateQueries");
   mocks.graphInfo = { ...info, count: 2400 };
   const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
   await act(async () => retry.click());
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: keys.repo(LOCAL) });
-  expect(mocks.api).toContainEqual(["repo.graphInfo", LOCAL]);
-  await setCached(keys.graphInfo(LOCAL), mocks.graphInfo);
-  expect(text()).toContain("History incomplete at 2,400 commits");
+  await shows("History incomplete at 2,400 commits");
+  // Only the graph's info: not its pages, nor the refs, status or diffs.
+  expect(invalidate).toHaveBeenCalledOnce();
+  expect(invalidate).toHaveBeenCalledWith(
+    expect.objectContaining({ queryKey: keys.graphInfo(LOCAL) }),
+  );
 
   await setCached(keys.graphInfo(LOCAL), { ...info, complete: true });
   expect(text()).toContain("History may be outdated: Lost connection");
@@ -143,27 +156,15 @@ it("says why the history is cut off or outdated, and retries on request", async 
 });
 
 it("offers to retry when the history never loaded", async () => {
-  await render(LOCAL);
-  // The graph view's first request failed: the shared query has an error and no data.
-  await act(async () => {
-    await client
-      .query({
-        queryKey: keys.graphInfo(LOCAL),
-        queryFn: () => Promise.reject(new Error("Lost connection")),
-      })
-      .catch(() => {});
-    await new Promise((r) => setTimeout(r, 0));
-  });
-  expect(text()).toContain("Couldn't load history: Lost connection");
+  // The graph view's request fails: the shared query has an error and no data.
+  mocks.graphInfo = new Error("Lost connection");
+  await render(LOCAL, true);
+  await shows("Couldn't load history: Lost connection");
 
   mocks.graphInfo = { version: 1, count: 3000, complete: false, maxLanes: 2 };
   const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
-  await act(async () => {
-    retry.click();
-    await new Promise((r) => setTimeout(r, 0));
-  });
-  expect(mocks.api).toContainEqual(["repo.graphInfo", LOCAL]);
-  expect(text()).toContain("Loading history… 3,000 commits");
+  await act(async () => retry.click());
+  await shows("Loading history… 3,000 commits");
   expect(text()).not.toContain("Couldn't load");
 });
 
@@ -185,6 +186,47 @@ it("shows the running operation, with a cancel button for network operations", a
   // Another tab's operation is not shown.
   await render(LOCAL);
   expect(text()).not.toContain("Pulling…");
+});
+
+it("offers to cancel a local operation once it takes a while", async () => {
+  await render(LOCAL);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    await act(async () =>
+      useBusyStore.getState().start(LOCAL, { label: "Committing…", cancellable: false }),
+    );
+    expect(container.querySelector("[aria-label='Cancel']")).toBeNull();
+    await act(async () => vi.advanceTimersByTime(LOCAL_CANCEL_MS));
+    await act(async () => container.querySelector<HTMLElement>("[aria-label='Cancel']")!.click());
+    expect(mocks.commands).toEqual([["cancel", LOCAL]]);
+    // The next operation starts without one again.
+    await act(async () => useBusyStore.getState().finish(LOCAL));
+    await act(async () =>
+      useBusyStore.getState().start(LOCAL, { label: "Checking out…", cancellable: false }),
+    );
+    expect(container.querySelector("[aria-label='Cancel']")).toBeNull();
+  } finally {
+    await act(async () => useBusyStore.getState().finish(LOCAL));
+    vi.useRealTimers();
+  }
+});
+
+it("offers no cancel while only the refresh after an operation runs", async () => {
+  await render(LOCAL);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    await act(async () =>
+      useBusyStore.getState().start(LOCAL, { label: "Pushing…", cancellable: true }),
+    );
+    expect(container.querySelector("[aria-label='Cancel']")).not.toBeNull();
+    await act(async () => useBusyStore.getState().refreshing(LOCAL));
+    await act(async () => vi.advanceTimersByTime(LOCAL_CANCEL_MS));
+    expect(container.querySelector("output")?.textContent).toBe("Refreshing…");
+    expect(container.querySelector("[aria-label='Cancel']")).toBeNull();
+  } finally {
+    await act(async () => useBusyStore.getState().finish(LOCAL));
+    vi.useRealTimers();
+  }
 });
 
 it("shows results of the active repository and of the app", async () => {

@@ -13,9 +13,9 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { api, useEvent } from "@/lib/api";
-import { keys } from "@/lib/queries";
+import { keys, refreshRepo } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { type Busy, useBusy } from "@/stores/busy";
+import { type Busy, busyLabel, useBusy } from "@/stores/busy";
 import { APP, type Notice, useActivity, useNotice } from "@/stores/status";
 import { commands } from "../commands";
 
@@ -143,18 +143,9 @@ function CopyButton({
  */
 function GraphError({ repo, graph, error }: { repo: RepoId; graph?: GraphInfo; error: string }) {
   const client = useQueryClient();
-  const retry = () => {
-    void client.invalidateQueries({ queryKey: keys.repo(repo) });
-    // Asked for explicitly: with the graph view closed (e.g. a diff is open), the only graph
-    // query left is the disabled one above, which invalidating does not refetch.
-    client
-      .query({
-        queryKey: keys.graphInfo(repo),
-        queryFn: () => api("repo.graphInfo", repo),
-        staleTime: 0,
-      })
-      .catch(() => {});
-  };
+  // The graph's info only (the graph view stays mounted, under a diff too): its pages never
+  // change, and a reloaded graph comes with a new version and pages of its own.
+  const retry = () => void refreshRepo(repo, ["graph"], client);
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-warning" title={error}>
       <IconAlertTriangle />
@@ -174,18 +165,36 @@ const graphProblem = (graph: GraphInfo | undefined): string => {
   return `History incomplete at ${graph.count.toLocaleString()} commits`;
 };
 
-/** The running repository-changing operation, with a cancel button for network operations. */
+/** How long a local operation runs before it can be cancelled (it may wait for input). */
+export const LOCAL_CANCEL_MS = 3000;
+
+/**
+ * The running repository-changing operation, with a cancel button: at once for network
+ * operations, after a while for local ones (e.g. a hook or a signing prompt that hangs).
+ */
 function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
+  const [late, setLate] = useState<Busy | null>(null);
+  useEffect(() => {
+    if (busy.cancellable || busy.refreshing) return;
+    const id = setTimeout(
+      () => setLate(busy),
+      Math.max(0, busy.since + LOCAL_CANCEL_MS - Date.now()),
+    );
+    return () => clearTimeout(id);
+  }, [busy]);
+  // The refresh after the operation runs only queries: cancelling stops nothing.
+  const cancellable = !busy.refreshing && (busy.cancellable || late === busy);
+  const label = busyLabel(busy);
   return (
-    <output className="flex min-w-0 items-center gap-1.5" title={busy.label}>
+    <output className="flex min-w-0 items-center gap-1.5" title={label}>
       <Spinner className="size-3.5 shrink-0" role="presentation" aria-hidden />
-      <span className="truncate">{busy.label}</span>
-      {busy.cancellable && (
+      <span className="truncate">{label}</span>
+      {cancellable && (
         <Button
           variant="ghost"
           size="icon-xs"
           aria-label="Cancel"
-          title="Cancel"
+          title={busy.cancellable ? "Cancel" : "Cancel (stops the running git command)"}
           className="-my-1 size-5"
           onClick={() => commands.cancel(repo)}
         >

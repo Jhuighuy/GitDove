@@ -13,9 +13,16 @@ let sparkle: Sparkle | null = null;
 /** Callers of `check()` waiting for its outcome. */
 let waiting: ((s: UpdaterStatus) => void)[] = [];
 
-const set = (s: UpdaterStatus) => {
+/** A check that hears nothing back for this long answers with the current status. */
+const CHECK_TIMEOUT = 60 * 1000;
+
+const set = (next: UpdaterStatus) => {
+  // Renderers show whole percents; finer progress events would only be noise.
+  const s: UpdaterStatus =
+    next.kind === "downloading" ? { kind: "downloading", percent: Math.floor(next.percent) } : next;
+  const changed = JSON.stringify(s) !== JSON.stringify(status);
   status = s;
-  listener?.(s);
+  if (changed) listener?.(s);
   if (s.kind !== "checking" && s.kind !== "downloading") settle(s);
 };
 
@@ -61,7 +68,19 @@ export const updater = {
     if (!app.isPackaged) return Promise.resolve(status);
     if (status.kind === "ready" || (!sparkle && status.kind === "downloading"))
       return Promise.resolve(status);
-    const outcome = new Promise<UpdaterStatus>((done) => waiting.push(done));
+    const outcome = new Promise<UpdaterStatus>((done) => {
+      const finish = (s: UpdaterStatus) => {
+        clearTimeout(timer);
+        done(s);
+      };
+      // E.g. the helper is alive but silent: do not wait forever.
+      const timer = setTimeout(() => {
+        waiting = waiting.filter((w) => w !== finish);
+        done(status);
+      }, CHECK_TIMEOUT);
+      timer.unref();
+      waiting.push(finish);
+    });
     // Without a check under way, nothing will report back: answer with the current status.
     if (sparkle) {
       if (!sparkle.check()) settle(status);
@@ -114,6 +133,13 @@ export async function checkForUpdatesFromMenu() {
         message:
           s.kind === "available" ? `Downloading GitDove ${s.version}` : "Downloading an update",
         detail: `${current} GitDove will offer to restart once the update is ready.`,
+      });
+      return;
+    case "checking":
+      // The check timed out (see `check`), but goes on.
+      await dialog.showMessageBox({
+        message: "Still checking for updates",
+        detail: `${current} The update server has not answered yet; GitDove will offer to restart if it finds an update.`,
       });
       return;
     case "error":

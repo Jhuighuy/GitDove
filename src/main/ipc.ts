@@ -1,24 +1,39 @@
-import { spawn as nodeSpawn } from "node:child_process";
-import type { DirEntry, RepoId } from "@shared/domain";
+import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
+import { isAbsolute, relative, resolve } from "node:path";
+import { type DirEntry, type RepoId, type RepoLocation, repoLocationOf } from "@shared/domain";
 import {
+  APP_THEMES,
   type ApiArgs,
   type ApiMethod,
   type ApiResult,
+  CANCELLABLE_METHODS,
   EDIT_COMMANDS,
+  IPC_CANCEL,
   IPC_INVOKE,
+  isRepoId,
+  isSshHost,
+  MAX_GRAPH_ROWS,
   type RpcError,
   type RpcResult,
 } from "@shared/ipc";
-import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  shell,
+  type WebContents,
+} from "electron";
 import log from "electron-log/main";
-import { Cause, Context, Effect, Exit, type ManagedRuntime } from "effect";
+import { Cause, Context, Effect, Exit, type ManagedRuntime, Schema } from "effect";
 import { mayRunGitlab } from "@shared/avatars";
 import { isGitlab } from "./avatars";
 import { type AppError, InvalidInputError } from "./exec/errors";
-import { Hosts } from "./exec/hosts";
-import { shellQuote } from "./exec/shell";
+import { Hosts, LOCAL_HOST } from "./exec/hosts";
+import { shellJoin, shellQuote } from "./exec/shell";
 import type { Repository } from "./git/repository";
-import { RepoSettings, Repos } from "./services";
+import { type Owner, RepoSettings, Repos } from "./services";
 import { loadState, saveState } from "./state";
 import { updater } from "./updater";
 
@@ -35,48 +50,309 @@ type Handlers = {
   ) => Effect.Effect<ApiResult<M>, AppError, Services | Caller>;
 };
 
+// ---------------------------------------------------------------------------
+// Argument schemas: the renderer is not trusted, so every request is decoded
+// against the schema of its method before it reaches a handler.
+// ---------------------------------------------------------------------------
+
+const valid = <T>(test: (value: T) => boolean, message: string) =>
+  Schema.makeFilter<T>((value) => test(value) || message);
+
+const Str = Schema.String;
+const Bool = Schema.Boolean;
+const Index = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+const Path = Str.check(valid((p: string) => p !== "" && !p.includes("\0"), "Invalid path"));
+/** An SSH host to connect to; never the local host's id. */
+const isRemoteHost = (h: string) => isSshHost(h) && h !== LOCAL_HOST;
+const Id = Str.check(
+  valid((id: string) => {
+    if (!isRepoId(id)) return false;
+    const loc = repoLocationOf(id);
+    return loc.kind === "local" || isRemoteHost(loc.host);
+  }, "Invalid repository id"),
+);
+const SshHost = Str.check(valid(isRemoteHost, "Invalid SSH host"));
+const Location = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("local"), path: Path }),
+  Schema.Struct({ kind: Schema.Literal("ssh"), host: SshHost, path: Path }),
+]);
+const Target = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("unstaged"), path: Str, untracked: Schema.optional(Bool) }),
+  Schema.Struct({ kind: Schema.Literal("staged"), path: Str, oldPath: Schema.optional(Str) }),
+  Schema.Struct({
+    kind: Schema.Literal("commit"),
+    hash: Str,
+    base: Schema.optional(Str),
+    path: Str,
+    oldPath: Schema.optional(Str),
+  }),
+]);
+const State = Schema.Struct({
+  tabs: Schema.Array(Str),
+  activeTab: Schema.NullOr(Str),
+  recent: Schema.Array(Str),
+});
+/** A graph row range of at most `max` rows. */
+const RowRange = (max: number) =>
+  Schema.Tuple([Id, Index, Index, Index]).check(
+    valid(([, , start, end]) => end - start <= max, `At most ${max} rows can be requested`),
+  );
+
+/**
+ * A non-empty list of commits: at most {@link MAX_GRAPH_ROWS}, well above what a selection holds
+ * (a Shift-click selects up to 1000).
+ */
+const Hashes = Schema.Array(Str).check(
+  valid((h: readonly string[]) => h.length > 0 && h.length <= MAX_GRAPH_ROWS, "Invalid commits"),
+);
+
+const noArgs = Schema.Tuple([]);
+const argsOf = <const E extends readonly Schema.Top[]>(...elements: E) => Schema.Tuple(elements);
+const repoArgs = <const E extends readonly Schema.Top[]>(...elements: E) =>
+  Schema.Tuple([Id, ...elements]);
+
+type DeepReadonly<T> = T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } : T;
+type Equals<A, B> =
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- exact type equality
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+
+const argSchemas = {
+  "app.getState": noArgs,
+  "app.setState": argsOf(State),
+  "app.version": noArgs,
+  "app.edit": argsOf(Schema.Literals(EDIT_COMMANDS)),
+  "app.setTheme": argsOf(Schema.Literals(APP_THEMES)),
+  "dialog.pickDirectory": noArgs,
+  "shell.openTerminal": repoArgs(),
+  "shell.revealInFinder": repoArgs(Schema.optional(Str)),
+  "shell.openExternal": argsOf(Str),
+  "web.isGitlab": argsOf(Str),
+  "ssh.hosts": noArgs,
+  "ssh.listDir": argsOf(SshHost, Schema.NullOr(Str)),
+  "repo.open": argsOf(Location),
+  "repo.close": repoArgs(),
+  "repo.setVisible": repoArgs(Bool),
+  "repo.init": argsOf(Location),
+  "repo.clone": argsOf(Str, Location),
+  "repo.info": repoArgs(),
+  "repo.refs": repoArgs(),
+  "repo.graphInfo": repoArgs(),
+  "repo.reloadGraph": repoArgs(),
+  "repo.graphRows": RowRange(MAX_GRAPH_ROWS),
+  "repo.findCommit": repoArgs(Index, Str),
+  "repo.findCommits": repoArgs(Index, Hashes),
+  "repo.search": repoArgs(Str),
+  "repo.status": repoArgs(),
+  "repo.commitDetails": repoArgs(Str),
+  "repo.compare": repoArgs(Schema.NullOr(Str), Str),
+  "repo.diff": repoArgs(Target),
+  "repo.fileVersions": repoArgs(Target),
+  "repo.stage": repoArgs(Schema.Array(Str)),
+  "repo.stageAll": repoArgs(),
+  "repo.unstage": repoArgs(Schema.Array(Str)),
+  "repo.unstageAll": repoArgs(),
+  "repo.discard": repoArgs(Schema.Array(Str), Schema.Array(Str)),
+  "repo.discardAll": repoArgs(),
+  "repo.applyPatch": repoArgs(Str, Schema.Struct({ cached: Bool, reverse: Bool })),
+  "repo.commit": repoArgs(Str, Schema.Struct({ amend: Bool })),
+  "repo.lastCommitMessage": repoArgs(),
+  "repo.checkout": repoArgs(Str),
+  "repo.checkoutRemote": repoArgs(Str, Str),
+  "repo.createBranch": repoArgs(Str, Str, Bool),
+  "repo.deleteBranch": repoArgs(Str, Bool),
+  "repo.deleteRemoteBranch": repoArgs(Str, Str),
+  "repo.renameBranch": repoArgs(Str, Str),
+  "repo.setUpstream": repoArgs(Str, Schema.NullOr(Str)),
+  "repo.createTag": repoArgs(Str, Str, Schema.NullOr(Str)),
+  "repo.deleteTag": repoArgs(Str),
+  "repo.merge": repoArgs(
+    Str,
+    Schema.Struct({ ffOnly: Schema.optional(Bool), noFf: Schema.optional(Bool) }),
+  ),
+  "repo.rebase": repoArgs(Str),
+  "repo.cherryPick": repoArgs(Hashes),
+  "repo.revert": repoArgs(Hashes),
+  "repo.reset": repoArgs(Str, Schema.Literals(["soft", "mixed", "hard"])),
+  "repo.abortOperation": repoArgs(),
+  "repo.continueOperation": repoArgs(),
+  "repo.cancel": repoArgs(),
+  "repo.hiddenRefs": repoArgs(),
+  "repo.setHiddenRefs": repoArgs(Schema.Array(Str)),
+  "repo.addWorktree": repoArgs(Str, Str, Schema.NullOr(Str)),
+  "repo.removeWorktree": repoArgs(Str, Bool),
+  "repo.pruneWorktrees": repoArgs(),
+  "repo.updateSubmodule": repoArgs(Str),
+  "repo.stash": repoArgs(Schema.NullOr(Str), Bool),
+  "repo.stashPop": repoArgs(Index, Schema.optional(Str)),
+  "repo.stashApply": repoArgs(Index, Schema.optional(Str)),
+  "repo.stashDrop": repoArgs(Index, Schema.optional(Str)),
+  "repo.stashBranch": repoArgs(Str, Index, Schema.optional(Str)),
+  "repo.fetch": repoArgs(Schema.NullOr(Str)),
+  "repo.pull": repoArgs(Schema.Literals(["ff-only", "merge", "rebase"])),
+  "repo.push": repoArgs(Schema.Struct({ force: Bool, setUpstream: Bool })),
+  "repo.pushBranch": repoArgs(Str, Bool),
+  "repo.fastForwardBranch": repoArgs(Str),
+  "repo.pushTag": repoArgs(Str, Str),
+  "repo.deleteRemoteTag": repoArgs(Str, Str),
+  "repo.setRemoteUrl": repoArgs(Str, Str),
+  "repo.addRemote": repoArgs(Str, Str),
+  "repo.removeRemote": repoArgs(Str),
+  "updater.status": noArgs,
+  "updater.check": noArgs,
+  "updater.install": noArgs,
+} satisfies { readonly [M in ApiMethod]: Schema.Codec<unknown, unknown> };
+
+/** Fails to compile unless each schema decodes exactly the arguments its `Api` method takes. */
+export type ArgSchemasMatchApi = Expect<{
+  [M in ApiMethod]: Equals<(typeof argSchemas)[M]["Type"], DeepReadonly<ApiArgs<M>>>;
+}>;
+type Expect<T extends { readonly [M in ApiMethod]: true }> = T;
+
+const decoders = new Map<string, (input: unknown) => Exit.Exit<unknown, Schema.SchemaError>>();
+const decodeArgs = (method: ApiMethod, input: unknown) => {
+  let decode = decoders.get(method);
+  if (!decode) {
+    decode = Schema.decodeUnknownExit(argSchemas[method]);
+    decoders.set(method, decode);
+  }
+  return decode(input);
+};
+
+/** The renderer that asked, which owns the repositories it uses (see `Repos`). */
+const owner: Effect.Effect<Owner, never, Caller> = Effect.map(Caller, (c) => c.webContents.id);
+
 const withRepo = <A, E, R = never>(id: RepoId, f: (repo: Repository) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const repos = yield* Repos;
-    return yield* f(yield* repos.get(id));
+    return yield* f(yield* repos.get(id, yield* owner));
   });
 
+/** Opens a repository for the caller and returns its info. */
+const openFor = (location: RepoLocation) =>
+  Effect.gen(function* () {
+    const repo = yield* (yield* Repos).open(location, yield* owner);
+    return yield* repo.info();
+  });
+
+/**
+ * Transports git must not use for a URL from the renderer: `ext::` runs arbitrary commands and
+ * `fd::` talks to inherited file descriptors.
+ */
+const SAFE_TRANSPORTS = ["-c", "protocol.ext.allow=never", "-c", "protocol.fd.allow=never"];
+
+/**
+ * Prints the current directory, then its sub-directories marked `R` (a repository) or `D`, all
+ * NUL-terminated since names may contain newlines. A `.git` directory is not listed: it is not
+ * a work tree to open.
+ */
 const LIST_DIR_SCRIPT = String.raw`
-for f in * .[!.]*; do
-  [ -d "$f" ] || continue
-  if [ -e "$f/.git" ] || { [ -f "$f/HEAD" ] && [ -d "$f/objects" ]; }; then printf 'R%s\n' "$f"; else printf 'D%s\n' "$f"; fi
+printf '%s\0' "$PWD"
+for f in * .[!.]* ..?*; do
+  [ -d "$f" ] && [ "$f" != .git ] || continue
+  if [ -e "$f/.git" ] || { [ -f "$f/HEAD" ] && [ -d "$f/objects" ]; }; then printf 'R%s\0' "$f"; else printf 'D%s\0' "$f"; fi
 done
 `;
 
-const openTerminal = (repo: Repository) =>
-  Effect.sync(() => {
-    const loc = repo.location;
-    const remoteShell = `cd ${shellQuote(loc.path)} && exec $SHELL -l`;
-    if (process.platform === "darwin") {
-      const command =
-        loc.kind === "local"
-          ? `cd ${shellQuote(loc.path)}`
-          : `ssh -t ${shellQuote(loc.host)} ${shellQuote(remoteShell)}`;
-      const script = `tell application "Terminal"
-  activate
-  do script ${JSON.stringify(command)}
-end tell`;
-      nodeSpawn("osascript", ["-e", script], { detached: true, stdio: "ignore" }).unref();
-    } else if (process.platform === "win32") {
-      const args =
-        loc.kind === "local"
-          ? ["/c", "start", "cmd", "/k", `cd /d "${loc.path}"`]
-          : ["/c", "start", "ssh", "-t", loc.host, remoteShell];
-      nodeSpawn("cmd.exe", args, { detached: true, stdio: "ignore" }).unref();
-    } else {
-      const args = loc.kind === "local" ? [] : ["-e", "ssh", "-t", loc.host, remoteShell];
-      nodeSpawn("x-terminal-emulator", args, {
-        cwd: loc.kind === "local" ? loc.path : undefined,
-        detached: true,
-        stdio: "ignore",
-      }).unref();
+/** A `cd` to a directory typed by the user, where `~` is the home directory. */
+const cdTo = (path: string | null) => {
+  if (!path || path === "~") return "cd";
+  if (path.startsWith("~/")) return `cd -- "$HOME"/${shellQuote(path.slice(2))}`;
+  return `cd -- ${shellQuote(path)}`;
+};
+
+/** Whether `url` is a web page that may be opened in the browser. */
+export const isWebUrl = (url: string): boolean =>
+  URL.canParse(url) && ["http:", "https:"].includes(new URL(url).protocol);
+
+/** A detached program to start, e.g. a terminal emulator. */
+interface Launch {
+  readonly file: string;
+  readonly args: readonly string[];
+  readonly options?: SpawnOptions;
+}
+
+/** Starts a detached program; fails when it cannot be started (e.g. it is not installed). */
+const launch = ({ file, args, options }: Launch) =>
+  Effect.callback<void, Error>((resume) => {
+    let child: ChildProcess;
+    try {
+      child = nodeSpawn(file, args, { ...options, detached: true, stdio: "ignore" });
+    } catch (e) {
+      resume(Effect.fail(e instanceof Error ? e : new Error(String(e))));
+      return;
     }
+    // Without an `error` listener, a missing program would crash the main process.
+    child.on("error", (e) => resume(Effect.fail(e)));
+    child.once("spawn", () => {
+      child.unref();
+      resume(Effect.void);
+    });
   });
+
+/** An AppleScript string literal. */
+const appleScriptString = (s: string) => `"${s.replaceAll(/[\\"]/g, "\\$&")}"`;
+
+/** Quotes an argument for a `cmd.exe` command line, which has no way to escape `"` or `%`. */
+const cmdQuote = (s: string) => {
+  if (/["%\r\n]/.test(s)) throw new Error(`Cannot pass ${JSON.stringify(s)} to cmd.exe`);
+  return `"${s}"`;
+};
+
+/** Ways to open a terminal at a repository, in order of preference. */
+export const terminalLaunches = (loc: RepoLocation): Launch[] => {
+  const remoteShell = `cd ${shellQuote(loc.path)} && exec $SHELL -l`;
+  const ssh = loc.kind === "ssh" ? ["ssh", "-t", "--", loc.host, remoteShell] : [];
+  if (process.platform === "darwin") {
+    const command = loc.kind === "local" ? `cd ${shellQuote(loc.path)}` : shellJoin(ssh);
+    const script = `tell application "Terminal"
+  activate
+  do script ${appleScriptString(command)}
+end tell`;
+    return [{ file: "osascript", args: ["-e", script] }];
+  }
+  if (process.platform === "win32") {
+    // `start` opens a new console window; the empty argument is its title.
+    if (loc.kind === "local") {
+      return [
+        { file: "cmd.exe", args: ["/d", "/c", "start", "", "cmd.exe"], options: { cwd: loc.path } },
+      ];
+    }
+    const line = `/d /s /c "start "" ${ssh.map(cmdQuote).join(" ")}"`;
+    return [{ file: "cmd.exe", args: [line], options: { windowsVerbatimArguments: true } }];
+  }
+  const cwd = loc.kind === "local" ? { cwd: loc.path } : undefined;
+  const emulators: [string | undefined, string][] = [
+    [process.env.TERMINAL, "-e"],
+    ["x-terminal-emulator", "-e"],
+    ["gnome-terminal", "--"],
+    ["konsole", "-e"],
+    ["xfce4-terminal", "-x"],
+    ["xterm", "-e"],
+  ];
+  return emulators.flatMap(([file, exec]) =>
+    file ? [{ file, args: loc.kind === "local" ? [] : [exec, ...ssh], options: cwd }] : [],
+  );
+};
+
+const openTerminal = (repo: Repository) =>
+  Effect.try({
+    try: () => terminalLaunches(repo.location),
+    catch: (e) => new InvalidInputError({ message: (e as Error).message }),
+  }).pipe(
+    Effect.flatMap((launches) =>
+      Effect.firstSuccessOf(launches.map(launch)).pipe(
+        Effect.mapError(
+          (e) =>
+            new InvalidInputError({
+              message:
+                launches.length > 1
+                  ? "No terminal emulator found. Set $TERMINAL to the one to use."
+                  : `Could not open a terminal: ${e.message}`,
+            }),
+        ),
+      ),
+    ),
+  );
 
 /** An http(s) origin, e.g. `https://git.example.com:8443`, of a host that may run GitLab. */
 const isWebOrigin = (origin: string) => {
@@ -94,31 +370,49 @@ export const handlers: Handlers = {
   "app.setState": (state) => Effect.sync(() => saveState(state)),
   "app.version": () => Effect.succeed({ version: app.getVersion(), platform: process.platform }),
   "app.edit": (command) =>
-    EDIT_COMMANDS.includes(command)
-      ? Effect.gen(function* () {
-          (yield* Caller).webContents[command]();
-        })
-      : Effect.fail(new InvalidInputError({ message: `Unknown edit command: ${String(command)}` })),
+    Effect.gen(function* () {
+      (yield* Caller).webContents[command]();
+    }),
+  // Windows follow through `nativeTheme`'s "updated" event (see index.ts).
+  "app.setTheme": (theme) =>
+    Effect.sync(() => {
+      nativeTheme.themeSource = theme;
+    }),
   "dialog.pickDirectory": () =>
-    Effect.promise(async () => {
-      const win = BrowserWindow.getFocusedWindow();
+    Effect.gen(function* () {
+      // Attached to the window that asked, which need not be focused.
+      const win = BrowserWindow.fromWebContents((yield* Caller).webContents);
       const opts = { properties: ["openDirectory" as const, "createDirectory" as const] };
-      const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+      const r = yield* Effect.promise(() =>
+        win ? dialog.showOpenDialog(win, opts) : dialog.showOpenDialog(opts),
+      );
       return r.canceled ? null : (r.filePaths[0] ?? null);
     }),
   "shell.openTerminal": (id) => withRepo(id, openTerminal),
   "shell.revealInFinder": (id, path) =>
     withRepo(id, (repo) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (repo.location.kind !== "local") return;
-        const target = path ? `${repo.workTree}/${path}` : repo.workTree;
-        if (path) shell.showItemInFolder(target);
-        else void shell.openPath(target);
+        if (path) {
+          const target = resolve(repo.workTree, path);
+          const rel = relative(repo.workTree, target);
+          if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+            return yield* new InvalidInputError({ message: `${path} is outside the repository` });
+          }
+          shell.showItemInFolder(target);
+          return;
+        }
+        const error = yield* Effect.promise(() => shell.openPath(repo.workTree));
+        if (error) return yield* new InvalidInputError({ message: error });
       }),
     ),
   "shell.openExternal": (url) =>
-    /^https?:\/\//.test(url)
-      ? Effect.promise(() => shell.openExternal(url))
+    isWebUrl(url)
+      ? Effect.tryPromise({
+          try: () => shell.openExternal(url),
+          catch: (e) =>
+            new InvalidInputError({ message: `Cannot open ${url}: ${(e as Error).message}` }),
+        })
       : Effect.fail(new InvalidInputError({ message: `Refusing to open ${url}` })),
 
   "web.isGitlab": (origin) => (isWebOrigin(origin) ? isGitlab(origin) : Effect.succeed(false)),
@@ -133,9 +427,8 @@ export const handlers: Handlers = {
       const hosts = yield* Hosts;
       const host = hosts.get(hostId);
       yield* hosts.connect(hostId);
-      const cd = path ? `cd -- ${shellQuote(path)}` : "cd";
-      const r = yield* host.sh(`${cd} && pwd && ${LIST_DIR_SCRIPT}`, { idempotent: true });
-      const [cwd, ...rest] = r.stdout.toString("utf8").split("\n");
+      const r = yield* host.sh(`${cdTo(path)} && {${LIST_DIR_SCRIPT}}`, { idempotent: true });
+      const [cwd, ...rest] = r.stdout.toString("utf8").split("\0");
       const entries: DirEntry[] = rest
         .filter((l) => l.length > 1)
         .map((l) => ({ name: l.slice(1), isDir: true, isRepo: l.startsWith("R") }))
@@ -144,44 +437,48 @@ export const handlers: Handlers = {
     }),
 
   // Repository lifecycle -------------------------------------------------------
-  "repo.open": (location) =>
-    Effect.gen(function* () {
-      const repos = yield* Repos;
-      const repo = yield* repos.open(location);
-      return yield* repo.info();
-    }),
+  "repo.open": openFor,
   "repo.close": (id) =>
     Effect.gen(function* () {
-      yield* (yield* Repos).close(id);
+      yield* (yield* Repos).release(id, yield* owner);
+    }),
+  "repo.setVisible": (id, visible) =>
+    Effect.gen(function* () {
+      yield* (yield* Repos).setVisible(id, yield* owner, visible);
     }),
   "repo.init": (location) =>
     Effect.gen(function* () {
       const hosts = yield* Hosts;
-      const host = hosts.get(location.kind === "local" ? "local" : location.host);
+      const host = hosts.get(location.kind === "local" ? LOCAL_HOST : location.host);
       yield* host.exec("git", ["init", "--", location.path]);
-      const repos = yield* Repos;
-      const repo = yield* repos.open(location);
-      return yield* repo.info();
+      return yield* openFor(location);
     }),
   "repo.clone": (url, location) =>
     Effect.gen(function* () {
-      if (url.startsWith("-"))
+      if (url === "" || /^-|^(?:ext|fd)::/i.test(url))
         return yield* Effect.fail(new InvalidInputError({ message: "Invalid URL" }));
       const hosts = yield* Hosts;
-      const host = hosts.get(location.kind === "local" ? "local" : location.host);
-      yield* host.exec("git", ["clone", "--", url, location.path]);
-      const repos = yield* Repos;
-      const repo = yield* repos.open(location);
-      return yield* repo.info();
+      const host = hosts.get(location.kind === "local" ? LOCAL_HOST : location.host);
+      yield* host.exec("git", [
+        ...SAFE_TRANSPORTS,
+        "clone",
+        "--no-recurse-submodules",
+        "--",
+        url,
+        location.path,
+      ]);
+      return yield* openFor(location);
     }),
 
   // Queries ----------------------------------------------------------------------
   "repo.info": (id) => withRepo(id, (r) => r.info()),
   "repo.refs": (id) => withRepo(id, (r) => r.refs()),
   "repo.graphInfo": (id) => withRepo(id, (r) => r.graphInfo()),
+  "repo.reloadGraph": (id) => withRepo(id, (r) => r.reloadGraph()),
   "repo.graphRows": (id, version, start, end) =>
     withRepo(id, (r) => r.graphRows(version, start, end)),
   "repo.findCommit": (id, version, hash) => withRepo(id, (r) => r.findCommit(version, hash)),
+  "repo.findCommits": (id, version, hashes) => withRepo(id, (r) => r.findCommits(version, hashes)),
   "repo.search": (id, query) => withRepo(id, (r) => r.search(query)),
   "repo.status": (id) => withRepo(id, (r) => r.status()),
   "repo.commitDetails": (id, hash) => withRepo(id, (r) => r.commitDetails(hash)),
@@ -216,8 +513,8 @@ export const handlers: Handlers = {
   "repo.deleteTag": (id, name) => withRepo(id, (r) => r.deleteTag(name)),
   "repo.merge": (id, ref, opts) => withRepo(id, (r) => r.merge(ref, opts)),
   "repo.rebase": (id, onto) => withRepo(id, (r) => r.rebase(onto)),
-  "repo.cherryPick": (id, hash) => withRepo(id, (r) => r.cherryPick(hash)),
-  "repo.revert": (id, hash) => withRepo(id, (r) => r.revert(hash)),
+  "repo.cherryPick": (id, hashes) => withRepo(id, (r) => r.cherryPick(hashes)),
+  "repo.revert": (id, hashes) => withRepo(id, (r) => r.revert(hashes)),
   "repo.reset": (id, hash, mode) => withRepo(id, (r) => r.reset(hash, mode)),
   "repo.abortOperation": (id) => withRepo(id, (r) => r.abortOperation()),
   "repo.continueOperation": (id) => withRepo(id, (r) => r.continueOperation()),
@@ -233,9 +530,8 @@ export const handlers: Handlers = {
   "repo.setHiddenRefs": (id, hidden) =>
     withRepo(id, (r) =>
       Effect.gen(function* () {
-        const clean = hidden.filter((h) => typeof h === "string");
-        (yield* RepoSettings).setHidden(r.id, clean);
-        r.setHiddenRefs(clean);
+        (yield* RepoSettings).setHidden(r.id, hidden);
+        r.setHiddenRefs(hidden);
       }),
     ),
 
@@ -248,9 +544,11 @@ export const handlers: Handlers = {
 
   // Stash ----------------------------------------------------------------------------
   "repo.stash": (id, message, untracked) => withRepo(id, (r) => r.stash(message, untracked)),
-  "repo.stashPop": (id, index) => withRepo(id, (r) => r.stashPop(index)),
-  "repo.stashApply": (id, index) => withRepo(id, (r) => r.stashApply(index)),
-  "repo.stashDrop": (id, index) => withRepo(id, (r) => r.stashDrop(index)),
+  "repo.stashPop": (id, index, hash) => withRepo(id, (r) => r.stashPop(index, hash)),
+  "repo.stashApply": (id, index, hash) => withRepo(id, (r) => r.stashApply(index, hash)),
+  "repo.stashDrop": (id, index, hash) => withRepo(id, (r) => r.stashDrop(index, hash)),
+  "repo.stashBranch": (id, name, index, hash) =>
+    withRepo(id, (r) => r.stashBranch(name, index, hash)),
 
   // Remotes --------------------------------------------------------------------------
   "repo.fetch": (id, remote) => withRepo(id, (r) => r.fetch(remote)),
@@ -270,14 +568,20 @@ export const handlers: Handlers = {
   "updater.install": () => Effect.sync(() => updater.install()),
 };
 
+/** Longest error detail (e.g. stderr) sent to the renderer. */
+const MAX_DETAIL = 16 * 1024;
+
 const serializeError = (cause: Cause.Cause<AppError>): RpcError => {
   const failure = cause.reasons.find(Cause.isFailReason);
   if (failure) {
     const e = failure.error;
+    const detail = "stderr" in e && e.stderr ? e.stderr : "";
     return {
       tag: e._tag,
       message: e.message,
-      ...("stderr" in e && e.stderr ? { detail: e.stderr } : {}),
+      ...(detail
+        ? { detail: detail.length > MAX_DETAIL ? `${detail.slice(0, MAX_DETAIL)}\n…` : detail }
+        : {}),
     };
   }
   if (Cause.hasInterrupts(cause)) return { tag: "Interrupted", message: "Operation was cancelled" };
@@ -285,30 +589,100 @@ const serializeError = (cause: Cause.Cause<AppError>): RpcError => {
   return { tag: "Defect", message: Cause.pretty(cause).split("\n")[0] ?? "Unexpected error" };
 };
 
-/** Installs the single IPC entry point that dispatches to {@link handlers}. */
-export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, never>) => {
+const CANCELLABLE: ReadonlySet<string> = new Set(CANCELLABLE_METHODS);
+
+/** Failures that are part of normal operation, not worth a warning. */
+const EXPECTED = new Set(["StaleGraphError", "CancelledError", "Interrupted", "RepoNotOpenError"]);
+
+const badRequest = (message: string): RpcResult<never> => {
+  log.warn(`Bad request: ${message}`);
+  return { ok: false, error: { tag: "BadRequest", message } };
+};
+
+/**
+ * Installs the single IPC entry point that dispatches to {@link handlers}. Returns a function
+ * that forgets a renderer that is gone but whose web contents live on (its process crashed):
+ * stops its requests and releases its repositories.
+ */
+export const registerIpc = (
+  runtime: ManagedRuntime.ManagedRuntime<Services, never>,
+): { readonly releaseRenderer: (sender: WebContents) => Promise<void> } => {
+  /** Cancellable requests in flight, by renderer (`webContents.id`) and request id. */
+  const inFlight = new Map<number, Map<number, AbortController>>();
+  const release = (id: number) => {
+    for (const controller of inFlight.get(id)?.values() ?? []) controller.abort();
+    inFlight.delete(id);
+    return runtime
+      .runPromise(Effect.flatMap(Repos, (repos) => repos.releaseAll(id)))
+      .catch((e: unknown) => log.warn("Cannot release repositories", e));
+  };
+  // Repositories a renderer used are released when it goes away (e.g. its window closed).
+  const senders = new WeakSet<WebContents>();
+  const track = (sender: WebContents) => {
+    if (senders.has(sender)) return;
+    senders.add(sender);
+    const id = sender.id;
+    sender.once("destroyed", () => void release(id));
+  };
+  ipcMain.on(IPC_CANCEL, (event, requestId: unknown) => {
+    if (typeof requestId === "number") inFlight.get(event.sender.id)?.get(requestId)?.abort();
+  });
   ipcMain.handle(
     IPC_INVOKE,
-    async (event, method: unknown, args: unknown): Promise<RpcResult<unknown>> => {
-      if (typeof method !== "string" || !Object.hasOwn(handlers, method) || !Array.isArray(args)) {
-        return {
-          ok: false,
-          error: { tag: "BadRequest", message: `Unknown method ${String(method)}` },
-        };
+    async (
+      event,
+      method: unknown,
+      input: unknown,
+      requestId?: unknown,
+    ): Promise<RpcResult<unknown>> => {
+      if (typeof method !== "string" || !Object.hasOwn(handlers, method)) {
+        return badRequest(`Unknown method ${String(method).slice(0, 100)}`);
       }
+      const args = decodeArgs(method as ApiMethod, input);
+      if (Exit.isFailure(args)) {
+        const reason = args.cause.reasons.find(Cause.isFailReason);
+        const why = reason ? reason.error.message.replaceAll(/\s+/g, " ") : "malformed";
+        return badRequest(`Invalid arguments for ${method}: ${why}`);
+      }
+      track(event.sender);
       const handler = handlers[method as ApiMethod] as (
-        ...a: unknown[]
+        ...a: readonly unknown[]
       ) => Effect.Effect<unknown, AppError, Services | Caller>;
+      // Only reads can be cancelled (see CANCELLABLE_METHODS): cancelling interrupts the
+      // handler, which kills its commands.
+      const sender = event.sender.id;
+      const controller =
+        typeof requestId === "number" && CANCELLABLE.has(method) ? new AbortController() : null;
+      if (controller) {
+        let requests = inFlight.get(sender);
+        if (!requests) {
+          requests = new Map();
+          inFlight.set(sender, requests);
+        }
+        requests.set(requestId as number, controller);
+      }
       const started = performance.now();
-      const exit = await runtime.runPromiseExit(
-        handler(...args).pipe(Effect.provideService(Caller, { webContents: event.sender })),
-      );
+      const exit = await runtime
+        .runPromiseExit(
+          handler(...(args.value as readonly unknown[])).pipe(
+            Effect.provideService(Caller, { webContents: event.sender }),
+          ),
+          controller ? { signal: controller.signal } : undefined,
+        )
+        .finally(() => {
+          const requests = inFlight.get(sender);
+          if (!controller || requests?.get(requestId as number) !== controller) return;
+          requests.delete(requestId as number);
+          if (requests.size === 0) inFlight.delete(sender);
+        });
       const ms = performance.now() - started;
       if (ms > 500) log.info(`${method} took ${ms.toFixed(0)}ms`);
       if (Exit.isSuccess(exit)) return { ok: true, value: exit.value };
       const error = serializeError(exit.cause);
-      log.warn(`${method} failed: ${error.message}`);
+      if (EXPECTED.has(error.tag)) log.debug(`${method}: ${error.message}`);
+      else log.warn(`${method} failed: ${error.message}`);
       return { ok: false, error };
     },
   );
+  return { releaseRenderer: (sender) => release(sender.id) };
 };

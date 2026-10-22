@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   fail: false,
   calls: [] as string[],
   toasts: [] as string[],
+  /** Holds `repo.setHiddenRefs` back until it settles. */
+  gate: null as Promise<void> | null,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -23,6 +25,7 @@ vi.mock("@/lib/api", () => ({
       case "repo.hiddenRefs":
         return mocks.hidden;
       case "repo.setHiddenRefs":
+        await mocks.gate;
         if (mocks.fail) throw new Error("read-only config");
         mocks.hidden = arg!;
         return undefined;
@@ -40,7 +43,6 @@ vi.mock("sonner", () => ({
 const snapshot = {
   refs: [
     { name: "refs/heads/main", short: "main" },
-    { name: "refs/remotes/origin/HEAD", short: "origin/HEAD" },
     { name: "refs/remotes/origin/main", short: "origin/main" },
   ],
   stashes: [{ hash: "s1" }],
@@ -61,6 +63,7 @@ const snapshot = {
 } as unknown as RefsSnapshot;
 
 let root: Root | undefined;
+let client: QueryClient;
 const probe = { vis: null as unknown as ReturnType<typeof useVisibility> };
 
 beforeEach(() => {
@@ -69,6 +72,7 @@ beforeEach(() => {
   mocks.fail = false;
   mocks.calls = [];
   mocks.toasts = [];
+  mocks.gate = null;
 });
 
 afterEach(async () => {
@@ -93,7 +97,7 @@ async function render() {
   root = r;
   await act(async () =>
     r.render(
-      <QueryClientProvider client={new QueryClient()}>
+      <QueryClientProvider client={(client = new QueryClient())}>
         <Probe onValue={(v) => (probe.vis = v)} />
       </QueryClientProvider>,
     ),
@@ -101,7 +105,7 @@ async function render() {
   await act(() => vi.waitFor(() => expect(probe.vis.all).toHaveLength(3)));
 }
 
-it("lists refs (without symbolic HEADs) and stashes", () => {
+it("lists refs and stashes", () => {
   expect(allVisibilityNames(snapshot)).toEqual([
     "refs/heads/main",
     "refs/remotes/origin/main",
@@ -164,6 +168,35 @@ it("reports a failed save and reloads the saved state", async () => {
   // The optimistic update is rolled back from the main process.
   await act(() => vi.waitFor(() => expect(probe.vis.hidden).toEqual(["refs/heads/main"])));
   expect(mocks.calls.filter((c) => c === "repo.hiddenRefs")).toHaveLength(2);
+});
+
+it("keeps showing a save while a refresh reads the names from before it", async () => {
+  await render();
+  let release = () => {};
+  mocks.gate = new Promise((r) => (release = r));
+  await act(async () => probe.vis.toggle("refs/heads/main"));
+  // A refresh (e.g. Cmd+R) while the save runs still reads no hidden names.
+  await act(async () => client.invalidateQueries({ queryKey: ["repo", "local:/repo", "hidden"] }));
+  await settle();
+  expect(mocks.calls.filter((c) => c === "repo.hiddenRefs")).toHaveLength(2);
+  expect(probe.vis.isHidden("refs/heads/main")).toBe(true);
+  await act(async () => release());
+  await settle();
+  expect(probe.vis.isHidden("refs/heads/main")).toBe(true);
+  // What the refresh read is outdated: the names are read again.
+  await act(() =>
+    vi.waitFor(() => expect(mocks.calls.filter((c) => c === "repo.hiddenRefs")).toHaveLength(3)),
+  );
+  expect(probe.vis.hidden).toEqual(["refs/heads/main"]);
+});
+
+it("does not read the names again after a save nothing raced", async () => {
+  await render();
+  await act(async () => probe.vis.toggle("refs/heads/main"));
+  await settle();
+  await settle();
+  expect(probe.vis.hidden).toEqual(["refs/heads/main"]);
+  expect(mocks.calls.filter((c) => c === "repo.hiddenRefs")).toHaveLength(1);
 });
 
 it("filters branches by contributor", async () => {

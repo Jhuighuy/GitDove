@@ -7,13 +7,13 @@ const mocks = vi.hoisted(() => ({
   prompt: vi.fn(),
   confirm: vi.fn(),
   openLocation: vi.fn(),
-  toast: {
+  toast: Object.assign(vi.fn(), {
     loading: vi.fn(() => "t"),
     success: vi.fn(),
     error: vi.fn(),
     dismiss: vi.fn(),
     warning: vi.fn(),
-  },
+  }),
 }));
 vi.mock("@/lib/api", () => ({
   api: mocks.api,
@@ -36,6 +36,7 @@ const { keys, queryClient } = await import("@/lib/queries");
 const { useRepoUiStore } = await import("@/stores/repo-ui");
 const { useBusyStore } = await import("@/stores/busy");
 const { APP, useStatusStore } = await import("@/stores/status");
+const { useTabs } = await import("@/stores/tabs");
 
 const repo = "local:/work/repo";
 /** The status bar's notice for the repository (or the app). */
@@ -72,6 +73,7 @@ const setRefs = (refs: Ref[], remotes = [remote("upstream"), remote("origin")]) 
     remotes,
     worktrees: [],
     submodules: [],
+    owners: { byRef: {}, people: {}, me: { email: null, name: null } },
   });
 const setInfo = (workTree: string) =>
   queryClient.setQueryData<Partial<RepoInfo>>(keys.info(repo), { workTree });
@@ -85,6 +87,7 @@ const methods = () => mocks.api.mock.calls.map(([m]) => m as string);
 beforeEach(() => {
   vi.clearAllMocks();
   useStatusStore.setState({ notices: {}, activities: [] });
+  useTabs.setState({ tabs: [{ key: "t", repo }], active: "t" });
   queryClient.clear();
   mocks.api.mockResolvedValue(undefined);
   mocks.confirm.mockResolvedValue(true);
@@ -125,12 +128,16 @@ it("runs simple commands with their api calls", async () => {
     [() => commands.pull(repo), "repo.pull", [repo, "ff-only"]],
     [() => commands.pull(repo, "rebase"), "repo.pull", [repo, "rebase"]],
     [() => commands.stash(repo), "repo.stash", [repo, null, true]],
-    [() => commands.pop(repo), "repo.stashPop", [repo, 0]],
-    [() => commands.pop(repo, 2), "repo.stashPop", [repo, 2]],
-    [() => commands.applyStash(repo, 1), "repo.stashApply", [repo, 1]],
+    // The latest stash, whichever it is, or a given one, checked by its hash.
+    [() => commands.pop(repo), "repo.stashPop", [repo, 0, undefined]],
+    [() => commands.pop(repo, { index: 2, hash: "s2" }), "repo.stashPop", [repo, 2, "s2"]],
+    [() => commands.applyStash(repo, { index: 1, hash: "s1" }), "repo.stashApply", [repo, 1, "s1"]],
     [() => commands.checkout(repo, "topic"), "repo.checkout", [repo, "topic"]],
-    [() => commands.cherryPick(repo, "0123456789"), "repo.cherryPick", [repo, "0123456789"]],
-    [() => commands.revert(repo, "0123456789"), "repo.revert", [repo, "0123456789"]],
+    [() => commands.cherryPick(repo, ["0123456789"]), "repo.cherryPick", [repo, ["0123456789"]]],
+    [() => commands.revert(repo, ["0123456789"]), "repo.revert", [repo, ["0123456789"]]],
+    [() => commands.cherryPick(repo, ["c2", "c1"]), "repo.cherryPick", [repo, ["c2", "c1"]]],
+    [() => commands.revert(repo, ["c2", "c1"]), "repo.revert", [repo, ["c2", "c1"]]],
+    [() => commands.stageAll(repo), "repo.stageAll", [repo]],
     [() => commands.abort(repo), "repo.abortOperation", [repo]],
     [() => commands.continue(repo), "repo.continueOperation", [repo]],
     [() => commands.pruneWorktrees(repo), "repo.pruneWorktrees", [repo]],
@@ -147,10 +154,14 @@ it("runs simple commands with their api calls", async () => {
 it("reports results in the status bar, not in toasts", async () => {
   await commands.fetch(repo);
   expect(noticeText()).toBeUndefined();
-  await commands.cherryPick(repo, "0123456789");
+  await commands.cherryPick(repo, ["0123456789"]);
   expect(noticeText()).toBe("Cherry-picked 0123456");
-  await commands.revert(repo, "abcdef0123");
+  await commands.revert(repo, ["abcdef0123"]);
   expect(noticeText()).toBe("Reverted abcdef0");
+  await commands.cherryPick(repo, ["c3", "c2", "c1"]);
+  expect(noticeText()).toBe("Cherry-picked 3 commits");
+  await commands.revert(repo, ["c2", "c1"]);
+  expect(noticeText()).toBe("Reverted 2 commits");
   await commands.stash(repo);
   expect(noticeText()).toBe("Changes stashed");
   await commands.updateSubmodule(repo, "lib/x");
@@ -162,10 +173,11 @@ it("reports results in the status bar, not in toasts", async () => {
 
 it("reports failures as error toasts", async () => {
   mocks.api.mockRejectedValue(new Error("could not resolve host"));
-  await expect(commands.pull(repo)).resolves.toBeUndefined();
+  await expect(commands.pull(repo)).resolves.toEqual({ ok: false });
   expect(mocks.toast.error).toHaveBeenCalledWith("Pull failed", {
     description: "could not resolve host",
     duration: 10000,
+    action: expect.objectContaining({ label: "Copy" }),
   });
   expect(noticeText()).toBeUndefined();
   mocks.prompt.mockResolvedValue({ value: "b", checked: true });
@@ -195,9 +207,23 @@ it("does not open dialogs or start commands while another operation runs", async
   }
 });
 
-it("cancels the running operation", () => {
+it("cancels the running operation", async () => {
   commands.cancel(repo);
   expect(apiCalls("repo.cancel")).toEqual([[repo]]);
+  mocks.api.mockRejectedValueOnce(new Error("gone"));
+  commands.cancel(repo);
+  await vi.waitFor(() =>
+    expect(mocks.toast.error).toHaveBeenCalledWith("Cancel failed", { description: "gone" }),
+  );
+});
+
+it("confirms aborting a merge or rebase", async () => {
+  mocks.confirm.mockResolvedValueOnce(false);
+  await commands.abort(repo);
+  expect(mocks.confirm).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Abort?", destructive: true }),
+  );
+  expect(methods()).toEqual([]);
 });
 
 it("labels the busy state with the operation and its target", async () => {
@@ -208,7 +234,18 @@ it("labels the busy state with the operation and its target", async () => {
   await commands.checkout(repo, "topic");
   await commands.checkout(repo, "0123456789abcdef0123456789abcdef01234567");
   await commands.merge(repo, "topic");
-  expect(labels).toEqual(["Checking out topic…", "Checking out 0123456…", "Merging topic…"]);
+  await commands.checkout(repo, "refs/tags/v1");
+  await commands.merge(repo, "refs/remotes/origin/main");
+  await commands.rebase(repo, "refs/heads/topic");
+  expect(labels).toEqual([
+    "Checking out topic…",
+    "Checking out 0123456…",
+    "Merging topic…",
+    // Full ref names are shown short.
+    "Checking out v1…",
+    "Merging origin/main…",
+    "Rebasing onto topic…",
+  ]);
 });
 
 it("pushes the current branch", async () => {
@@ -243,7 +280,45 @@ it("asks to set the upstream when pushing a branch without one", async () => {
   mocks.api.mockClear();
   setRefs([{ ...main, upstreamGone: true }]);
   await commands.push(repo);
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      description:
+        "The upstream branch of “main” no longer exists. Push it and set the upstream to origin/main?",
+    }),
+  );
   expect(apiCalls("repo.push")).toEqual([[repo, { force: false, setUpstream: true }]]);
+});
+
+it("names the remote that a new upstream is set on, and needs one", async () => {
+  setRefs([{ ...main, upstream: null }], [remote("fork")]);
+  mocks.confirm.mockResolvedValueOnce(false);
+  await commands.push(repo);
+  expect(mocks.confirm).toHaveBeenCalledWith(
+    expect.objectContaining({
+      description: "“main” has no upstream branch. Push it and set the upstream to fork/main?",
+    }),
+  );
+  setRefs([{ ...main, upstream: null }], []);
+  await commands.push(repo);
+  expect(mocks.toast.error).toHaveBeenCalledWith("Push failed", {
+    description: "No remotes configured",
+  });
+  expect(methods()).toEqual([]);
+});
+
+it("names the remote that main pushes to, e.g. remote.pushDefault", async () => {
+  queryClient.setQueryData<RefsSnapshot>(keys.refs(repo), (old) => ({
+    ...old!,
+    refs: [{ ...main, upstream: null }],
+    pushRemote: "upstream",
+  }));
+  mocks.confirm.mockResolvedValueOnce(false);
+  await commands.push(repo);
+  expect(mocks.confirm).toHaveBeenCalledWith(
+    expect.objectContaining({
+      description: "“main” has no upstream branch. Push it and set the upstream to upstream/main?",
+    }),
+  );
 });
 
 it("confirms force pushes", async () => {
@@ -273,13 +348,25 @@ it("pushes and pulls other branches without checking them out", async () => {
 
 it("confirms dropping a stash", async () => {
   mocks.confirm.mockResolvedValueOnce(false);
-  await commands.dropStash(repo, 3);
+  await commands.dropStash(repo, { index: 3, hash: "s3" });
   expect(mocks.confirm).toHaveBeenCalledWith(
     expect.objectContaining({ title: "Delete stash@{3}?", destructive: true }),
   );
   expect(methods()).toEqual([]);
-  await commands.dropStash(repo, 3);
-  expect(apiCalls("repo.stashDrop")).toEqual([[repo, 3]]);
+  await commands.dropStash(repo, { index: 3, hash: "s3" });
+  expect(apiCalls("repo.stashDrop")).toEqual([[repo, 3, "s3"]]);
+});
+
+it("creates a branch from a stash", async () => {
+  mocks.prompt.mockResolvedValueOnce(null);
+  await commands.stashBranch(repo, { index: 1, hash: "s1" });
+  expect(mocks.prompt).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Create branch from stash" }),
+  );
+  expect(methods()).toEqual([]);
+  mocks.prompt.mockResolvedValueOnce({ value: "rescued" });
+  await commands.stashBranch(repo, { index: 1, hash: "s1" });
+  expect(apiCalls("repo.stashBranch")).toEqual([[repo, "rescued", 1, "s1"]]);
 });
 
 it("checks out refs of every kind", async () => {
@@ -335,7 +422,7 @@ it("deletes local and remote branches after confirming", async () => {
 
   mocks.confirm.mockResolvedValue(true);
   await commands.deleteBranch(repo, topic);
-  expect(apiCalls("repo.deleteBranch")).toEqual([[repo, "topic", true]]);
+  expect(apiCalls("repo.deleteBranch")).toEqual([[repo, "topic", false]]);
   await commands.deleteBranch(repo, originFeature);
   expect(mocks.confirm).toHaveBeenLastCalledWith(
     expect.objectContaining({
@@ -345,6 +432,25 @@ it("deletes local and remote branches after confirming", async () => {
   );
   expect(apiCalls("repo.deleteRemoteBranch")).toEqual([[repo, "origin", "feature/x"]]);
   expect(mocks.toast.loading).not.toHaveBeenCalled();
+});
+
+it("forces deleting an unmerged branch only after asking again", async () => {
+  mocks.api.mockRejectedValueOnce(new Error("error: the branch 'topic' is not fully merged"));
+  mocks.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+  await commands.deleteBranch(repo, topic);
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({ title: "Delete unmerged topic?", destructive: true }),
+  );
+  expect(apiCalls("repo.deleteBranch")).toEqual([[repo, "topic", false]]);
+  expect(mocks.toast.error).not.toHaveBeenCalled();
+
+  mocks.api.mockClear();
+  mocks.api.mockRejectedValueOnce(new Error("error: the branch 'topic' is not fully merged"));
+  await commands.deleteBranch(repo, topic);
+  expect(apiCalls("repo.deleteBranch")).toEqual([
+    [repo, "topic", false],
+    [repo, "topic", true],
+  ]);
 });
 
 it("deletes tags after confirming", async () => {
@@ -366,6 +472,21 @@ it("confirms merges and rebases, naming the current branch", async () => {
     expect.objectContaining({ description: expect.stringContaining("Rebase “main” onto") }),
   );
   expect(apiCalls("repo.rebase")).toEqual([[repo, "origin/main"]]);
+
+  // Full ref names are passed on as they are, and shown short.
+  await commands.merge(repo, "refs/heads/topic");
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({ title: "Merge topic?", description: "Merge “topic” into “main”." }),
+  );
+  await commands.rebase(repo, "refs/remotes/origin/main");
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      title: "Rebase onto origin/main?",
+      description: "Rebase “main” onto “origin/main”. This rewrites history.",
+    }),
+  );
+  expect(apiCalls("repo.merge").at(-1)).toEqual([repo, "refs/heads/topic", {}]);
+  expect(apiCalls("repo.rebase").at(-1)).toEqual([repo, "refs/remotes/origin/main"]);
 
   setRefs([]);
   mocks.confirm.mockResolvedValue(false);
@@ -431,6 +552,50 @@ it("confirms discarding changes", async () => {
   mocks.api.mockClear();
   await commands.discard(repo, ["a.ts"], []);
   expect(methods()).toEqual([]);
+});
+
+it("confirms discarding all changes", async () => {
+  await commands.discardAll(repo);
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({ title: "Discard all changes?", destructive: true }),
+  );
+  expect(apiCalls("repo.discardAll")).toEqual([[repo]]);
+  mocks.confirm.mockResolvedValue(false);
+  mocks.api.mockClear();
+  await commands.discardAll(repo);
+  expect(methods()).toEqual([]);
+});
+
+it("applies patches, offering to undo a discard", async () => {
+  await commands.applyPatch(repo, "Stage Hunk", "P", { cached: true, reverse: false });
+  await commands.applyPatch(repo, "Unstage Hunk", "P", { cached: true, reverse: true });
+  expect(mocks.toast).not.toHaveBeenCalled();
+  await commands.applyPatch(repo, "Discard Lines", "P", { cached: false, reverse: true }, "a.ts");
+  expect(apiCalls("repo.applyPatch")).toEqual([
+    [repo, "P", { cached: true, reverse: false }],
+    [repo, "P", { cached: true, reverse: true }],
+    [repo, "P", { cached: false, reverse: true }],
+  ]);
+  expect(mocks.toast).toHaveBeenCalledWith(
+    "Changes discarded",
+    expect.objectContaining({ description: "a.ts", action: expect.anything() }),
+  );
+  // Undo applies the same patch forward to the working tree.
+  mocks.api.mockClear();
+  const undo = mocks.toast.mock.calls[0]![1].action.onClick as () => void;
+  undo();
+  await vi.waitFor(() => expect(noticeText()).toBe("Discarded changes restored"));
+  expect(apiCalls("repo.applyPatch")).toEqual([[repo, "P", { cached: false, reverse: false }]]);
+
+  // A failed discard has nothing to undo.
+  mocks.toast.mockClear();
+  mocks.api.mockRejectedValueOnce(new Error("patch does not apply"));
+  const result = await commands.applyPatch(repo, "Discard Hunk", "P", {
+    cached: false,
+    reverse: true,
+  });
+  expect(result).toEqual({ ok: false });
+  expect(mocks.toast).not.toHaveBeenCalled();
 });
 
 it("sets upstreams, defaulting to the branch on origin", async () => {
@@ -557,6 +722,11 @@ it("reveals files in the file manager", () => {
     [repo, "a.ts"],
     [repo, undefined],
   ]);
+  // Remote files are not on this machine.
+  mocks.api.mockClear();
+  commands.reveal("ssh://box/repo", "a.ts");
+  expect(methods()).toEqual([]);
+  expect(noticeText("ssh://box/repo")).toBe("Only local files can be revealed");
 });
 
 it("pushes and deletes tags on the default remote", async () => {
@@ -607,6 +777,16 @@ it("adds remotes and fetches them", async () => {
   expect(mocks.prompt.mock.calls.at(-2)![0]).toMatchObject({ defaultValue: "origin" });
   await vi.waitFor(() => expect(apiCalls("repo.fetch")).toEqual([[repo, "origin"]]));
   expect(apiCalls("repo.addRemote")).toEqual([[repo, "origin", "git@x:me/repo.git"]]);
+});
+
+it("does not fetch a remote that could not be added", async () => {
+  mocks.prompt
+    .mockResolvedValueOnce({ value: "origin" })
+    .mockResolvedValueOnce({ value: "git@x:me/repo.git" });
+  mocks.api.mockRejectedValueOnce(new Error("remote origin already exists"));
+  await commands.addRemote(repo);
+  expect(mocks.toast.error).toHaveBeenCalledWith("Add remote failed", expect.anything());
+  expect(apiCalls("repo.fetch")).toEqual([]);
 });
 
 it("edits remote URLs unless unchanged", async () => {

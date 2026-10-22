@@ -1,19 +1,27 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { RepoLocation } from "@shared/domain";
-import { IPC_INVOKE, type RpcResult } from "@shared/ipc";
+import { IPC_CANCEL, IPC_INVOKE, type RpcResult } from "@shared/ipc";
+import type { WebContents } from "electron";
 import { Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommandError, InvalidInputError } from "./exec/errors";
-import { type Host, Hosts } from "./exec/hosts";
+import {
+  CommandError,
+  InvalidInputError,
+  NotARepositoryError,
+  RepoNotOpenError,
+  StaleGraphError,
+} from "./exec/errors";
+import { type Host, Hosts, LOCAL_HOST } from "./exec/hosts";
 import { spawn } from "./exec/spawn";
 import type { Repository } from "./git/repository";
 import { RepoSettings, Repos } from "./services";
 
 const electron = vi.hoisted(() => ({
   app: { getVersion: () => "1.2.3" },
-  BrowserWindow: { getFocusedWindow: vi.fn((): object | null => null) },
+  BrowserWindow: { fromWebContents: vi.fn((): object | null => null) },
   dialog: {
     showOpenDialog: vi.fn(
       async (..._args: unknown[]): Promise<{ canceled: boolean; filePaths: string[] }> => ({
@@ -22,7 +30,8 @@ const electron = vi.hoisted(() => ({
       }),
     ),
   },
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
+  nativeTheme: { themeSource: "system" },
   shell: {
     showItemInFolder: vi.fn(),
     openPath: vi.fn(async () => ""),
@@ -30,7 +39,7 @@ const electron = vi.hoisted(() => ({
   },
 }));
 vi.mock("electron", () => electron);
-const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+const log = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock("electron-log/main", () => ({ default: log }));
 const state = vi.hoisted(() => ({ loadState: vi.fn(), saveState: vi.fn() }));
 vi.mock("./state", () => state);
@@ -44,12 +53,32 @@ const avatars = vi.hoisted(() => ({ isGitlab: vi.fn() }));
 vi.mock("./avatars", () => avatars);
 /** Terminal launchers are faked; everything else really runs. */
 const terminals = vi.hoisted(() => ({
-  spawn: vi.fn((..._args: unknown[]) => ({ unref: terminals.unref })),
+  /** Programs that are "not installed". */
+  missing: new Set<string>(),
+  spawn: vi.fn((file: string, ..._args: unknown[]) => {
+    const child = Object.assign(new EventEmitter(), { unref: terminals.unref });
+    const fail = terminals.missing.has(file);
+    setImmediate(() =>
+      fail
+        ? child.emit("error", Object.assign(new Error(`spawn ${file} ENOENT`), { code: "ENOENT" }))
+        : child.emit("spawn"),
+    );
+    return child;
+  }),
   unref: vi.fn(),
 }));
 vi.mock("node:child_process", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:child_process")>();
-  const launchers = ["osascript", "cmd.exe", "x-terminal-emulator"];
+  const launchers = [
+    "osascript",
+    "cmd.exe",
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "xterm",
+    "my-term",
+  ];
   return {
     ...real,
     spawn: (file: string, ...rest: unknown[]) =>
@@ -59,7 +88,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { handlers, registerIpc } = await import("./ipc");
+const { Caller, handlers, registerIpc } = await import("./ipc");
 
 // ---------------------------------------------------------------------------
 // Fake services
@@ -86,10 +115,12 @@ const fakeRepo = (location: RepoLocation, workTree = location.path) => {
 
 const services = {
   repo: fakeRepo({ kind: "local", path: "/work/repo" }),
-  getRepo: null as null | ((id: string) => Effect.Effect<Repository, never>),
+  getRepo: null as null | ((id: string) => Effect.Effect<Repository>),
   hosts: new Map<string, Host>(),
   connected: [] as string[],
   hidden: new Map<string, readonly string[]>(),
+  /** Owners repositories were opened or used for. */
+  owners: [] as number[],
 };
 
 /** A host that runs scripts with the local `/bin/sh` and records programs. */
@@ -98,7 +129,7 @@ const shellHost = (id: string) => {
   const shOptions: unknown[] = [];
   const host: Host = {
     id,
-    kind: id === "local" ? "local" : "ssh",
+    kind: id === LOCAL_HOST ? "local" : "ssh",
     exec: (program, args) => {
       execs.push([program, args]);
       return Effect.succeed({ stdout: Buffer.alloc(0), stderr: "", exitCode: 0, truncated: false });
@@ -113,9 +144,22 @@ const shellHost = (id: string) => {
 
 const layer = Layer.mergeAll(
   Layer.succeed(Repos, {
-    open: (location) => Effect.succeed(fakeRepo(location)),
-    get: (id) => (services.getRepo ? services.getRepo(id) : Effect.succeed(services.repo)),
-    close: (id) => Effect.sync(() => void services.connected.push(`close ${id}`)),
+    open: (location, owner) =>
+      Effect.sync(() => {
+        services.owners.push(owner);
+        return fakeRepo(location);
+      }),
+    get: (id, owner) => {
+      services.owners.push(owner);
+      return services.getRepo ? services.getRepo(id) : Effect.succeed(services.repo);
+    },
+    release: (id, owner) =>
+      Effect.sync(() => void services.connected.push(`close ${id} by ${owner}`)),
+    releaseAll: (owner) => Effect.sync(() => void services.connected.push(`release ${owner}`)),
+    setVisible: (id, owner, visible) =>
+      Effect.sync(
+        () => void services.connected.push(`${visible ? "show" : "hide"} ${id} by ${owner}`),
+      ),
   }),
   Layer.succeed(Hosts, {
     get: (id) => {
@@ -133,11 +177,17 @@ const layer = Layer.mergeAll(
 );
 const runtime = ManagedRuntime.make(layer);
 
-type AnyHandler = (...args: unknown[]) => Effect.Effect<unknown, unknown, never>;
-const call = (method: string, ...args: unknown[]) =>
-  runtime.runPromise((handlers as unknown as Record<string, AnyHandler>)[method]!(...args));
+type AnyHandler = (
+  ...args: unknown[]
+) => Effect.Effect<unknown, unknown, InstanceType<typeof Caller>>;
+/** Calls a handler as the renderer with `webContents.id` 1. */
+const asCaller = (method: string, args: unknown[]) =>
+  (handlers as unknown as Record<string, AnyHandler>)[method]!(...args).pipe(
+    Effect.provideService(Caller, { webContents: { id: 1 } as WebContents }),
+  );
+const call = (method: string, ...args: unknown[]) => runtime.runPromise(asCaller(method, args));
 const callExit = (method: string, ...args: unknown[]) =>
-  runtime.runPromiseExit((handlers as unknown as Record<string, AnyHandler>)[method]!(...args));
+  runtime.runPromiseExit(asCaller(method, args));
 
 const platform = process.platform;
 const setPlatform = (value: string) => Object.defineProperty(process, "platform", { value });
@@ -149,8 +199,14 @@ beforeEach(() => {
   services.hosts.clear();
   services.connected.length = 0;
   services.hidden.clear();
+  services.owners.length = 0;
+  terminals.missing.clear();
+  vi.stubEnv("TERMINAL", "");
 });
-afterEach(() => setPlatform(platform));
+afterEach(() => {
+  setPlatform(platform);
+  vi.unstubAllEnvs();
+});
 afterAll(() => runtime.dispose());
 
 // ---------------------------------------------------------------------------
@@ -166,18 +222,26 @@ describe("app and dialog handlers", () => {
     expect(state.saveState).toHaveBeenCalledWith(next);
   });
 
+  it("sets the theme of what the main process draws", async () => {
+    await call("app.setTheme", "dark");
+    expect(electron.nativeTheme.themeSource).toBe("dark");
+    await call("app.setTheme", "system");
+    expect(electron.nativeTheme.themeSource).toBe("system");
+  });
+
   it("reports the version and platform", async () => {
     expect(await call("app.version")).toEqual({ version: "1.2.3", platform: process.platform });
   });
 
-  it("picks a directory, attached to the focused window if any", async () => {
+  it("picks a directory, attached to the caller's window if any", async () => {
     expect(await call("dialog.pickDirectory")).toBe("/picked");
     expect(electron.dialog.showOpenDialog).toHaveBeenLastCalledWith({
       properties: ["openDirectory", "createDirectory"],
     });
     const win = { id: 1 };
-    electron.BrowserWindow.getFocusedWindow.mockReturnValueOnce(win);
+    electron.BrowserWindow.fromWebContents.mockReturnValueOnce(win);
     await call("dialog.pickDirectory");
+    expect(electron.BrowserWindow.fromWebContents).toHaveBeenLastCalledWith({ id: 1 });
     expect(electron.dialog.showOpenDialog).toHaveBeenLastCalledWith(win, expect.any(Object));
 
     electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
@@ -190,12 +254,23 @@ describe("app and dialog handlers", () => {
 describe("shell handlers", () => {
   it("opens http(s) links only", async () => {
     await call("shell.openExternal", "https://example.org/x");
+    await call("shell.openExternal", "HTTP://example.org/y");
     expect(electron.shell.openExternal).toHaveBeenCalledWith("https://example.org/x");
-    const exit = await callExit("shell.openExternal", "file:///etc/passwd");
-    expect(exit).toEqual(
-      Exit.fail(new InvalidInputError({ message: "Refusing to open file:///etc/passwd" })),
+    expect(electron.shell.openExternal).toHaveBeenCalledWith("HTTP://example.org/y");
+    for (const url of ["file:///etc/passwd", "javascript:alert(1)", "not a url"]) {
+      const exit = await callExit("shell.openExternal", url);
+      expect(exit).toEqual(
+        Exit.fail(new InvalidInputError({ message: `Refusing to open ${url}` })),
+      );
+    }
+    expect(electron.shell.openExternal).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports links that cannot be opened", async () => {
+    electron.shell.openExternal.mockRejectedValueOnce(new Error("no handler"));
+    expect(await callExit("shell.openExternal", "https://x.org")).toEqual(
+      Exit.fail(new InvalidInputError({ message: "Cannot open https://x.org: no handler" })),
     );
-    expect(electron.shell.openExternal).toHaveBeenCalledTimes(1);
   });
 
   it("asks only plausible web origins whether they run GitLab", async () => {
@@ -225,9 +300,23 @@ describe("shell handlers", () => {
 
   it("reveals local files and folders", async () => {
     await call("shell.revealInFinder", "local:/work/repo", "src/a b.ts");
-    expect(electron.shell.showItemInFolder).toHaveBeenCalledWith("/work/repo/src/a b.ts");
+    expect(electron.shell.showItemInFolder).toHaveBeenCalledWith(
+      resolve("/work/repo", "src/a b.ts"),
+    );
     await call("shell.revealInFinder", "local:/work/repo");
     expect(electron.shell.openPath).toHaveBeenCalledWith("/work/repo");
+  });
+
+  it("reveals nothing outside the repository and reports failures", async () => {
+    for (const path of ["../etc/passwd", "a/../../x", "/etc/passwd", "."]) {
+      const exit = await callExit("shell.revealInFinder", "local:/work/repo", path);
+      expect(JSON.stringify(exit)).toContain("is outside the repository");
+    }
+    expect(electron.shell.showItemInFolder).not.toHaveBeenCalled();
+    electron.shell.openPath.mockResolvedValueOnce("Failed to open");
+    expect(await callExit("shell.revealInFinder", "local:/work/repo")).toEqual(
+      Exit.fail(new InvalidInputError({ message: "Failed to open" })),
+    );
   });
 
   it("does not reveal remote files", async () => {
@@ -258,7 +347,7 @@ describe("shell handlers", () => {
     await call("shell.openTerminal", services.repo.id);
     const script = (terminals.spawn.mock.lastCall![1] as string[])[1]!;
     expect(script).toContain(
-      `do script ${JSON.stringify(`ssh -t fedora 'cd '\\''/srv/my repo'\\'' && exec $SHELL -l'`)}`,
+      `do script "ssh -t -- fedora 'cd '\\\\''/srv/my repo'\\\\'' && exec $SHELL -l'"`,
     );
     expect(terminals.unref).toHaveBeenCalledTimes(2);
   });
@@ -269,19 +358,24 @@ describe("shell handlers", () => {
     await call("shell.openTerminal", services.repo.id);
     expect(terminals.spawn).toHaveBeenLastCalledWith(
       "cmd.exe",
-      ["/c", "start", "cmd", "/k", `cd /d "/work/it's"`],
-      detached,
+      ["/d", "/c", "start", "", "cmd.exe"],
+      { cwd: "/work/it's", ...detached },
     );
     services.repo = remote();
     await call("shell.openTerminal", services.repo.id);
     expect(terminals.spawn).toHaveBeenLastCalledWith(
       "cmd.exe",
-      ["/c", "start", "ssh", "-t", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
-      detached,
+      [`/d /s /c "start "" "ssh" "-t" "--" "fedora" "cd '/srv/my repo' && exec $SHELL -l""`],
+      { windowsVerbatimArguments: true, ...detached },
     );
+    // cmd.exe expands `%VAR%` even in quotes.
+    services.repo = fakeRepo({ kind: "ssh", host: "fedora", path: "/srv/100%" });
+    const exit = await callExit("shell.openTerminal", services.repo.id);
+    expect(JSON.stringify(exit)).toContain("Cannot pass");
+    expect(terminals.spawn).toHaveBeenCalledTimes(2);
   });
 
-  it("opens the default terminal emulator elsewhere", async () => {
+  it("opens the first available terminal emulator elsewhere", async () => {
     setPlatform("linux");
     services.repo = local();
     await call("shell.openTerminal", services.repo.id);
@@ -290,11 +384,38 @@ describe("shell handlers", () => {
       ...detached,
     });
     services.repo = remote();
+    terminals.missing.add("x-terminal-emulator");
     await call("shell.openTerminal", services.repo.id);
     expect(terminals.spawn).toHaveBeenLastCalledWith(
-      "x-terminal-emulator",
-      ["-e", "ssh", "-t", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
-      { cwd: undefined, ...detached },
+      "gnome-terminal",
+      ["--", "ssh", "-t", "--", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
+      detached,
+    );
+    vi.stubEnv("TERMINAL", "my-term");
+    await call("shell.openTerminal", services.repo.id);
+    expect(terminals.spawn).toHaveBeenLastCalledWith(
+      "my-term",
+      ["-e", "ssh", "-t", "--", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
+      detached,
+    );
+  });
+
+  it("fails, instead of crashing, without a terminal emulator", async () => {
+    setPlatform("linux");
+    for (const t of ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm"])
+      terminals.missing.add(t);
+    const exit = await callExit("shell.openTerminal", services.repo.id);
+    expect(exit).toEqual(
+      Exit.fail(
+        new InvalidInputError({
+          message: "No terminal emulator found. Set $TERMINAL to the one to use.",
+        }),
+      ),
+    );
+    setPlatform("darwin");
+    terminals.missing.add("osascript");
+    expect(JSON.stringify(await callExit("shell.openTerminal", services.repo.id))).toContain(
+      "Could not open a terminal: spawn osascript ENOENT",
     );
   });
 });
@@ -305,10 +426,20 @@ describe.skipIf(process.platform === "win32")("ssh handlers", () => {
   beforeAll(() => {
     dir = realpathSync(mkdtempSync(join(tmpdir(), "gitdove-ipc-")));
     const browse = join(dir, "browse");
-    for (const d of ["zeta", "Alpha", "repo/.git", "bare.git/objects", ".hidden", "linked"]) {
+    for (const d of [
+      "zeta",
+      "Alpha",
+      "repo/.git/objects",
+      "bare.git/objects",
+      ".hidden",
+      "..dots",
+      "new\nline",
+      "linked",
+    ]) {
       mkdirSync(join(browse, d), { recursive: true });
     }
     writeFileSync(join(browse, "bare.git", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(browse, "repo", ".git", "HEAD"), "ref: refs/heads/main\n");
     writeFileSync(join(browse, "linked", ".git"), "gitdir: /elsewhere\n");
     writeFileSync(join(browse, "file.txt"), "");
     mkdirSync(join(dir, "home", "projects"), { recursive: true });
@@ -332,10 +463,12 @@ describe.skipIf(process.platform === "win32")("ssh handlers", () => {
     expect(r).toEqual({
       path: join(dir, "browse"),
       entries: [
+        { name: "..dots", isDir: true, isRepo: false },
         { name: ".hidden", isDir: true, isRepo: false },
         { name: "Alpha", isDir: true, isRepo: false },
         { name: "bare.git", isDir: true, isRepo: true },
         { name: "linked", isDir: true, isRepo: true },
+        { name: "new\nline", isDir: true, isRepo: false },
         { name: "repo", isDir: true, isRepo: true },
         { name: "zeta", isDir: true, isRepo: false },
       ],
@@ -347,6 +480,17 @@ describe.skipIf(process.platform === "win32")("ssh handlers", () => {
     expect(await call("ssh.listDir", "fedora", "")).toEqual({
       path: join(dir, "home"),
       entries: [{ name: "projects", isDir: true, isRepo: false }],
+    });
+  });
+
+  it("expands ~ to the home directory and hides .git", async () => {
+    process.env.HOME = join(dir, "browse");
+    expect(await call("ssh.listDir", "fedora", "~/repo")).toEqual({
+      path: join(dir, "browse", "repo"),
+      entries: [],
+    });
+    expect((await call("ssh.listDir", "fedora", "~")) as { path: string }).toMatchObject({
+      path: join(dir, "browse"),
     });
   });
 
@@ -364,7 +508,16 @@ describe("repository lifecycle handlers", () => {
       args: [],
     });
     await call("repo.close", "local:/a");
-    expect(services.connected).toEqual(["close local:/a"]);
+    expect(services.connected).toEqual(["close local:/a by 1"]);
+    expect(services.owners).toEqual([1]);
+  });
+
+  it("shows and hides repositories without opening them", async () => {
+    services.getRepo = () => Effect.die("must not open");
+    await call("repo.setVisible", "local:/a", false);
+    await call("repo.setVisible", "local:/a", true);
+    expect(services.connected).toEqual(["hide local:/a by 1", "show local:/a by 1"]);
+    expect(services.owners).toEqual([]);
   });
 
   it("initializes a repository on its host, then opens it", async () => {
@@ -376,12 +529,13 @@ describe("repository lifecycle handlers", () => {
     expect((services.hosts.get("fedora") as ReturnType<typeof shellHost>).execs).toEqual([
       ["git", ["init", "--", "/srv/new"]],
     ]);
-    expect((services.hosts.get("local") as ReturnType<typeof shellHost>).execs).toEqual([
+    expect((services.hosts.get(LOCAL_HOST) as ReturnType<typeof shellHost>).execs).toEqual([
       ["git", ["init", "--", "/tmp/new"]],
     ]);
   });
 
   it("clones on the target host and refuses option-like URLs", async () => {
+    const safe = ["-c", "protocol.ext.allow=never", "-c", "protocol.fd.allow=never"];
     await call("repo.clone", "git@github.com:a/b.git", {
       kind: "ssh",
       host: "fedora",
@@ -389,18 +543,20 @@ describe("repository lifecycle handlers", () => {
     });
     await call("repo.clone", "https://x/c.git", { kind: "local", path: "/tmp/c" });
     expect((services.hosts.get("fedora") as ReturnType<typeof shellHost>).execs).toEqual([
-      ["git", ["clone", "--", "git@github.com:a/b.git", "/srv/b"]],
+      [
+        "git",
+        [...safe, "clone", "--no-recurse-submodules", "--", "git@github.com:a/b.git", "/srv/b"],
+      ],
     ]);
-    expect((services.hosts.get("local") as ReturnType<typeof shellHost>).execs).toEqual([
-      ["git", ["clone", "--", "https://x/c.git", "/tmp/c"]],
+    expect((services.hosts.get(LOCAL_HOST) as ReturnType<typeof shellHost>).execs).toEqual([
+      ["git", [...safe, "clone", "--no-recurse-submodules", "--", "https://x/c.git", "/tmp/c"]],
     ]);
-    const exit = await callExit("repo.clone", "--upload-pack=evil", {
-      kind: "local",
-      path: "/tmp/d",
-    });
-    expect(exit).toEqual(Exit.fail(new InvalidInputError({ message: "Invalid URL" })));
-    expect(services.hosts.get("local")).toBeDefined();
-    expect((services.hosts.get("local") as ReturnType<typeof shellHost>).execs).toHaveLength(1);
+    for (const url of ["--upload-pack=evil", "ext::sh -c touch% /tmp/pwned", "FD::17", ""]) {
+      const exit = await callExit("repo.clone", url, { kind: "local", path: "/tmp/d" });
+      expect(exit).toEqual(Exit.fail(new InvalidInputError({ message: "Invalid URL" })));
+    }
+    expect(services.hosts.get(LOCAL_HOST)).toBeDefined();
+    expect((services.hosts.get(LOCAL_HOST) as ReturnType<typeof shellHost>).execs).toHaveLength(1);
   });
 });
 
@@ -412,6 +568,7 @@ describe("repository handlers", () => {
     "repo.clone",
     "repo.hiddenRefs",
     "repo.setHiddenRefs",
+    "repo.setVisible",
   ]);
   const delegating = Object.keys(handlers).filter((m) => m.startsWith("repo.") && !special.has(m));
 
@@ -433,7 +590,7 @@ describe("repository handlers", () => {
   it("reads and stores hidden refs", async () => {
     services.hidden.set("local:/work/repo", ["refs/heads/x"]);
     expect(await call("repo.hiddenRefs", "local:/work/repo")).toEqual(["refs/heads/x"]);
-    await call("repo.setHiddenRefs", "local:/work/repo", ["refs/heads/y", 42, null, "refs/tags/t"]);
+    await call("repo.setHiddenRefs", "local:/work/repo", ["refs/heads/y", "refs/tags/t"]);
     expect(services.hidden.get("local:/work/repo")).toEqual(["refs/heads/y", "refs/tags/t"]);
     expect(services.repo.setHiddenRefs).toHaveBeenCalledWith(["refs/heads/y", "refs/tags/t"]);
   });
@@ -455,37 +612,92 @@ describe("updater handlers", () => {
 
 describe("registerIpc", () => {
   type Invoke = (event: unknown, method: unknown, args: unknown) => Promise<RpcResult<unknown>>;
+  const sender = { id: 1, once: vi.fn() };
   const invoke = (method: unknown, args: unknown) => {
     registerIpc(runtime);
     expect(electron.ipcMain.handle).toHaveBeenCalledWith(IPC_INVOKE, expect.any(Function));
     const handler = electron.ipcMain.handle.mock.lastCall![1] as Invoke;
-    return handler({}, method, args);
+    return handler({ sender }, method, args);
   };
 
-  it("rejects unknown methods and malformed arguments", async () => {
-    for (const [method, args] of [
-      ["no.such", []],
-      ["toString", []],
-      ["__proto__", []],
-      [42, []],
-      ["app.version", "not-an-array"],
-    ] as const) {
-      expect(await invoke(method, args)).toEqual({
+  it("rejects unknown methods", async () => {
+    for (const method of ["no.such", "toString", "__proto__", 42]) {
+      expect(await invoke(method, [])).toEqual({
         ok: false,
         error: { tag: "BadRequest", message: `Unknown method ${String(method)}` },
       });
     }
   });
 
+  it("rejects malformed arguments before they reach a handler", async () => {
+    const id = "local:/work/repo";
+    const bad: [string, unknown][] = [
+      ["app.version", "not-an-array"],
+      ["app.version", [1]],
+      ["app.setTheme", ["blue"]],
+      ["repo.status", []],
+      ["repo.status", [42]],
+      ["repo.status", ["nope"]],
+      ["repo.status", ["local:"]],
+      ["repo.status", ["ssh://-oProxyCommand=x/srv"]],
+      ["repo.stage", [id, "a"]],
+      ["repo.stage", [id, ["a", 1]]],
+      ["repo.setHiddenRefs", [id, ["refs/heads/y", 42, null]]],
+      ["repo.stashPop", [id, -1]],
+      ["repo.stashPop", [id, 1.5]],
+      ["repo.reset", [id, "HEAD", "keep"]],
+      ["repo.push", [id, { force: "yes", setUpstream: false }]],
+      ["repo.open", [{ kind: "ssh", host: "-oProxyCommand=x", path: "/srv" }]],
+      ["repo.open", [{ kind: "ssh", host: "box", path: "" }]],
+      ["repo.open", [{ kind: "nfs", path: "/srv" }]],
+      // The local host is not an SSH host, whatever its id.
+      ["repo.open", [{ kind: "ssh", host: LOCAL_HOST, path: "/srv" }]],
+      ["ssh.listDir", [LOCAL_HOST, null]],
+      ["repo.status", [`ssh://${LOCAL_HOST}/srv`]],
+      ["ssh.listDir", ["fedora --", null]],
+      ["app.setState", [{ tabs: "x", activeTab: null, recent: [] }]],
+      ["repo.graphRows", [id, 1, 0, 4097]],
+      ["repo.cherryPick", [id, []]],
+      ["repo.cherryPick", [id, Array.from({ length: 4097 }, () => "a")]],
+      ["repo.revert", [id, ["a", 1]]],
+      ["repo.findCommits", [id, 1, []]],
+      ["repo.stashBranch", [id, "b", 0, 42]],
+      ["repo.setVisible", [id, "yes"]],
+    ];
+    services.getRepo = () => Effect.die("must not be called");
+    for (const [method, args] of bad) {
+      const r = await invoke(method, args);
+      expect(r, `${method} ${JSON.stringify(args)}`).toMatchObject({
+        ok: false,
+        error: { tag: "BadRequest" },
+      });
+      expect(!r.ok && r.error.message).toMatch(`Invalid arguments for ${method}: `);
+    }
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("accepts well-formed arguments", async () => {
+    expect(await invoke("repo.graphRows", ["local:/work/repo", 1, 4096, 8192])).toMatchObject({
+      ok: true,
+    });
+    expect(
+      await invoke("repo.merge", ["ssh://fedora/srv/a", "main", { ffOnly: true }]),
+    ).toMatchObject({ ok: true });
+    expect(await invoke("shell.revealInFinder", ["local:/work/repo"])).toMatchObject({ ok: true });
+    // Unknown properties are dropped.
+    await invoke("app.setState", [{ tabs: [], activeTab: null, recent: [], extra: 1 }]);
+    expect(state.saveState).toHaveBeenLastCalledWith({ tabs: [], activeTab: null, recent: [] });
+  });
+
   it("runs edit commands in the window that asked", async () => {
     registerIpc(runtime);
     const handler = electron.ipcMain.handle.mock.lastCall![1] as Invoke;
-    const sender = { paste: vi.fn() };
-    expect(await handler({ sender }, "app.edit", ["paste"])).toEqual({ ok: true });
-    expect(sender.paste).toHaveBeenCalledOnce();
-    expect(await handler({ sender }, "app.edit", ["destroy"])).toMatchObject({
+    const editor = { id: 2, once: vi.fn(), paste: vi.fn() };
+    expect(await handler({ sender: editor }, "app.edit", ["paste"])).toEqual({ ok: true });
+    expect(editor.paste).toHaveBeenCalledOnce();
+    expect(await handler({ sender: editor }, "app.edit", ["destroy"])).toMatchObject({
       ok: false,
-      error: { tag: "InvalidInputError", message: "Unknown edit command: destroy" },
+      error: { tag: "BadRequest" },
     });
   });
 
@@ -511,23 +723,174 @@ describe("registerIpc", () => {
       error: { tag: "CommandError", message: "bad revision", detail: "fatal: bad revision" },
     });
     expect(log.warn).toHaveBeenCalledWith("repo.status failed: bad revision");
+    services.getRepo = () =>
+      Effect.fail(
+        new NotARepositoryError({
+          message: "/x cannot be opened",
+          path: "/x",
+          stderr: "fatal: detected dubious ownership",
+        }),
+      ) as never;
+    expect(await invoke("repo.status", ["local:/x"])).toEqual({
+      ok: false,
+      error: {
+        tag: "NotARepositoryError",
+        message: "/x cannot be opened",
+        detail: "fatal: detected dubious ownership",
+      },
+    });
     expect(await invoke("shell.openExternal", ["ftp://x"])).toEqual({
       ok: false,
       error: { tag: "InvalidInputError", message: "Refusing to open ftp://x" },
     });
   });
 
+  it("caps error details and logs expected failures quietly", async () => {
+    services.getRepo = () =>
+      Effect.fail(
+        new CommandError({ message: "x", command: "c", exitCode: 1, stderr: "e".repeat(100_000) }),
+      ) as never;
+    const r = await invoke("repo.status", ["local:/x"]);
+    expect(!r.ok && r.error.detail!.length).toBeLessThan(17_000);
+    services.getRepo = () => Effect.fail(new StaleGraphError({ message: "outdated" })) as never;
+    log.warn.mockClear();
+    await invoke("repo.status", ["local:/x"]);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("repo.status: outdated");
+    // A late request for a closed repository, too.
+    services.getRepo = () =>
+      Effect.fail(new RepoNotOpenError({ message: "closed", repo: "local:/x" })) as never;
+    await invoke("repo.status", ["local:/x"]);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("repo.status: closed");
+  });
+
   it("reports interruptions and defects", async () => {
-    services.getRepo = () => Effect.interrupt as never;
+    services.getRepo = () => Effect.interrupt;
     expect(await invoke("repo.status", ["local:/x"])).toEqual({
       ok: false,
       error: { tag: "Interrupted", message: "Operation was cancelled" },
     });
-    services.getRepo = () => Effect.die(new Error("boom")) as never;
+    services.getRepo = () => Effect.die(new Error("boom"));
     const r = await invoke("repo.status", ["local:/x"]);
     expect(r).toMatchObject({ ok: false, error: { tag: "Defect" } });
     expect(!r.ok && r.error.message).toContain("boom");
     expect(log.error).toHaveBeenCalledWith("Unexpected error", expect.stringContaining("boom"));
+  });
+
+  it("releases the repositories of a renderer when it goes away", async () => {
+    const renderer = { id: 5, once: vi.fn() };
+    registerIpc(runtime);
+    const handler = electron.ipcMain.handle.mock.lastCall![1] as Invoke;
+    await handler({ sender: renderer }, "repo.status", ["local:/work/repo"]);
+    await handler({ sender: renderer }, "repo.refs", ["local:/work/repo"]);
+    expect(services.owners).toEqual([5, 5]);
+    expect(renderer.once).toHaveBeenCalledTimes(1);
+    expect(renderer.once).toHaveBeenCalledWith("destroyed", expect.any(Function));
+    renderer.once.mock.calls[0]![1]();
+    await vi.waitFor(() => expect(services.connected).toEqual(["release 5"]));
+  });
+
+  it("releases the repositories of a renderer whose process crashed", async () => {
+    const renderer = { id: 7, once: vi.fn() };
+    const { releaseRenderer } = registerIpc(runtime);
+    await releaseRenderer(renderer as unknown as WebContents);
+    expect(services.connected).toEqual(["release 7"]);
+  });
+
+  describe.skipIf(process.platform === "win32")("cancellation", () => {
+    type Cancel = (event: unknown, id: unknown) => void;
+    const setup = () => {
+      registerIpc(runtime);
+      const handler = electron.ipcMain.handle.mock.lastCall![1] as (
+        event: unknown,
+        method: unknown,
+        args: unknown,
+        id?: unknown,
+      ) => Promise<RpcResult<unknown>>;
+      const [channel, cancel] = electron.ipcMain.on.mock.lastCall as [string, Cancel];
+      expect(channel).toBe(IPC_CANCEL);
+      return { handler, cancel };
+    };
+    let dir = "";
+    beforeAll(() => {
+      dir = realpathSync(mkdtempSync(join(tmpdir(), "gitdove-cancel-")));
+    });
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+    /** A repository whose `status` runs a command that takes long; returns its pid file. */
+    const slowStatus = (name: string) => {
+      const pidFile = join(dir, name);
+      services.repo = Object.assign(fakeRepo({ kind: "local", path: "/work/repo" }), {
+        status: () => spawn("/bin/sh", ["-c", `echo $$ > '${pidFile}'; exec sleep 30`]),
+        commit: () => Effect.sleep("300 millis").pipe(Effect.as("committed")),
+      });
+      return async () => {
+        await vi.waitFor(() => expect(readFileSync(pidFile, "utf8")).toMatch(/^\d+\n$/));
+        return Number(readFileSync(pidFile, "utf8"));
+      };
+    };
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    it("interrupts a read and kills its command", async () => {
+      const { handler, cancel } = setup();
+      const pid = slowStatus("status");
+      const result = handler({ sender }, "repo.status", ["local:/work/repo"], 7);
+      const running = await pid();
+      expect(alive(running)).toBe(true);
+      // Another renderer's request with the same id is someone else's.
+      cancel({ sender: { id: 2 } }, 7);
+      cancel({ sender }, 8);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(alive(running)).toBe(true);
+
+      cancel({ sender }, 7);
+      expect(await result).toEqual({
+        ok: false,
+        error: { tag: "Interrupted", message: "Operation was cancelled" },
+      });
+      await vi.waitFor(() => expect(alive(running)).toBe(false));
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+
+    it("never interrupts writes, nor requests without an id", async () => {
+      const { handler, cancel } = setup();
+      const pid = slowStatus("plain");
+      const write = handler(
+        { sender },
+        "repo.commit",
+        ["local:/work/repo", "m", { amend: false }],
+        9,
+      );
+      cancel({ sender }, 9);
+      expect(await write).toEqual({ ok: true, value: "committed" });
+
+      const read = handler({ sender }, "repo.status", ["local:/work/repo"]);
+      const running = await pid();
+      cancel({ sender }, undefined);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(alive(running)).toBe(true);
+      process.kill(running);
+      expect(await read).toMatchObject({ ok: false });
+    });
+
+    it("interrupts the requests of a renderer that goes away", async () => {
+      const renderer = { id: 6, once: vi.fn() };
+      const { handler } = setup();
+      const pid = slowStatus("gone");
+      const result = handler({ sender: renderer }, "repo.status", ["local:/work/repo"], 1);
+      const running = await pid();
+      renderer.once.mock.calls[0]![1]();
+      expect(await result).toMatchObject({ ok: false, error: { tag: "Interrupted" } });
+      await vi.waitFor(() => expect(alive(running)).toBe(false));
+    });
   });
 
   it("logs slow calls", async () => {

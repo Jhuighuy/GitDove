@@ -23,7 +23,8 @@ export const repoIdOf = (loc: RepoLocation): RepoId =>
 
 export const repoLocationOf = (id: RepoId): RepoLocation => {
   if (id.startsWith("local:")) return { kind: "local", path: id.slice("local:".length) };
-  const m = /^ssh:\/\/([^/]+)(\/.*)$/.exec(id);
+  // `s`: a path may contain newlines.
+  const m = /^ssh:\/\/([^/]+)(\/.*)$/s.exec(id);
   if (!m) throw new Error(`Invalid repository id: ${id}`);
   return { kind: "ssh", host: m[1]!, path: m[2]! };
 };
@@ -43,7 +44,9 @@ export type RepoState =
   | "rebasing"
   | "cherry-picking"
   | "reverting"
-  | "bisecting";
+  | "bisecting"
+  /** Applying patches with `git am`. */
+  | "applying";
 
 export interface RepoInfo {
   readonly id: RepoId;
@@ -144,6 +147,12 @@ export interface RefsSnapshot {
   readonly worktrees: readonly Worktree[];
   readonly submodules: readonly Submodule[];
   readonly owners: BranchOwners;
+  /**
+   * The remote that pushing the checked out branch with `setUpstream` goes to, as `repo.push`
+   * picks it (`branch.<name>.pushRemote`, `remote.pushDefault`, `origin`, the first remote);
+   * null without remotes. Always set by the main process.
+   */
+  readonly pushRemote?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +184,6 @@ export interface GraphRow {
   readonly authorName: string;
   readonly authorEmail: string;
   readonly authorTime: number;
-  readonly committerTime: number;
   readonly lane: number;
   readonly color: number;
   readonly edges: readonly number[];
@@ -197,6 +205,12 @@ export type ChangeKind =
   | "untracked"
   | "conflicted";
 
+/**
+ * How a file conflicts, as in `git status`: `UU` both modified, `AA` both added, `DD` both
+ * deleted, `AU`/`UA` added by us/them, `DU` deleted by us, `UD` deleted by them.
+ */
+export type ConflictCode = "UU" | "AA" | "DD" | "AU" | "UA" | "DU" | "UD";
+
 export interface FileChange {
   readonly path: string;
   readonly oldPath: string | null;
@@ -204,6 +218,8 @@ export interface FileChange {
   readonly additions: number | null;
   readonly deletions: number | null;
   readonly binary: boolean;
+  /** For a conflicted file, how it conflicts. */
+  readonly conflict?: ConflictCode;
 }
 
 /** Where a renamed file came from, for a `DiffTarget`. Copies diff as added files. */
@@ -232,6 +248,10 @@ export interface CommitDetails {
   readonly subject: string;
   readonly body: string;
   readonly files: readonly FileChange[];
+  /** Set when `files` lists only the first of more changed files (see `totalFiles`). */
+  readonly truncated?: boolean;
+  /** The number of changed files, when `files` is truncated. */
+  readonly totalFiles?: number;
 }
 
 /** The changes between two commits, e.g. over a selection of commits. */
@@ -240,6 +260,10 @@ export interface Comparison {
   readonly base: string;
   readonly tip: string;
   readonly files: readonly FileChange[];
+  /** Set when `files` lists only the first of more changed files (see `totalFiles`). */
+  readonly truncated?: boolean;
+  /** The number of changed files, when `files` is truncated. */
+  readonly totalFiles?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +308,14 @@ export interface FileDiff {
   readonly hunks: readonly DiffHunk[];
   /** True when the diff was too large and got truncated. */
   readonly truncated: boolean;
+  /** The file is absent on the old side (`new file mode`). */
+  readonly created?: boolean;
+  /** The file is absent on the new side (`deleted file mode`). */
+  readonly deleted?: boolean;
+  /** Mode of the side that exists, e.g. "100644", for created or deleted files. */
+  readonly mode?: string;
+  /** Why hunks and lines of this diff must not be staged, unstaged or discarded, if so. */
+  readonly readOnly?: "conflict" | "submodule" | "encoding";
 }
 
 /** One side of a file change, as raw bytes. */

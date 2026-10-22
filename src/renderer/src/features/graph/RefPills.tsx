@@ -34,6 +34,9 @@ export const groupRefs = (refs: readonly Ref[]): Pill[] => {
   return pills;
 };
 
+/** The ref a pill stands for (and checks out). */
+const refOf = (pill: Pill): Ref => pill.local ?? pill.remotes[0] ?? pill.tag!;
+
 const rank = (r: Ref) => (r.isHead ? 0 : r.kind === "branch" ? 1 : r.kind === "remote" ? 2 : 3);
 
 interface Props {
@@ -82,7 +85,8 @@ export const RefPills = memo(function RefPills({ refs, color, onDoubleClick }: P
                 aria-label="Branches and tags"
               >
                 {pills.map((p) => (
-                  <PillView key={p.label} pill={p} color={c} onDoubleClick={onDoubleClick} />
+                  // A branch and a tag can share a label.
+                  <PillView key={refOf(p).name} pill={p} color={c} onDoubleClick={onDoubleClick} />
                 ))}
               </Popover.Popup>
             </Popover.Positioner>
@@ -108,7 +112,7 @@ function PillView({
   onDoubleClick?: (ref: Ref) => void;
 }) {
   const head = pill.local?.isHead ?? false;
-  const ref = pill.local ?? pill.remotes[0] ?? pill.tag!;
+  const ref = refOf(pill);
   return (
     <span
       className={cn(
