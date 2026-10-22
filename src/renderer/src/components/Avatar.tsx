@@ -11,6 +11,12 @@ import { useRefs } from "@/lib/queries";
 const missing = new Map<string, number>();
 export const MISSING_RETRY_MS = 10 * 60 * 1000;
 
+/**
+ * The one picture size asked for, so that each avatar is fetched and cached once: sharp up to
+ * 32 px on a 2x display (the largest avatar shown is 28 px).
+ */
+export const AVATAR_PX = 64;
+
 const isMissing = (url: string) => {
   const since = missing.get(url);
   if (since === undefined) return false;
@@ -38,8 +44,7 @@ interface Props {
  * or Gravatar, resolved and cached by the main process) once it has loaded.
  */
 export const Avatar = memo(function Avatar({ name, email, providers, size = 18 }: Props) {
-  // Two pixel sizes only, so the cache is shared between the graph and details.
-  const url = email.includes("@") ? avatarUrl(email, providers, size > 24 ? 128 : 64) : null;
+  const url = email.includes("@") ? avatarUrl(email, providers, AVATAR_PX) : null;
   const [failed, setFailed] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
   const showImage = url !== null && failed !== url && !isMissing(url);

@@ -67,9 +67,9 @@ it("shows initials until the picture has loaded", () => {
   expect(img()!.style.opacity).toBe("1");
 });
 
-it("requests larger pictures for large avatars", () => {
-  render(<Avatar name="Ada" email="ada@example.com" providers={[]} size={32} />);
-  expect(img()!.getAttribute("src")).toContain("&s=128");
+it("requests one picture size whatever the avatar's size, to fetch it once", () => {
+  render(<Avatar name="Ada" email="ada@example.com" providers={[]} size={28} />);
+  expect(img()!.getAttribute("src")).toContain("&s=64");
   expect(avatar().textContent).toBe("AD");
 });
 
