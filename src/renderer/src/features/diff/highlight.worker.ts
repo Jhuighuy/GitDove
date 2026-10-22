@@ -38,7 +38,7 @@ const loadLanguage = (lang: string) => {
   let p = loaded.get(lang);
   if (!p) {
     p = getHighlighter()
-      .then((hl) => hl.loadLanguage(bundledLanguages[lang as keyof typeof bundledLanguages]!))
+      .then((hl) => hl.loadLanguage(bundledLanguages[lang as keyof typeof bundledLanguages]))
       .then(
         () => true,
         () => {

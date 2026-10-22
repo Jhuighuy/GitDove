@@ -48,18 +48,17 @@ vi.mock("../commands", () => ({
 
 const REPO = "local:/work/project";
 
-const info = (extra: Partial<RepoInfo> = {}): RepoInfo =>
-  ({
-    id: REPO,
-    location: { kind: "local", path: "/work/project" },
-    name: "project",
-    workTree: "/work/project",
-    gitDir: "/work/project/.git",
-    bare: false,
-    head: { branch: "main", hash: "0123456789abcdef", detached: false },
-    state: "clean",
-    ...extra,
-  }) as RepoInfo;
+const info = (extra: Partial<RepoInfo> = {}): RepoInfo => ({
+  id: REPO,
+  location: { kind: "local", path: "/work/project" },
+  name: "project",
+  workTree: "/work/project",
+  gitDir: "/work/project/.git",
+  bare: false,
+  head: { branch: "main", hash: "0123456789abcdef", detached: false },
+  state: "clean",
+  ...extra,
+});
 
 const refs = (extra: Partial<RefsSnapshot> = {}): RefsSnapshot => ({
   refs: [
@@ -173,7 +172,7 @@ it("shows a detached HEAD, and leaves the SSH host to the status bar", async () 
   mocks.info = info({
     location: { kind: "ssh", host: "fedora", path: "/home/me/project" },
     head: { branch: null, hash: "abcdef0123456789", detached: true },
-  } as Partial<RepoInfo>);
+  });
   mocks.refs = refs({ refs: [] });
   await render();
   expect(container.textContent).not.toContain("fedora");
@@ -182,7 +181,7 @@ it("shows a detached HEAD, and leaves the SSH host to the status bar", async () 
 });
 
 it("shows a dash for an unborn branch and disables branching", async () => {
-  mocks.info = info({ head: { branch: null, hash: null, detached: false } } as Partial<RepoInfo>);
+  mocks.info = info({ head: { branch: null, hash: null, detached: false } });
   await render();
   expect(container.textContent).toContain("—");
   expect(tool("Branch").disabled).toBe(true);

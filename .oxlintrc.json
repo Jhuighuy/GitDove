@@ -22,7 +22,9 @@
       }
     ],
     "react/incompatible-library": "off",
-    "import/no-unassigned-import": "off"
+    "import/no-unassigned-import": "off",
+    "typescript/no-unsafe-type-assertion": "off",
+    "typescript/consistent-return": "off"
   },
   "ignorePatterns": ["out", "dist", "release", "node_modules", "src/renderer/src/components/ui"]
 }

@@ -96,8 +96,8 @@ export const pickLocalRepository = async (tabKey?: string) => {
 export const useRemoteDialog = create<{
   open: boolean;
   tabKey: string | undefined;
-  show(tabKey?: string): void;
-  hide(): void;
+  show: (tabKey?: string) => void;
+  hide: () => void;
 }>()((set) => ({
   open: false,
   tabKey: undefined,

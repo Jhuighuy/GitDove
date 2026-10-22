@@ -141,7 +141,7 @@ it("does not repeat a detail that equals the message", async () => {
 });
 
 it("describes non-Error failures", async () => {
-  await run(repo, "Reset", () => Promise.reject("boom" as unknown as Error));
+  await run(repo, "Reset", () => Promise.reject("boom"));
   expect(mocks.toast.error).toHaveBeenCalledWith(
     "Reset failed",
     expect.objectContaining({ description: "boom" }),

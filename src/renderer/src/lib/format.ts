@@ -31,11 +31,19 @@ export const absoluteTime = (seconds: number): string => dtf.format(new Date(sec
 
 export const shortHash = (hash: string): string => hash.slice(0, 7);
 
-/** Up to two letters for a name: by code point, so that a character is never split in half. */
+const graphemes = new Intl.Segmenter();
+
+/**
+ * Up to two letters for a name: by grapheme, so that a character (an accented letter, an emoji
+ * sequence) is never split in half.
+ */
 export const initials = (name: string): string => {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
-  const letters = (s: string, n: number) => [...s].slice(0, n).join("");
+  const letters = (s: string, n: number) =>
+    Array.from(graphemes.segment(s), (g) => g.segment)
+      .slice(0, n)
+      .join("");
   if (parts.length === 1) return letters(parts[0]!, 2).toUpperCase();
   return (letters(parts[0]!, 1) + letters(parts.at(-1)!, 1)).toUpperCase();
 };

@@ -222,7 +222,7 @@ export function CommitContextMenu({
       <ContextMenuItem
         onClick={() => {
           // The graph has the subject only: copy the whole message (the subject, without one).
-          client
+          void client
             .fetchQuery({
               queryKey: keys.commit(repo, hash),
               queryFn: () => api("repo.commitDetails", repo, hash),

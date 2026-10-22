@@ -129,8 +129,8 @@ export class DocHighlighter {
       type: "open",
       doc: this.id,
       path: this.model.diff.path,
-      sides: this.model.sides as [string[], string[]],
-      resets: this.model.resets as [number[], number[]],
+      sides: this.model.sides,
+      resets: this.model.resets,
     });
   }
 

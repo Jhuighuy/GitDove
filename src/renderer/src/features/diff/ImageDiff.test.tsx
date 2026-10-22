@@ -136,8 +136,7 @@ describe("ImageDiff", () => {
       (container.querySelector(`img[alt=${alt}]`)!.parentElement as HTMLElement).style.clipPath;
     expect([clip("Before"), clip("After")]).toEqual(["inset(0 50% 0 0)", "inset(0 0 0 50%)"]);
     await act(async () => {
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-      set.call(slider, "25");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(slider, "25");
       slider.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect([clip("Before"), clip("After")]).toEqual(["inset(0 75% 0 0)", "inset(0 0 0 25%)"]);

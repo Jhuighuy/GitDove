@@ -80,7 +80,9 @@ it("shows every section rather than none", () => {
 it("forwards header context menus", () => {
   const onHeaderContextMenu = vi.fn();
   render([section("a", { onHeaderContextMenu })]);
-  act(() => header("A").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+  act(() => {
+    header("A").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+  });
   expect(onHeaderContextMenu).toHaveBeenCalledOnce();
 });
 
@@ -96,9 +98,9 @@ it("resizes neighbouring sections by dragging the boundary", () => {
   const target = aboveC!;
   target.setPointerCapture = () => {};
   const fire = (type: string, y: number) =>
-    act(() =>
-      target.dispatchEvent(new PointerEvent(type, { bubbles: true, clientY: y, pointerId: 1 })),
-    );
+    act(() => {
+      target.dispatchEvent(new PointerEvent(type, { bubbles: true, clientY: y, pointerId: 1 }));
+    });
   const flex = (id: string) => sectionEl(id)!.style.flex;
   fire("pointerdown", 200);
   fire("pointermove", 230);
@@ -128,18 +130,18 @@ it("ends a cancelled drag and moves boundaries with the arrow keys", () => {
   const [target] = separators();
   target!.setPointerCapture = () => {};
   const fire = (type: string, y: number) =>
-    act(() =>
-      target!.dispatchEvent(new PointerEvent(type, { bubbles: true, clientY: y, pointerId: 1 })),
-    );
+    act(() => {
+      target!.dispatchEvent(new PointerEvent(type, { bubbles: true, clientY: y, pointerId: 1 }));
+    });
   fire("pointerdown", 200);
   fire("pointermove", 210);
   fire("pointercancel", 210);
   fire("pointermove", 260);
   expect(useSectionStack.getState().weights).toEqual({ a: 110, b: 90 });
 
-  act(() =>
-    target!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
-  );
+  act(() => {
+    target!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  });
   expect(useSectionStack.getState().weights).toEqual({ a: 124, b: 76 });
   expect(target!.getAttribute("aria-label")).toBe("Resize B");
 });

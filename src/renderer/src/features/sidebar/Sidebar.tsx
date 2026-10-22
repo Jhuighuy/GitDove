@@ -65,10 +65,10 @@ interface FolderState {
   readonly collapsed: Readonly<Record<string, true>>;
   /** Contributors whose emails are listed, keyed by `folderKey` (default: collapsed). */
   readonly expanded: Readonly<Record<string, true>>;
-  toggle(key: string): void;
-  toggleExpanded(key: string): void;
+  readonly toggle: (key: string) => void;
+  readonly toggleExpanded: (key: string) => void;
   /** Forgets the folders of `repo` that are gone, keeping those in `keep`. */
-  prune(repo: RepoId, keep: ReadonlySet<string>): void;
+  readonly prune: (repo: RepoId, keep: ReadonlySet<string>) => void;
 }
 
 const folderKey = (repo: RepoId, prefix: string) => `${repo}\n${prefix}`;

@@ -98,7 +98,7 @@ it("shows raster images rendered, without fetching a text diff", async () => {
   expect(container.querySelector("[data-testid=image]")?.textContent).toBe("image/png unified");
   expect(button("Text diff")).toBeNull();
   // The layout toggle switches between swipe and side by side.
-  await click("Side by side");
+  click("Side by side");
   expect(container.querySelector("[data-testid=image]")?.textContent).toBe("image/png split");
   expect(mocks.calls).toEqual([]);
 });
@@ -107,7 +107,7 @@ it("switches SVGs between text and image, and remembers the choice", async () =>
   await render("a.svg");
   expect(button("Text diff")?.getAttribute("aria-pressed")).toBe("true");
   expect(container.querySelector("[data-testid=image]")).toBeNull();
-  await click("Image");
+  click("Image");
   expect(container.querySelector("[data-testid=image]")?.textContent).toBe("image/svg+xml unified");
   expect(useLayout.getState().diffViews).toEqual({ svg: "image" });
   await render("b.svg");
@@ -121,9 +121,9 @@ it("drops a line selection when switching to the image view", async () => {
   const gutter = container.querySelector<HTMLElement>("[data-line] [data-gutter]");
   await act(async () => gutter!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
   expect(container.textContent).toContain("1 line selected");
-  await click("Image");
+  click("Image");
   expect(container.textContent).not.toContain("selected");
-  await click("Text diff");
+  click("Text diff");
   expect(container.textContent).not.toContain("selected");
 });
 
@@ -140,7 +140,9 @@ it("closes on Escape, also from the swipe slider but not from text fields", asyn
   useRepoUiStore.getState().openDiff("local:/repo", { kind: "unstaged", path: "a.png" });
   await render("a.png");
   const press = (target: HTMLElement) =>
-    act(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    act(() => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
   const diff = () => useRepoUiStore.getState().byRepo["local:/repo"]?.diff ?? null;
 
   const text = document.createElement("input");
@@ -177,7 +179,9 @@ it("steps through the files of its list with the up and down arrows", async () =
   onTestFinished(() => useRepoUiStore.setState({ openDiff }));
   await render("a.ts");
   const press = (key: string, init: KeyboardEventInit = {}) =>
-    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key, ...init })));
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, ...init }));
+    });
 
   press("ArrowDown");
   expect(open).toHaveBeenLastCalledWith("local:/repo", {
@@ -199,7 +203,9 @@ it("steps through the files of its list with the up and down arrows", async () =
   const slider = document.createElement("input");
   slider.type = "range";
   container.append(slider);
-  act(() => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
+  act(() => {
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+  });
   expect(open).not.toHaveBeenCalled();
 });
 
@@ -216,7 +222,9 @@ it("leaves keys alone while its repository tab is hidden", async () => {
   onTestFinished(() => useRepoUiStore.setState({ openDiff }));
   await render("a.ts");
   const press = (key: string) =>
-    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key })));
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key }));
+    });
   container.hidden = true;
   press("ArrowDown");
   press("Escape");

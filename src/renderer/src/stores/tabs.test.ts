@@ -268,7 +268,7 @@ it("moves tabs and persists the order", async () => {
 
 it("keeps a repository the active tab shows out of the background", async () => {
   const invoke = vi.fn(async (..._args: unknown[]) => ({ ok: true, value: undefined }));
-  vi.stubGlobal("window", { ...globalThis.window, gitdove: { invoke } });
+  vi.stubGlobal("window", { gitdove: { invoke } });
   try {
     // No tab in the background to begin with.
     useTabs.setState({ tabs: [{ key: "x", repo: C }], active: "x" });

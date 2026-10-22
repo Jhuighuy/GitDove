@@ -27,10 +27,10 @@ const type = (el: HTMLInputElement | HTMLTextAreaElement, value: string) => {
   el.dispatchEvent(new Event("input", { bubbles: true }));
 };
 
-const byId = <T extends HTMLElement>(id: string) => {
+const byId = <T extends HTMLElement>(id: string, kind: new () => T): T => {
   const el = document.getElementById(id);
-  if (!el) throw new Error(`#${id} is not rendered`);
-  return el as T;
+  if (!(el instanceof kind)) throw new Error(`#${id} is not a rendered ${kind.name}`);
+  return el;
 };
 
 const button = (label: string) => {
@@ -53,19 +53,19 @@ it("returns the optional multi-line details, trimmed", async () => {
   expect(document.querySelectorAll("#prompt-input")).toHaveLength(1);
 
   await act(async () => {
-    type(byId<HTMLInputElement>("prompt-input"), "v1.0.0");
-    type(byId<HTMLTextAreaElement>("prompt-details"), "  Release 1.0\n\nNotes.  ");
+    type(byId("prompt-input", HTMLInputElement), "v1.0.0");
+    type(byId("prompt-details", HTMLTextAreaElement), "  Release 1.0\n\nNotes.  ");
   });
   // Plain Enter adds a line; Cmd/Ctrl+Enter submits.
   await act(async () => {
-    byId("prompt-details").dispatchEvent(
+    byId("prompt-details", HTMLTextAreaElement).dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
     );
   });
   expect(result).toBeUndefined();
   // Nor does Cmd+Enter while an input method is still composing.
   await act(async () => {
-    byId("prompt-details").dispatchEvent(
+    byId("prompt-details", HTMLTextAreaElement).dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Enter",
         metaKey: true,
@@ -76,7 +76,7 @@ it("returns the optional multi-line details, trimmed", async () => {
   });
   expect(result).toBeUndefined();
   await act(async () => {
-    byId("prompt-details").dispatchEvent(
+    byId("prompt-details", HTMLTextAreaElement).dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
     );
   });
@@ -89,7 +89,7 @@ it("returns empty details when the field is unused", async () => {
     void prompt({ title: "Rename", confirmLabel: "Rename" }).then((r) => (result = r));
   });
   expect(document.getElementById("prompt-details")).toBeNull();
-  await act(async () => type(byId<HTMLInputElement>("prompt-input"), "topic"));
+  await act(async () => type(byId("prompt-input", HTMLInputElement), "topic"));
   await act(async () => button("Rename").click());
   expect(result).toEqual({ value: "topic", checked: false, details: "" });
 });
@@ -103,12 +103,12 @@ it("starts each prompt from its own default, also right after another one", asyn
       void prompt({ title: "Add remote upstream", label: "URL", confirmLabel: "Add Remote" });
     });
   });
-  await act(async () => type(byId<HTMLInputElement>("prompt-input"), "upstream"));
+  await act(async () => type(byId("prompt-input", HTMLInputElement), "upstream"));
   await act(async () => button("Next").click());
   expect(first).toMatchObject({ value: "upstream" });
   expect(document.body.textContent).toContain("Add remote upstream");
   // It opens in the same place, but must not show "upstream".
-  expect(byId<HTMLInputElement>("prompt-input").value).toBe("");
+  expect(byId("prompt-input", HTMLInputElement).value).toBe("");
 });
 
 it("focuses Cancel in destructive confirmations", async () => {

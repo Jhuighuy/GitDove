@@ -146,8 +146,8 @@ it("carries grammar state across chunks, unless a hunk starts there", async () =
     lines[CHUNK - 1]!,
     CHUNK - 1,
   )[0]![1];
-  const [endContinued] = lineTokens(tokensOf(continued)[1]!, styles, lines[CHUNK]!, 0);
-  const [endReset] = lineTokens(tokensOf(reset)[0]!, styles, lines[CHUNK]!, 0);
+  const [endContinued] = lineTokens(tokensOf(continued)[1]!, styles, lines[CHUNK], 0);
+  const [endReset] = lineTokens(tokensOf(reset)[0]!, styles, lines[CHUNK], 0);
   // Inside the comment, `end` is comment text; after a reset it is an identifier.
   expect(endContinued![1]).toBe(commentStyle);
   expect(endReset![1]).not.toBe(commentStyle);

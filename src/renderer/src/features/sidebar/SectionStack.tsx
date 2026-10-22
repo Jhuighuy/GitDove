@@ -16,9 +16,9 @@ interface StackState {
   readonly weights: Readonly<Record<string, number>>;
   /** Sections taken out of the sidebar (default: shown). */
   readonly hidden: Readonly<Record<string, true>>;
-  setOpen(id: string, open: boolean): void;
-  setHidden(id: string, hidden: boolean): void;
-  setWeights(weights: Record<string, number>): void;
+  readonly setOpen: (id: string, open: boolean) => void;
+  readonly setHidden: (id: string, hidden: boolean) => void;
+  readonly setWeights: (weights: Record<string, number>) => void;
 }
 
 export const useSectionStack = create<StackState>()(

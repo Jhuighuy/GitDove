@@ -207,7 +207,7 @@ function PromptBody({
         )}
         {options.checkbox && (
           <Label className="flex items-center gap-2 font-normal">
-            <Checkbox checked={checked} onCheckedChange={(c) => setChecked(c === true)} />
+            <Checkbox checked={checked} onCheckedChange={(c) => setChecked(c)} />
             {options.checkbox.label}
           </Label>
         )}

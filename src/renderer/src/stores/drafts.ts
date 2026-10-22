@@ -27,13 +27,13 @@ const isPrefilled = (d: Draft) => d.prefill !== null && draftMessage(d) === d.pr
 
 interface DraftsState {
   readonly drafts: Readonly<Record<RepoId, Draft>>;
-  set(repo: RepoId, d: Partial<Draft>): void;
+  readonly set: (repo: RepoId, d: Partial<Draft>) => void;
   /**
    * Turns amending off. The previous commit's message, if still unchanged, goes too: it is not
    * meant for a new commit.
    */
-  stopAmending(repo: RepoId): void;
-  clear(repo: RepoId): void;
+  readonly stopAmending: (repo: RepoId) => void;
+  readonly clear: (repo: RepoId) => void;
 }
 
 /**

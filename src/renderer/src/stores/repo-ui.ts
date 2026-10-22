@@ -41,12 +41,12 @@ let focusRequests = 0;
 
 interface RepoUiState {
   readonly byRepo: Readonly<Record<RepoId, RepoUi>>;
-  select(repo: RepoId, selection: Selection | null, reveal?: boolean): void;
-  openDiff(repo: RepoId, diff: DiffTarget | null): void;
+  readonly select: (repo: RepoId, selection: Selection | null, reveal?: boolean) => void;
+  readonly openDiff: (repo: RepoId, diff: DiffTarget | null) => void;
   /** Shows the working tree changes and focuses the commit message. */
-  focusCommit(repo: RepoId): void;
+  readonly focusCommit: (repo: RepoId) => void;
   /** Drops the state of a closed repository. */
-  forget(repo: RepoId): void;
+  readonly forget: (repo: RepoId) => void;
 }
 
 export const useRepoUiStore = create<RepoUiState>()((set) => ({
@@ -133,13 +133,13 @@ interface LayoutState {
   readonly diffMode: DiffMode;
   /** Preferred view per kind of file (see `fileKind`). */
   readonly diffViews: Readonly<Record<string, DiffViewId>>;
-  toggleSidebar(): void;
-  toggleDetails(): void;
-  showDetails(): void;
-  setPanels(sizes: PanelSizes): void;
-  setCollapsed(section: string, collapsed: boolean): void;
-  setDiffMode(mode: DiffMode): void;
-  setDiffView(kind: string, view: DiffViewId): void;
+  readonly toggleSidebar: () => void;
+  readonly toggleDetails: () => void;
+  readonly showDetails: () => void;
+  readonly setPanels: (sizes: PanelSizes) => void;
+  readonly setCollapsed: (section: string, collapsed: boolean) => void;
+  readonly setDiffMode: (mode: DiffMode) => void;
+  readonly setDiffView: (kind: string, view: DiffViewId) => void;
 }
 
 export const useLayout = create<LayoutState>()(

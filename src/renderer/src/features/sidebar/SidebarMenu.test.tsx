@@ -419,7 +419,7 @@ it("shows and hides sidebar sections", async () => {
   await toggle("Tags");
   expect(header("Tags")).toBeDefined();
   // The last section shown stays.
-  act(() =>
+  act(() => {
     useSectionStack.setState({
       hidden: Object.fromEntries(
         ["remote", "contributors", "worktrees", "stashes", "tags", "submodules"].map((id) => [
@@ -427,8 +427,8 @@ it("shows and hides sidebar sections", async () => {
           true,
         ]),
       ),
-    }),
-  );
+    });
+  });
   await fire(header("Local"), "contextmenu");
   const local = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
     (e) => e.textContent?.trim() === "Local",

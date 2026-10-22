@@ -63,7 +63,7 @@ interface ColumnsState {
   readonly author: number;
   readonly date: number;
   /** Sets a column's width; `null` sizes the graph column to fit its lanes again. */
-  set(col: Column, width: number | null): void;
+  readonly set: (col: Column, width: number | null) => void;
 }
 
 /**

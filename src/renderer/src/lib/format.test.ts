@@ -57,6 +57,9 @@ it("derives initials from names", () => {
   // Characters outside the BMP are not split in half.
   expect(initials("𝒜da 𝔏ovelace")).toBe("𝒜𝔏");
   expect(initials("😀")).toBe("😀");
+  // Nor are combining marks and emoji sequences.
+  expect(initials("e\u0301mile zola")).toBe("E\u0301Z");
+  expect(initials("👩‍💻 dev")).toBe("👩‍💻D");
 });
 
 it("hashes strings to a stable hue", () => {

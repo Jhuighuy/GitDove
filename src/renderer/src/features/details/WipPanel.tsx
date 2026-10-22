@@ -475,7 +475,7 @@ function CommitBox({
         <Checkbox
           checked={draft.amend}
           disabled={unborn && !draft.amend}
-          onCheckedChange={(c) => setAmend(c === true)}
+          onCheckedChange={(c) => setAmend(c)}
         />
         Amend previous commit
       </Label>

@@ -14,16 +14,16 @@ interface TabsState {
   readonly active: string | null;
   readonly recent: readonly RepoId[];
   readonly loaded: boolean;
-  load(): Promise<void>;
+  readonly load: () => Promise<void>;
   /** Opens a repository in a tab (focusing an existing one if already open). */
-  openRepo(repo: RepoId, inTab?: string): void;
-  newTab(): void;
-  closeTab(key: string): void;
-  activate(key: string): void;
+  readonly openRepo: (repo: RepoId, inTab?: string) => void;
+  readonly newTab: () => void;
+  readonly closeTab: (key: string) => void;
+  readonly activate: (key: string) => void;
   /** Moves a tab to `index` in the tab order. */
-  moveTab(key: string, index: number): void;
-  cycle(delta: number): void;
-  removeRecent(repo: RepoId): void;
+  readonly moveTab: (key: string, index: number) => void;
+  readonly cycle: (delta: number) => void;
+  readonly removeRecent: (repo: RepoId) => void;
 }
 
 let counter = 0;

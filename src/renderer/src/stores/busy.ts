@@ -21,10 +21,10 @@ export interface Busy {
 
 interface BusyState {
   readonly byRepo: Readonly<Record<RepoId, Busy>>;
-  start(repo: RepoId, busy: Pick<Busy, "label" | "cancellable">): void;
+  readonly start: (repo: RepoId, busy: Pick<Busy, "label" | "cancellable">) => void;
   /** Marks the operation in `repo` done, and the refresh after it running. */
-  refreshing(repo: RepoId): void;
-  finish(repo: RepoId): void;
+  readonly refreshing: (repo: RepoId) => void;
+  readonly finish: (repo: RepoId) => void;
 }
 
 export const useBusyStore = create<BusyState>()((set) => ({
