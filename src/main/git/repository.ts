@@ -768,6 +768,8 @@ export class Repository {
         "show",
         "-z",
         `--format=${COMMIT_FORMAT}`,
+        // A root commit's files are added, whatever `log.showRoot` says.
+        "--root",
         "-M",
         "--diff-merges=first-parent",
         "--raw",
@@ -861,6 +863,7 @@ export class Repository {
               "show",
               ...readable,
               "--format=",
+              "--root",
               "--diff-merges=first-parent",
               target.hash,
               "--",

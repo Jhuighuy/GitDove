@@ -233,6 +233,15 @@ describe.skipIf(noShell).each(targets)(
       expect(diff.hunks[0]!.lines.map((l) => l.text)).toEqual(["s"]);
     });
 
+    it("shows a root commit's files whatever log.showRoot says", async () => {
+      await sh("git config log.showRoot false");
+      const root = await sh("git rev-list --max-parents=0 HEAD");
+      const details = await run(t.repo.commitDetails(root));
+      expect(details.files.map((f) => [f.path, f.kind])).toEqual([["f.txt", "added"]]);
+      const diff = await run(t.repo.diff({ kind: "commit", hash: root, path: "f.txt" }));
+      expect(diff.hunks).toHaveLength(1);
+    });
+
     it("searches commits reachable from a detached HEAD only", async () => {
       await sh("git checkout -q --detach && git commit -q --allow-empty -m 'detached work'");
       expect(await run(t.repo.search("detached work"))).toEqual([await head()]);
