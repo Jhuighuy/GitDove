@@ -151,6 +151,13 @@ describe("ImageDiff", () => {
     expect(container.textContent).toContain("Too large to display (30 MB).");
   });
 
+  it("recognizes Git LFS pointers", async () => {
+    const pointer = "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n";
+    mocks.versions = { old: blob(pointer), new: blob("a") };
+    await render("split");
+    expect(container.textContent).toContain("Stored in Git LFS: only its pointer is here.");
+  });
+
   it("labels added and deleted images", async () => {
     mocks.versions = { old: MISSING, new: blob("b") };
     await render();
