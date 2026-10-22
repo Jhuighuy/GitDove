@@ -644,7 +644,7 @@ const glob = (pattern: string): string[] => {
       try {
         return readdirSync(p)
           .filter((e) => re.test(e) && (part.startsWith(".") || !e.startsWith(".")))
-          .toSorted()
+          .toSorted((a, b) => a.localeCompare(b))
           .map((e) => join(p, e));
       } catch {
         return [];

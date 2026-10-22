@@ -585,8 +585,8 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
       }
     },
     activate(row) {
-      if (row.kind === "worktree" || row.kind === "submodule") this.doubleClick(row);
-      else this.click(row);
+      if (row.kind === "worktree" || row.kind === "submodule") handlers.doubleClick(row);
+      else handlers.click(row);
     },
     contextMenu(row) {
       const target = targetOf(row);

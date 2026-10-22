@@ -1153,7 +1153,7 @@ export class Repository {
               .filter((l) => l.endsWith("\0"))
               .join("\n"),
             s.stashes.map((st) => st.hash).join(" "),
-            [...hidden].toSorted().join("\n"),
+            [...hidden].toSorted((a, b) => a.localeCompare(b)).join("\n"),
           ].join("\0"),
         })),
       );
