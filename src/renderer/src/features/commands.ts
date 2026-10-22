@@ -33,6 +33,11 @@ const defaultRemote = (repo: RepoId) => {
   const remotes = refs(repo)?.remotes ?? [];
   return remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name ?? null;
 };
+/** The remote that pushing the current branch with an upstream to set goes to, as main picks it. */
+const pushRemote = (repo: RepoId) => {
+  const known = refs(repo)?.pushRemote;
+  return known === undefined ? defaultRemote(repo) : known;
+};
 
 /** A location on the same host as `repo` (worktrees, submodules). */
 const sibling = (repo: RepoId, path: string): RepoLocation => {
@@ -70,7 +75,7 @@ export const commands = {
     let setUpstream = false;
     if (!head.upstream || head.upstreamGone) {
       // The main process pushes to the same remote.
-      const remote = defaultRemote(repo);
+      const remote = pushRemote(repo);
       if (!remote) {
         toast.error("Push failed", { description: "No remotes configured" });
         return;
@@ -479,7 +484,7 @@ export const commands = {
 
   setUpstream: async (repo: RepoId, ref: Ref) => {
     if (refuseWhileBusy(repo, "Set upstream")) return;
-    const remote = defaultRemote(repo);
+    const remote = pushRemote(repo);
     const r = await prompt({
       title: `Set upstream for ${ref.short}`,
       description: "Remote branch to track. Leave the remote's name in front, e.g. origin/main.",

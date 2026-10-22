@@ -106,6 +106,9 @@ function RepoLayout({ repo, active }: { repo: RepoId; active: boolean }) {
     switch (command) {
       case "refresh":
         void refreshRepo(repo);
+        // Also history that changed without its refs changing (e.g. a deepened shallow clone);
+        // the new graph arrives as progress events, and its errors show in the status bar.
+        void api("repo.reloadGraph", repo).catch(() => {});
         break;
       case "fetch":
         void commands.fetch(repo);

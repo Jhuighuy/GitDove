@@ -306,6 +306,21 @@ it("names the remote that a new upstream is set on, and needs one", async () => 
   expect(methods()).toEqual([]);
 });
 
+it("names the remote that main pushes to, e.g. remote.pushDefault", async () => {
+  queryClient.setQueryData<RefsSnapshot>(keys.refs(repo), (old) => ({
+    ...old!,
+    refs: [{ ...main, upstream: null }],
+    pushRemote: "upstream",
+  }));
+  mocks.confirm.mockResolvedValueOnce(false);
+  await commands.push(repo);
+  expect(mocks.confirm).toHaveBeenCalledWith(
+    expect.objectContaining({
+      description: "“main” has no upstream branch. Push it and set the upstream to upstream/main?",
+    }),
+  );
+});
+
 it("confirms force pushes", async () => {
   mocks.confirm.mockResolvedValueOnce(false);
   await commands.push(repo, true);
