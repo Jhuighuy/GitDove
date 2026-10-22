@@ -50,10 +50,12 @@ import { Input } from "@/components/ui/input";
 import { useRefs, useRepoInfo } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { commands } from "../commands";
-import { SectionStack } from "./SectionStack";
+import { type SectionDef, SectionStack } from "./SectionStack";
 import { SidebarMenu, type SidebarTarget } from "./SidebarMenu";
 import { buildTree, type TreeNode } from "./tree";
 import { type Contributor, type ContributorEmail, useVisibility } from "./visibility";
+
+type SectionTarget = Extract<SidebarTarget, { kind: "section" }>;
 
 /** `filtered`: hidden by the contributor filter, which its own eye cannot change. */
 type Visibility = "visible" | "hidden" | "filtered" | "partial" | "head" | "none";
@@ -135,8 +137,8 @@ type Row =
       readonly label: string;
       readonly menu: "branch" | "remote-branch" | "tag";
       readonly visibility: Visibility;
-      /** Who works on the branch, most commits first. */
-      readonly owners: readonly Contributor[];
+      /** Who works on the branch. */
+      readonly owner: Contributor | undefined;
     }
   | {
       readonly kind: "remote";
@@ -243,7 +245,7 @@ interface RowsInput {
     Vis,
     | "isHidden"
     | "isFiltered"
-    | "ownersOf"
+    | "ownerOf"
     | "contributors"
     | "contributorVisibility"
     | "isEmailHidden"
@@ -294,7 +296,7 @@ const rowsOf = ({
     label,
     menu,
     visibility: refVisibility(r),
-    owners: vis.ownersOf(r.name),
+    owner: vis.ownerOf(r.name),
   });
 
   /**
@@ -493,8 +495,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
   const menu = useContextMenuTarget<SidebarTarget>();
 
   const groups = useMemo(() => groupsOf(data), [data]);
-  const { isHidden, isFiltered, ownersOf, contributors, contributorVisibility, isEmailHidden } =
-    vis;
+  const { isHidden, isFiltered, ownerOf, contributors, contributorVisibility, isEmailHidden } = vis;
   const rows = useMemo(
     () =>
       rowsOf({
@@ -507,7 +508,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
         vis: {
           isHidden,
           isFiltered,
-          ownersOf,
+          ownerOf,
           contributors,
           contributorVisibility,
           isEmailHidden,
@@ -523,7 +524,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
       expanded,
       isHidden,
       isFiltered,
-      ownersOf,
+      ownerOf,
       contributors,
       contributorVisibility,
       isEmailHidden,
@@ -602,13 +603,21 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
     <RowList rows={items} label={label} onAction={onAction} providers={providers} />
   );
 
-  const sections = [
+  // Every header offers to show or hide the sections.
+  const sectionMenu = (section: SectionTarget["section"]): void =>
+    capture({
+      kind: "section",
+      section,
+      sections: sections.map(({ id, title }) => ({ id, title })),
+    });
+
+  const sections: SectionDef[] = [
     {
       id: "local",
       title: "Local",
       icon: <IconDeviceLaptop />,
       count: renderCount(rows.counts.local),
-      onHeaderContextMenu: () => capture({ kind: "section", section: "local" }),
+      onHeaderContextMenu: () => sectionMenu("local"),
       children: list(rows.local, "Local branches"),
     },
     {
@@ -616,7 +625,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
       title: "Remote",
       icon: <IconCloud />,
       count: renderCount(rows.counts.remote),
-      onHeaderContextMenu: () => capture({ kind: "section", section: "remote" }),
+      onHeaderContextMenu: () => sectionMenu("remote"),
       children: list(rows.remote, "Remote branches"),
     },
     {
@@ -624,7 +633,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
       title: "Contributors",
       icon: <IconUsers />,
       count: renderCount(rows.counts.contributors),
-      onHeaderContextMenu: () => capture({ kind: "section", section: "contributors" }),
+      onHeaderContextMenu: () => sectionMenu("contributors"),
       children: list(rows.contributors, "Contributors"),
     },
     {
@@ -633,7 +642,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
       icon: <IconFolders />,
       count: <span>{data?.worktrees.length ?? 0}</span>,
       defaultOpen: false,
-      onHeaderContextMenu: () => capture({ kind: "section", section: "worktrees" }),
+      onHeaderContextMenu: () => sectionMenu("worktrees"),
       children: list(rows.worktrees, "Worktrees"),
     },
     {
@@ -641,6 +650,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
       title: "Stashes",
       icon: <IconArchive />,
       count: renderCount(rows.counts.stashes),
+      onHeaderContextMenu: () => sectionMenu("stashes"),
       children: list(rows.stashes, "Stashes"),
     },
     {
@@ -649,7 +659,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
       icon: <IconTag />,
       count: renderCount(rows.counts.tags),
       defaultOpen: false,
-      onHeaderContextMenu: () => capture({ kind: "section", section: "tags" }),
+      onHeaderContextMenu: () => sectionMenu("tags"),
       children: list(rows.tags, "Tags"),
     },
     ...((data?.submodules.length ?? 0) > 0
@@ -660,6 +670,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
             icon: <IconBox />,
             count: <span>{data?.submodules.length}</span>,
             defaultOpen: false,
+            onHeaderContextMenu: () => sectionMenu("submodules"),
             children: list(rows.submodules, "Submodules"),
           },
         ]
@@ -910,7 +921,7 @@ const SidebarItem = memo(function SidebarItem({
           label={row.label}
           title={row.ref.short}
           icon={row.menu === "tag" ? <IconTag /> : <IconGitBranch />}
-          owners={row.owners}
+          owner={row.owner}
           providers={providers}
           visibility={row.visibility}
         />
@@ -1054,7 +1065,7 @@ function Item({
 function VisibilityToggle({
   label,
   visibility,
-  filteredBy = "their contributors",
+  filteredBy = "its owner",
   onToggle,
 }: {
   label: string;
@@ -1109,23 +1120,22 @@ function VisibilityToggle({
 
 function RefItem({
   refItem: r,
-  owners,
+  owner,
   providers,
   ...rest
 }: Omit<ItemProps, "active" | "trailing"> & {
   refItem: Ref;
-  /** Who works on the branch, most commits first. */
-  owners: readonly Contributor[];
+  /** Who works on the branch. */
+  owner: Contributor | undefined;
   providers: readonly AvatarProvider[];
 }) {
   const track = r.upstreamGone
     ? "gone"
     : [r.ahead ? r.ahead + "↑" : "", r.behind ? r.behind + "↓" : ""].join(" ").trim();
-  const owner = owners[0];
   return (
     <Item
       {...rest}
-      filteredBy={owners.map((o) => o.name).join(", ")}
+      filteredBy={owner?.name}
       active={r.isHead}
       trailing={
         <>
@@ -1135,7 +1145,7 @@ function RefItem({
           {owner && (
             <span
               className={cn("flex shrink-0", rest.visibility === "filtered" && "opacity-50")}
-              title={`By ${owners.map((o) => o.name).join(", ")}`}
+              title={`By ${owner.name}`}
             >
               <Avatar name={owner.name} email={owner.avatarEmail} providers={providers} size={14} />
             </span>

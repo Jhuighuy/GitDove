@@ -1,6 +1,6 @@
 import { repoDisplayName, repoLocationOf } from "@shared/domain";
 import { IconFolder, IconPlus, IconServer, IconX } from "@tabler/icons-react";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { isMac } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -9,25 +9,44 @@ import { useTabs } from "@/stores/tabs";
 const drag = { WebkitAppRegion: "drag" } as React.CSSProperties;
 const noDrag = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
 
+/** How far the pointer moves before a press on a tab becomes a drag, in pixels. */
+const DRAG_THRESHOLD = 4;
+
 /**
  * The window's tab bar, which is also its title bar: the space around the tabs drags the
  * window (and gets no mouse events, so double-clicking it is the system's).
  */
 export function TabBar() {
-  const { tabs, active, activate, closeTab, newTab } = useTabs(
+  const { tabs, active, activate, closeTab, newTab, moveTab } = useTabs(
     useShallow((s) => ({
       tabs: s.tabs,
       active: s.active,
       activate: s.activate,
       closeTab: s.closeTab,
       newTab: s.newTab,
+      moveTab: s.moveTab,
     })),
   );
   const list = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
 
-  /** Arrow keys, Home and End move between tabs (activating them); Delete closes one. */
+  const focusTab = (index: number) =>
+    list.current?.querySelectorAll<HTMLElement>('[role="tab"]')[index]?.focus();
+
+  /**
+   * Arrow keys, Home and End move between tabs (activating them); with Shift, the arrow keys
+   * move the tab itself along the bar (as dragging it does). Delete closes a tab.
+   */
   const onKeyDown = (e: React.KeyboardEvent, index: number) => {
     const key = tabs[index]!.key;
+    if (e.shiftKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+      e.preventDefault();
+      const to = index + (e.key === "ArrowRight" ? 1 : -1);
+      if (to < 0 || to >= tabs.length) return;
+      moveTab(key, to);
+      // The tab element is kept (tabs are keyed), and keeps focus.
+      return;
+    }
     const to =
       e.key === "ArrowRight"
         ? (index + 1) % tabs.length
@@ -41,7 +60,7 @@ export function TabBar() {
     if (to !== null) {
       e.preventDefault();
       activate(tabs[to]!.key);
-      list.current?.querySelectorAll<HTMLElement>('[role="tab"]')[to]?.focus();
+      focusTab(to);
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       activate(key);
@@ -49,6 +68,40 @@ export function TabBar() {
       e.preventDefault();
       closeTab(key);
     }
+  };
+
+  /** Drags a tab along the bar: it takes the place of the tabs whose middle it passes. */
+  const startDrag = (e: React.PointerEvent<HTMLElement>, key: string) => {
+    if (e.button !== 0) return;
+    const bar = list.current;
+    if (!bar) return;
+    const startX = e.clientX;
+    let started = false;
+    const move = (ev: PointerEvent) => {
+      if (!started && Math.abs(ev.clientX - startX) < DRAG_THRESHOLD) return;
+      started = true;
+      setDragging(key);
+      const others = [...bar.querySelectorAll<HTMLElement>('[role="tab"]')].filter(
+        (el) => el.dataset.key !== key,
+      );
+      const index = others.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left + r.width / 2 < ev.clientX;
+      }).length;
+      moveTab(key, index);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("blur", up);
+      setDragging(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    // Released outside the window, the pointer may never come back up here.
+    window.addEventListener("blur", up);
   };
 
   return (
@@ -74,6 +127,7 @@ export function TabBar() {
               key={tab.key}
               style={noDrag}
               role="tab"
+              data-key={tab.key}
               aria-selected={isActive}
               tabIndex={isActive ? 0 : -1}
               title={loc ? (loc.kind === "ssh" ? `${loc.host}:${loc.path}` : loc.path) : "New tab"}
@@ -82,7 +136,9 @@ export function TabBar() {
                 isActive
                   ? "bg-background text-foreground"
                   : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+                dragging === tab.key && "z-10 shadow-md",
               )}
+              onPointerDown={(e) => startDrag(e, tab.key)}
               onMouseDown={(e) => {
                 if (e.button === 0) activate(tab.key);
                 if (e.button === 1) {
@@ -111,6 +167,7 @@ export function TabBar() {
                     : "opacity-0 group-hover:opacity-70 group-focus-visible:opacity-70",
                 )}
                 onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => closeTab(tab.key)}
                 aria-label="Close tab"
               >

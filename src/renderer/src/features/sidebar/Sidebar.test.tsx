@@ -314,11 +314,17 @@ const sectionHeader = (title: string) =>
     b.textContent?.startsWith(title),
   )!;
 
+/** Any open context menu's items, checkbox items included. */
+const anyMenuItems = () =>
+  document.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]').length;
+/** A section's empty space below its rows, which has no menu. */
+const emptySpace = (label: string) =>
+  document.querySelector<HTMLElement>(`[role="tree"][aria-label="${label}"]`)!;
+
 it("opens no menu where there is none, rather than the last one", async () => {
   await render();
-  // Stashes have no section menu.
-  await fire(sectionHeader("Stashes"), "contextmenu");
-  expect(menuItems()).toEqual([]);
+  await fire(emptySpace("Stashes"), "contextmenu");
+  expect(anyMenuItems()).toBe(0);
   await fire(row("release/2023.0"), "contextmenu");
   expect(menuItems()).toContain("Delete release/2023.0");
   await click(
@@ -327,8 +333,14 @@ it("opens no menu where there is none, rather than the last one", async () => {
     )!,
   );
   await act(async () => new Promise((r) => setTimeout(r, 0)));
+  await fire(emptySpace("Stashes"), "contextmenu");
+  expect(anyMenuItems()).toBe(0);
+  // Every section header has a menu, which shows or hides the sections.
   await fire(sectionHeader("Stashes"), "contextmenu");
   expect(menuItems()).toEqual([]);
+  expect(
+    [...document.querySelectorAll('[role="menuitemcheckbox"]')].map((e) => e.textContent?.trim()),
+  ).toContain("Stashes");
 });
 
 it("renders only the rows on screen, and lists every tag", async () => {

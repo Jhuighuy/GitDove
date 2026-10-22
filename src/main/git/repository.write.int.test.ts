@@ -3,7 +3,7 @@
  * `GITDOVE_INT_SSH_HOST` is set) on a remote host under /tmp.
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import type { RepoLocation } from "@shared/domain";
 import { Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
 import { Repository } from "./repository";
@@ -24,6 +24,8 @@ const waitGraph = (repo: Repository, after = 0) =>
 // The local host runs scripts with /bin/sh.
 describe.skipIf(process.platform === "win32")("Repository write ops (integration)", () => {
   const runtime = ManagedRuntime.make(Layer.mergeAll(HostsLive));
+  // Closes the SSH connections, which would otherwise outlive the tests.
+  afterAll(() => runtime.dispose());
 
   for (const [name, hostId] of targets) {
     it(`round-trips edits on ${name}`, async () => {
@@ -81,6 +83,22 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             yield* repo.stashPop(0);
             expect((yield* repo.status()).unstaged.map((f) => f.path)).toEqual(["f.txt"]);
             yield* repo.discard(["f.txt"], []);
+
+            // Discard all: staged, unstaged and untracked changes.
+            yield* host.sh(
+              "echo y >> f.txt && echo n > new.txt && git add new.txt && mkdir -p u && echo u > u/u.txt",
+              { cwd: dir },
+            );
+            // Ignored files stay, even when the ignore rule is itself discarded.
+            yield* host.sh("echo .env > .gitignore && git add .gitignore && echo s > .env", {
+              cwd: dir,
+            });
+            yield* repo.discardAll();
+            const clean = yield* repo.status();
+            expect(clean.staged).toEqual([]);
+            expect(clean.conflicted).toEqual([]);
+            expect(clean.unstaged.map((f) => [f.path, f.kind])).toEqual([[".env", "untracked"]]);
+            yield* host.sh("rm .env", { cwd: dir });
             yield* repo.checkout("main");
             yield* repo.reset("HEAD~1", "hard");
             expect((yield* repo.info()).head.hash).toBe(
@@ -126,6 +144,173 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             expect((yield* repo.refs()).worktrees).toHaveLength(1);
           } finally {
             yield* host.sh(`rm -rf -- '${dir}' '${dir}-wt'`).pipe(Effect.ignore);
+          }
+        }),
+      );
+    });
+
+    it(`does not delete folders in the way of tracked files on ${name}`, async () => {
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const host = (yield* Hosts).get(hostId);
+          const dir = (yield* host.sh("mktemp -d /tmp/gitdove-test.XXXXXX")).stdout
+            .toString()
+            .trim();
+          try {
+            // Tracked files replaced by repositories: `a`, `b` (its deletion staged), `c` (moved
+            // away), `d` (the repository staged in its place) and `q"t` (a name git quotes).
+            yield* host.sh(
+              "git init -q -b main . && git config user.name T && git config user.email t@x && " +
+                "echo a > a && echo b > b && echo c > c && echo d > d && echo q > 'q\"t' && " +
+                "git add . && git commit -qm files && " +
+                "rm a && mkdir a && git -C a init -q && echo n > a/n.txt && git rm -q b && " +
+                "mkdir b && git -C b init -q && git mv c moved && mkdir c && git -C c init -q && " +
+                "rm d && mkdir d && git -C d init -q && echo x > d/x && git -C d add x && " +
+                "git -C d -c user.name=T -c user.email=t@x commit -qm x && git add d 2>/dev/null && " +
+                "rm 'q\"t' && mkdir 'q\"t' && git -C 'q\"t' init -q && echo j > junk.txt",
+              { cwd: dir },
+            );
+            const location: RepoLocation =
+              hostId === LOCAL_HOST
+                ? { kind: "local", path: dir }
+                : { kind: "ssh", host: hostId, path: dir };
+            const repo = yield* Repository.open(host, location, { onGraphProgress: () => {} });
+            const stopped = yield* Effect.flip(repo.discardAll());
+            expect(stopped.message).toBe(
+              'Folders are where tracked files belong: a, b, c, d, q"t. Move them away first.',
+            );
+            // Nothing was deleted.
+            const left = (yield* host.sh("ls -A . a b c d", { cwd: dir })).stdout.toString();
+            expect(left).toContain("n.txt");
+            expect(left).toContain(".git");
+            expect(left).toContain("junk.txt");
+          } finally {
+            yield* host.sh(`rm -rf -- '${dir}'`).pipe(Effect.ignore);
+          }
+        }),
+      );
+    });
+
+    it(`reports submodule changes it keeps on ${name}`, async () => {
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const host = (yield* Hosts).get(hostId);
+          const dir = (yield* host.sh("mktemp -d /tmp/gitdove-test.XXXXXX")).stdout
+            .toString()
+            .trim();
+          try {
+            yield* host.sh(
+              `git init -q -b main '${dir}-sub' && echo s > '${dir}-sub/s.txt' && ` +
+                `git -C '${dir}-sub' add s.txt && ` +
+                `git -C '${dir}-sub' -c user.name=T -c user.email=t@x commit -qm s && ` +
+                "git init -q -b main . && git config user.name T && git config user.email t@x && " +
+                `git -c protocol.file.allow=always submodule add -q '${dir}-sub' sub && ` +
+                "git commit -qm sub && echo x >> sub/s.txt && echo y > top.txt && " +
+                // Even when configured to, discarding must not recurse into submodules, and
+                // their changes are reported however diffs are set to show them.
+                "git config submodule.recurse true && git config diff.ignoreSubmodules all",
+              { cwd: dir },
+            );
+            const location: RepoLocation =
+              hostId === LOCAL_HOST
+                ? { kind: "local", path: dir }
+                : { kind: "ssh", host: hostId, path: dir };
+            const repo = yield* Repository.open(host, location, { onGraphProgress: () => {} });
+            const kept = yield* Effect.flip(repo.discardAll());
+            expect(kept.message).toBe(
+              "Discarded the other changes, but kept changes in submodules: sub",
+            );
+            // The rest is gone; the submodule's own files are untouched.
+            // (The status lists no submodules here: it follows diff.ignoreSubmodules.)
+            const st = yield* repo.status();
+            expect(st.unstaged.map((f) => f.path)).not.toContain("top.txt");
+            expect((yield* host.sh("cat sub/s.txt", { cwd: dir })).stdout.toString()).toBe(
+              "s\nx\n",
+            );
+
+            // A submodule added since: unstaged, its folder (and work in it) kept, and said so.
+            yield* host.sh(
+              `git -c protocol.file.allow=always submodule add -q '${dir}-sub' sub2 && ` +
+                "echo y >> sub2/s.txt",
+              { cwd: dir },
+            );
+            const added = yield* Effect.flip(repo.discardAll());
+            expect(added.message).toBe(
+              "Discarded the other changes, but kept changes in submodules: sub; " +
+                "the folders of new submodules: sub2",
+            );
+            expect((yield* host.sh("cat sub2/s.txt", { cwd: dir })).stdout.toString()).toBe(
+              "s\ny\n",
+            );
+          } finally {
+            yield* host.sh(`rm -rf -- '${dir}' '${dir}-sub'`).pipe(Effect.ignore);
+          }
+        }),
+      );
+    });
+
+    it(`discards everything in a repository without commits on ${name}`, async () => {
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const host = (yield* Hosts).get(hostId);
+          const dir = (yield* host.sh("mktemp -d /tmp/gitdove-test.XXXXXX")).stdout
+            .toString()
+            .trim();
+          try {
+            // A staged file edited since differs from both the index and the work tree; a staged
+            // ignore rule matches a staged file, and an untracked one.
+            yield* host.sh(
+              "git init -q -b main . && echo a > a.txt && git add a.txt && echo b >> a.txt && " +
+                "echo u > u.txt && printf 'a.txt\\n.env\\n' > .gitignore && git add .gitignore && " +
+                "echo s > .env",
+              { cwd: dir },
+            );
+            const location: RepoLocation =
+              hostId === LOCAL_HOST
+                ? { kind: "local", path: dir }
+                : { kind: "ssh", host: hostId, path: dir };
+            const repo = yield* Repository.open(host, location, { onGraphProgress: () => {} });
+            yield* repo.discardAll();
+            const st = yield* repo.status();
+            expect([...st.staged, ...st.conflicted]).toEqual([]);
+            // Only the file that was ignored is left.
+            expect(st.unstaged.map((f) => [f.path, f.kind])).toEqual([[".env", "untracked"]]);
+            yield* host.sh("rm .env", { cwd: dir });
+
+            // Untracked nested repositories are kept, and reported.
+            yield* host.sh("mkdir nested && git -C nested init -q && echo n > nested/n.txt", {
+              cwd: dir,
+            });
+            const kept = yield* Effect.flip(repo.discardAll());
+            expect(kept.message).toContain("kept nested repositories: nested/");
+
+            // A submodule added before the first commit is unstaged, its folder kept.
+            yield* host.sh(
+              `rm -rf nested && git init -q -b main '${dir}-sub' && echo s > '${dir}-sub/s.txt' && ` +
+                `git -C '${dir}-sub' add s.txt && ` +
+                `git -C '${dir}-sub' -c user.name=T -c user.email=t@x commit -qm s && ` +
+                `git -c protocol.file.allow=always submodule add -q '${dir}-sub' sub && ` +
+                "echo x >> sub/s.txt",
+              { cwd: dir },
+            );
+            const sub = yield* Effect.flip(repo.discardAll());
+            expect(sub.message).toBe(
+              "Discarded the other changes, but kept the folders of new submodules: sub",
+            );
+            expect((yield* host.sh("cat sub/s.txt", { cwd: dir })).stdout.toString()).toBe(
+              "s\nx\n",
+            );
+            yield* host.sh("rm -rf sub", { cwd: dir });
+
+            // Nothing is discarded in the middle of a merge (or the like).
+            yield* host.sh("rm -rf nested && echo x > a.txt && touch .git/MERGE_HEAD", {
+              cwd: dir,
+            });
+            const merging = yield* Effect.flip(repo.discardAll());
+            expect(merging.message).toBe("Abort or finish the merging first");
+            expect((yield* repo.status()).unstaged.map((f) => f.path)).toEqual(["a.txt"]);
+          } finally {
+            yield* host.sh(`rm -rf -- '${dir}' '${dir}-sub'`).pipe(Effect.ignore);
           }
         }),
       );

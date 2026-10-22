@@ -240,3 +240,20 @@ it("keeps repositories in background tabs from refetching until shown", async ()
   expect(refetch).toHaveBeenCalledWith(expect.objectContaining({ queryKey: q.keys.repo(B) }));
   refetch.mockRestore();
 });
+
+it("moves tabs and persists the order", async () => {
+  await load([A, B, C], A);
+  const order = () => s().tabs.map((t) => t.repo);
+  s().moveTab(s().tabs[0]!.key, 2);
+  expect(order()).toEqual([B, C, A]);
+  s().moveTab(s().tabs[1]!.key, 0);
+  expect(order()).toEqual([C, B, A]);
+  s().moveTab(s().tabs[1]!.key, 99);
+  expect(order()).toEqual([C, A, B]);
+  expect(lastSaved()).toEqual({ tabs: [C, A, B], activeTab: A, recent: [] });
+  // Unknown tabs and moves in place change nothing.
+  const before = s().tabs;
+  s().moveTab("unknown", 0);
+  s().moveTab(before[0]!.key, 0);
+  expect(s().tabs).toBe(before);
+});

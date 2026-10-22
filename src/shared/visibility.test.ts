@@ -62,9 +62,9 @@ describe("visibility", () => {
   };
   const owners = {
     byRef: {
-      "refs/heads/a": ["ann@x"],
-      "refs/heads/b": ["bob@x"],
-      "refs/heads/ab": ["ann@corp", "bob@x"],
+      "refs/heads/a": "ann@x",
+      "refs/heads/b": "bob@x",
+      "refs/heads/c": "ann@corp",
     },
     people,
   };
@@ -78,12 +78,11 @@ describe("visibility", () => {
     expect(isEmailHidden([authorKey("Bob@X")], "bob@x", people)).toBe(true);
   });
 
-  it("filters branches whose owners are all hidden", () => {
+  it("filters branches whose owner is hidden", () => {
     expect(isFilteredOut([personKey("ann lee")], "refs/heads/a", owners)).toBe(true);
-    expect(isFilteredOut([personKey("ann lee")], "refs/heads/ab", owners)).toBe(false);
-    expect(isFilteredOut([personKey("ann lee"), authorKey("bob@x")], "refs/heads/ab", owners)).toBe(
-      true,
-    );
+    expect(isFilteredOut([personKey("ann lee")], "refs/heads/c", owners)).toBe(true);
+    expect(isFilteredOut([personKey("ann lee")], "refs/heads/b", owners)).toBe(false);
+    expect(isFilteredOut([authorKey("ann@x")], "refs/heads/c", owners)).toBe(false);
     expect(isFilteredOut([personKey("ann lee")], "refs/heads/main", owners)).toBe(false);
     // A branch's own entry does not matter.
     expect(isFilteredOut([personKey("ann lee"), "refs/heads/a"], "refs/heads/a", owners)).toBe(

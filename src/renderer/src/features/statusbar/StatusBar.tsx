@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { api, useEvent } from "@/lib/api";
 import { keys } from "@/lib/queries";
+import { cn } from "@/lib/utils";
 import { type Busy, useBusy } from "@/stores/busy";
 import { APP, type Notice, useActivity, useNotice } from "@/stores/status";
 import { commands } from "../commands";
@@ -38,10 +39,15 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
     <footer className="text-muted-foreground flex h-6 shrink-0 items-center gap-3 border-t px-3 text-[11px] [&_svg]:size-3.5 [&_svg]:shrink-0">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         {location?.kind === "ssh" && (
-          <span className="flex min-w-0 items-center gap-1 text-sky-500" title={location.host}>
+          <CopyButton
+            text={location.host}
+            what="Host name copied"
+            className="text-sky-500"
+            title={`${location.host} (click to copy)`}
+          >
             <IconServer />
             <span className="truncate">{location.host}</span>
-          </span>
+          </CopyButton>
         )}
         {location?.kind === "local" && (
           <span className="flex shrink-0 items-center gap-1">
@@ -50,9 +56,13 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
           </span>
         )}
         {location && (
-          <span className="min-w-0 truncate" title={location.path}>
-            {location.path}
-          </span>
+          <CopyButton
+            text={location.path}
+            what="Path copied"
+            title={`${location.path} (click to copy)`}
+          >
+            <span className="truncate">{location.path}</span>
+          </CopyButton>
         )}
       </div>
       <div className="flex min-w-0 items-center justify-end gap-3">
@@ -95,6 +105,35 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
         )}
       </div>
     </footer>
+  );
+}
+
+/** Status bar text that copies itself (or `text`) when clicked. */
+function CopyButton({
+  text,
+  what,
+  title,
+  className,
+  children,
+}: {
+  text: string;
+  what: string;
+  title: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "hover:text-foreground flex min-w-0 cursor-pointer items-center gap-1 rounded",
+        className,
+      )}
+      title={title}
+      onClick={() => commands.copy(text, what)}
+    >
+      {children}
+    </button>
   );
 }
 

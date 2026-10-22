@@ -61,14 +61,12 @@ const NO_OWNERS: BranchOwners = { byRef: {}, people: {}, me: { email: null, name
 export const contributorsOf = (owners: BranchOwners): Contributor[] => {
   const byEmail = new Map<string, number>();
   const byPerson = new Map<string, Set<string>>();
-  for (const [ref, emails] of Object.entries(owners.byRef)) {
-    for (const e of emails) {
-      byEmail.set(e, (byEmail.get(e) ?? 0) + 1);
-      const person = personOfEmail(e, owners.people);
-      const refs = byPerson.get(person) ?? new Set();
-      refs.add(ref);
-      byPerson.set(person, refs);
-    }
+  for (const [ref, e] of Object.entries(owners.byRef)) {
+    byEmail.set(e, (byEmail.get(e) ?? 0) + 1);
+    const person = personOfEmail(e, owners.people);
+    const refs = byPerson.get(person) ?? new Set();
+    refs.add(ref);
+    byPerson.set(person, refs);
   }
   const groups = new Map<string, ContributorEmail[]>();
   for (const [email, branches] of byEmail) {
@@ -143,11 +141,12 @@ export const useVisibility = (repo: RepoId) => {
     () => new Map(contributors.flatMap((c) => c.emails.map((e) => [e.email, c] as const))),
     [contributors],
   );
-  /** Contributors who own a branch, most commits first. */
-  const ownersOf = useCallback(
-    (name: string): Contributor[] => [
-      ...new Set((byRef[name] ?? []).flatMap((e) => byEmail.get(e) ?? [])),
-    ],
+  /** The contributor who owns a branch. */
+  const ownerOf = useCallback(
+    (name: string): Contributor | undefined => {
+      const email = byRef[name];
+      return email === undefined ? undefined : byEmail.get(email);
+    },
     [byRef, byEmail],
   );
 
@@ -197,9 +196,9 @@ export const useVisibility = (repo: RepoId) => {
     isHiddenByEye: explicit,
     /** Whether the contributor filter hides a branch. */
     isFiltered: filtered,
-    /** Owner emails of each branch, by full ref name. */
+    /** Owner email of each branch, by full ref name. */
     owners: byRef,
-    ownersOf,
+    ownerOf,
     contributors,
     /** Whether the contributor filter hides an email. */
     isEmailHidden: emailHidden,
@@ -227,18 +226,15 @@ export const useVisibility = (repo: RepoId) => {
       (names: readonly string[]) => save(showNames(hidden, names, all)),
       [hidden, all, save],
     ),
-    /** Shows every owner of a branch the contributor filter hides. */
-    showOwners: useCallback(
+    /** Shows the owner of a branch the contributor filter hides. */
+    showOwner: useCallback(
       (name: string) => {
-        const own = new Set(
-          ownersOf(name).flatMap((c) => [
-            personKey(c.person),
-            ...c.emails.map((e) => authorKey(e.email)),
-          ]),
-        );
+        const c = ownerOf(name);
+        if (!c) return;
+        const own = new Set([personKey(c.person), ...c.emails.map((e) => authorKey(e.email))]);
         saveFilter(filter.filter((h) => !own.has(h)));
       },
-      [ownersOf, filter, saveFilter],
+      [ownerOf, filter, saveFilter],
     ),
     /**
      * Shows a contributor when all of their emails are hidden and hides them otherwise, by

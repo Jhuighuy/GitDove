@@ -80,6 +80,9 @@ const MAX_AUTO_LANES = 12;
 const CLIPPED =
   "after:pointer-events-none after:absolute after:inset-y-0 after:right-0 after:w-3 after:bg-linear-to-l after:from-black/10 after:to-transparent dark:after:from-black/80";
 
+/** The branch column's minimum width: room for a short name and a `+1`. */
+const MIN_REFS = 80;
+
 const useColumns = create<ColumnsState>()(
   persist(
     (set) => ({
@@ -89,11 +92,44 @@ const useColumns = create<ColumnsState>()(
       date: 104,
       set: (col, width) => set({ [col]: width }),
     }),
-    { name: "gitdove.graph-columns" },
+    {
+      name: "gitdove.graph-columns",
+      // Widths saved before the minimum was raised.
+      merge: (saved, current) => {
+        const merged = { ...current, ...(saved as Partial<ColumnsState>) };
+        return { ...merged, refs: Math.max(MIN_REFS, merged.refs) };
+      },
+    },
   ),
 );
 
 const EMPTY_REFS: readonly Ref[] = [];
+
+/**
+ * Where each repository's graph was, so that it comes back there after a diff replaced it:
+ * the scroll offset, the fitted graph width and the reveal request it is handling.
+ */
+interface GraphView {
+  scroll: number;
+  /** The fitted graph width, for the graph version it was fitted to. */
+  fit: { readonly width: number; readonly version: number | null };
+  /** The last reveal request seen, and the commit it still has to scroll to (if any). */
+  readonly reveal: { token: number; hash: string | null };
+}
+const views = new Map<RepoId, GraphView>();
+const viewOf = (repo: RepoId): GraphView => {
+  let v = views.get(repo);
+  if (!v) {
+    v = { scroll: 0, fit: { width: 0, version: null }, reveal: { token: 0, hash: null } };
+    views.set(repo, v);
+  }
+  return v;
+};
+// A closed repository's graph starts afresh when reopened (its reveal requests count from 0).
+useRepoUiStore.subscribe((s, prev) => {
+  if (s.byRepo === prev.byRepo) return;
+  for (const repo of views.keys()) if (prev.byRepo[repo] && !s.byRepo[repo]) views.delete(repo);
+});
 
 /** The commit last clicked in `selection`, where ranges and arrow keys start. */
 const anchorOf = (selection: Selection | null) =>
@@ -150,7 +186,24 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 24,
+    initialOffset: () => views.get(repo)?.scroll ?? 0,
   });
+  // The virtualizer starts where the graph was, but a history that is not loaded yet (or only
+  // partly, while it streams in) may not reach there: the browser clamps the scroll. Go back
+  // there once it can, unless the user scrolled meanwhile.
+  const restore = useRef(views.get(repo)?.scroll ?? 0);
+  useLayoutEffect(() => {
+    const target = restore.current;
+    if (target === 0 || !info) return;
+    const reachable = virtualizer.getTotalSize() - (virtualizer.scrollRect?.height ?? 0) >= target;
+    if (!reachable && !info.complete) return;
+    virtualizer.scrollToOffset(target);
+    restore.current = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info?.count, info?.complete]);
+  const scrolledByUser = () => {
+    restore.current = 0;
+  };
   const items = virtualizer.getVirtualItems();
   const firstIndex = Math.max(0, (items[0]?.index ?? 0) - offset);
   const lastIndex = Math.max(0, (items.at(-1)?.index ?? 0) - offset + 1);
@@ -174,11 +227,12 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
     if (row) widestRow = Math.max(widestRow, rowGraphWidth(row));
   }
   const visibleWidth = Math.max(widestRow, graphWidthFor(MIN_AUTO_LANES));
-  const [fitWidth, setFitWidth] = useState(0);
-  useLayoutEffect(() => setFitWidth(0), [info?.version]);
+  // The fitted width belongs to one graph: a new one (e.g. after hiding branches) fits again.
+  const [fit, setFit] = useState(() => views.get(repo)?.fit ?? { width: 0, version: null });
+  const fitWidth = fit.version === (info?.version ?? null) ? fit.width : 0;
   useLayoutEffect(() => {
-    if (visibleWidth > fitWidth) setFitWidth(visibleWidth);
-  }, [visibleWidth, fitWidth]);
+    if (visibleWidth > fitWidth) setFit({ width: visibleWidth, version: info?.version ?? null });
+  }, [visibleWidth, fitWidth, info?.version]);
   const widths = {
     refs: draft.refs ?? columns.refs,
     graph:
@@ -197,14 +251,19 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
   }, []);
   const refit = useCallback(() => {
     useColumns.getState().set("graph", null);
-    setFitWidth(0);
+    setFit({ width: 0, version: null });
   }, []);
 
-  // Scroll the selected commit into view when asked to (e.g. from the sidebar). A commit that
-  // has not streamed in yet is looked for again as the graph grows.
-  const reveal = useRef({ token: 0, hash: null as string | null });
   useEffect(() => {
-    const r = reveal.current;
+    viewOf(repo).fit = fit;
+  }, [repo, fit]);
+
+  // Scroll the selected commit into view when asked to (e.g. from the sidebar), once: coming
+  // back from a diff keeps the place instead. A lookup cut short (e.g. by a diff replacing the
+  // graph) runs again, and a commit that has not streamed in yet is looked for again as the
+  // graph grows.
+  useEffect(() => {
+    const r = viewOf(repo).reveal;
     if (r.token !== revealToken) {
       r.token = revealToken;
       r.hash = selection?.kind === "commit" ? selection.hash : null;
@@ -217,6 +276,8 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
         if (cancelled || r.hash !== hash) return;
         if (index >= 0) {
           r.hash = null;
+          // Going to the commit replaces going back to where the graph was.
+          restore.current = 0;
           virtualizer.scrollToIndex(index + latest.current.offset, { align: "center" });
         } else if (info.complete) r.hash = null;
       },
@@ -225,6 +286,8 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
     return () => {
       cancelled = true;
     };
+    // A request made before the graph loaded waits for it, and one for a commit not loaded yet
+    // looks again as more arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealToken, info]);
 
@@ -552,7 +615,16 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
               aria-label="Commits"
               aria-multiselectable
               aria-activedescendant={activeShown && active !== null ? rowId(active) : undefined}
-              onKeyDown={onKeyDown}
+              onKeyDown={(e) => {
+                scrolledByUser();
+                onKeyDown(e);
+              }}
+              onScroll={(e) => {
+                // While going back is pending, the browser's clamping is not a place to keep.
+                if (restore.current === 0) viewOf(repo).scroll = e.currentTarget.scrollTop;
+              }}
+              onWheel={scrolledByUser}
+              onPointerDown={scrolledByUser}
               className="focus-visible:ring-ring/50 relative min-h-0 flex-1 overflow-auto outline-none [contain:strict] focus-visible:ring-2 focus-visible:ring-inset"
             />
           }
@@ -597,7 +669,13 @@ function Header({
     <div className="text-muted-foreground bg-background flex h-7 shrink-0 items-center border-b text-[10px] font-semibold tracking-wider uppercase select-none">
       <div className="relative shrink-0 truncate px-3" style={{ width: widths.refs }}>
         Branch / Tag
-        <Resizer label="Branch / Tag" col="refs" width={widths.refs} min={60} onResize={onResize} />
+        <Resizer
+          label="Branch / Tag"
+          col="refs"
+          width={widths.refs}
+          min={MIN_REFS}
+          onResize={onResize}
+        />
       </div>
       <div className="relative shrink-0 truncate px-2" style={{ width: widths.graph }}>
         Graph
@@ -767,7 +845,8 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
       }}
       onContextMenu={() => p.onContextMenu(row)}
     >
-      <div className="flex w-(--col-refs) shrink-0 items-center overflow-hidden pl-2">
+      {/* A query container: pills drop their icons as the column narrows. */}
+      <div className="@container flex w-(--col-refs) shrink-0 items-center overflow-hidden pl-2">
         <RefPills refs={p.refs} color={row.color} onDoubleClick={p.onRefDoubleClick} />
         {hasPills && (
           <div className="h-0.5 min-w-2 flex-1" style={{ backgroundColor: laneColor(row.color) }} />

@@ -16,6 +16,8 @@ import {
 import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
 import log from "electron-log/main";
 import { Cause, Context, Effect, Exit, type ManagedRuntime, Schema } from "effect";
+import { mayRunGitlab } from "@shared/avatars";
+import { isGitlab } from "./avatars";
 import { type AppError, InvalidInputError } from "./exec/errors";
 import { Hosts, LOCAL_HOST } from "./exec/hosts";
 import { shellJoin, shellQuote } from "./exec/shell";
@@ -111,6 +113,7 @@ const argSchemas = {
   "shell.openTerminal": repoArgs(),
   "shell.revealInFinder": repoArgs(Schema.optional(Str)),
   "shell.openExternal": argsOf(Str),
+  "web.isGitlab": argsOf(Str),
   "ssh.hosts": noArgs,
   "ssh.listDir": argsOf(SshHost, Schema.NullOr(Str)),
   "repo.open": argsOf(Location),
@@ -135,6 +138,7 @@ const argSchemas = {
   "repo.unstage": repoArgs(Schema.Array(Str)),
   "repo.unstageAll": repoArgs(),
   "repo.discard": repoArgs(Schema.Array(Str), Schema.Array(Str)),
+  "repo.discardAll": repoArgs(),
   "repo.applyPatch": repoArgs(Str, Schema.Struct({ cached: Bool, reverse: Bool })),
   "repo.commit": repoArgs(Str, Schema.Struct({ amend: Bool })),
   "repo.lastCommitMessage": repoArgs(),
@@ -336,6 +340,16 @@ const openTerminal = (repo: Repository) =>
     ),
   );
 
+/** An http(s) origin, e.g. `https://git.example.com:8443`, of a host that may run GitLab. */
+const isWebOrigin = (origin: string) => {
+  try {
+    const url = new URL(origin);
+    return /^https?:$/.test(url.protocol) && url.origin === origin && mayRunGitlab(url.hostname);
+  } catch {
+    return false;
+  }
+};
+
 export const handlers: Handlers = {
   // App / window -------------------------------------------------------------
   "app.getState": () => Effect.sync(loadState),
@@ -383,6 +397,8 @@ export const handlers: Handlers = {
             new InvalidInputError({ message: `Cannot open ${url}: ${(e as Error).message}` }),
         })
       : Effect.fail(new InvalidInputError({ message: `Refusing to open ${url}` })),
+
+  "web.isGitlab": (origin) => (isWebOrigin(origin) ? isGitlab(origin) : Effect.succeed(false)),
 
   // Remote hosts ---------------------------------------------------------------
   "ssh.hosts": () =>
@@ -456,6 +472,7 @@ export const handlers: Handlers = {
   "repo.unstage": (id, paths) => withRepo(id, (r) => r.unstage(paths)),
   "repo.unstageAll": (id) => withRepo(id, (r) => r.unstageAll()),
   "repo.discard": (id, paths, untracked) => withRepo(id, (r) => r.discard(paths, untracked)),
+  "repo.discardAll": (id) => withRepo(id, (r) => r.discardAll()),
   "repo.applyPatch": (id, patch, opts) => withRepo(id, (r) => r.applyPatch(patch, opts)),
   "repo.commit": (id, message, opts) => withRepo(id, (r) => r.commit(message, opts)),
   "repo.lastCommitMessage": (id) => withRepo(id, (r) => r.lastCommitMessage()),

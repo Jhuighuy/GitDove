@@ -5,6 +5,7 @@ import {
   IconChevronDown,
   IconMinus,
   IconPlus,
+  IconTrash,
 } from "@tabler/icons-react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -93,6 +94,8 @@ export function WipPanel({ repo }: { repo: RepoId }) {
       ).size,
     [status, conflicted],
   );
+  // Resetting in the middle of a merge or rebase would leave it half done.
+  const inProgress = !!info && info.state !== "clean";
   const selected = (kind: "staged" | "unstaged") => (diff?.kind === kind ? diff.path : null);
 
   const client = useQueryClient();
@@ -160,7 +163,29 @@ export function WipPanel({ repo }: { repo: RepoId }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-10 shrink-0 items-center justify-center gap-1.5 border-b px-3 text-xs">
+      <div className="relative flex h-10 shrink-0 items-center justify-center gap-1.5 border-b px-3 text-xs">
+        {total > 0 && (
+          <BusyHint
+            reason={
+              blocked ??
+              (inProgress
+                ? `Abort or finish the ${info?.state.replaceAll("-", " ")} first`
+                : "Discard all changes")
+            }
+            className="absolute left-2"
+          >
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Discard all changes"
+              className="hover:bg-destructive/15 hover:text-destructive text-muted-foreground size-6"
+              disabled={!!busy || inProgress}
+              onClick={() => void commands.discardAll(repo)}
+            >
+              <IconTrash className="size-3.5" />
+            </Button>
+          </BusyHint>
+        )}
         <span className="font-medium tabular-nums">
           {total}
           {truncated && "+"} file {total === 1 && !truncated ? "change" : "changes"}

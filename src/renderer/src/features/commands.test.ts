@@ -539,6 +539,18 @@ it("confirms discarding changes", async () => {
   expect(methods()).toEqual([]);
 });
 
+it("confirms discarding all changes", async () => {
+  await commands.discardAll(repo);
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({ title: "Discard all changes?", destructive: true }),
+  );
+  expect(apiCalls("repo.discardAll")).toEqual([[repo]]);
+  mocks.confirm.mockResolvedValue(false);
+  mocks.api.mockClear();
+  await commands.discardAll(repo);
+  expect(methods()).toEqual([]);
+});
+
 it("applies patches, offering to undo a discard", async () => {
   await commands.applyPatch(repo, "Stage Hunk", "P", { cached: true, reverse: false });
   await commands.applyPatch(repo, "Unstage Hunk", "P", { cached: true, reverse: true });

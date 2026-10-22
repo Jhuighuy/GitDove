@@ -12,13 +12,19 @@ const mocks = vi.hoisted(() => ({
   refs: null as unknown,
   copy: vi.fn(),
   selectCommit: vi.fn(),
+  gitlabHosts: [] as string[],
+  probed: [] as string[],
 }));
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
   useEvent: () => {},
-  api: async (method: string) => {
+  api: async (method: string, ...args: unknown[]) => {
     if (method === "repo.refs") return mocks.refs;
+    if (method === "web.isGitlab") {
+      mocks.probed.push(args[0] as string);
+      return mocks.gitlabHosts.includes(args[0] as string);
+    }
     if (method === "repo.commitDetails") {
       const c = mocks.commit;
       if (c instanceof Error) throw c;
@@ -255,4 +261,49 @@ it("opens file diffs and highlights the open one", async () => {
     useRepoUiStore.getState().openDiff(repo, { kind: "commit", hash: "other", path: "x" }),
   );
   expect(rows().some((r) => r.className.includes("bg-primary/25"))).toBe(false);
+});
+
+it("links pull requests and URLs in the message", async () => {
+  mocks.refs = {
+    ...snapshot(),
+    remotes: [{ name: "origin", fetchUrl: "git@github.com:ada/engine.git", pushUrl: "" }],
+  };
+  mocks.commit = details({
+    subject: "Add the engine (#29)",
+    body: "See https://example.com/notes.",
+  });
+  await render();
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+  const links = [...container.querySelectorAll("a")].map((a) => [a.textContent, a.href]);
+  expect(links).toEqual([
+    ["#29", "https://github.com/ada/engine/issues/29"],
+    ["https://example.com/notes", "https://example.com/notes"],
+  ]);
+  expect(container.querySelector("h2")!.textContent).toBe("Add the engine (#29)");
+});
+
+it("links merge requests on a self-hosted GitLab, whatever its name", async () => {
+  mocks.gitlabHosts = ["https://git.corp.example.com:8443"];
+  mocks.refs = {
+    ...snapshot(),
+    remotes: [
+      { name: "origin", fetchUrl: "https://git.corp.example.com:8443/group/repo.git", pushUrl: "" },
+    ],
+  };
+  mocks.commit = details({ subject: "Merge branch 'x' into 'main'", body: "See group/repo!1234" });
+  await render();
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+  // Asked at the remote's own port.
+  expect(mocks.probed).toEqual(["https://git.corp.example.com:8443"]);
+  expect([...container.querySelectorAll("a")].map((a) => [a.textContent, a.href])).toEqual([
+    ["group/repo!1234", "https://git.corp.example.com:8443/group/repo/-/merge_requests/1234"],
+  ]);
+  // Hosts known by name are not asked.
+  mocks.probed = [];
+  mocks.refs = {
+    ...snapshot(),
+    remotes: [{ name: "origin", fetchUrl: "git@github.com:ada/engine.git", pushUrl: "" }],
+  };
+  await render();
+  expect(mocks.probed).toEqual([]);
 });

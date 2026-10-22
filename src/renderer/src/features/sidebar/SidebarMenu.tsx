@@ -3,6 +3,7 @@ import { repoLocationOf } from "@shared/domain";
 import { stashKey } from "@shared/visibility";
 import type { ReactNode } from "react";
 import {
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
@@ -13,6 +14,7 @@ import {
 import { platform } from "@/lib/api";
 import { useRefs, useRepoInfo } from "@/lib/queries";
 import { WriteMenuItem } from "@/components/busy";
+import { useSectionStack } from "./SectionStack";
 import { commands } from "../commands";
 import type { Contributor, useVisibility } from "./visibility";
 
@@ -42,7 +44,16 @@ export type SidebarTarget =
     }
   | {
       readonly kind: "section";
-      readonly section: "local" | "remote" | "tags" | "worktrees" | "contributors";
+      readonly section:
+        | "local"
+        | "remote"
+        | "contributors"
+        | "worktrees"
+        | "stashes"
+        | "tags"
+        | "submodules";
+      /** The sidebar's sections, to show or hide. */
+      readonly sections: readonly { readonly id: string; readonly title: string }[];
     };
 
 interface Props {
@@ -73,9 +84,9 @@ function VisibilityItems({ name, vis }: { readonly name: string; readonly vis: P
     <>
       <Sep />
       {vis.isFiltered(name) ? (
-        // Only showing its contributors brings the branch back.
-        <Item onClick={() => vis.showOwners(name)}>
-          Show {possessive(vis.ownersOf(name).map((c) => c.name))} branches
+        // Only showing its owner brings the branch back.
+        <Item onClick={() => vis.showOwner(name)}>
+          Show {vis.ownerOf(name)?.name ?? "its owner"}'s branches
         </Item>
       ) : (
         <>
@@ -89,13 +100,6 @@ function VisibilityItems({ name, vis }: { readonly name: string; readonly vis: P
     </>
   );
 }
-
-/** "Ann's", "Ann and Bob's", "Ann, Bob and Cid's". */
-const possessive = (names: readonly string[]): string => {
-  const list =
-    names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names.at(-1) : (names[0] ?? "");
-  return `${list}'s`;
-};
 
 function ResetItems({ repo, hash, head }: { repo: RepoId; hash: string; head: string }) {
   return (
@@ -505,106 +509,140 @@ export function SidebarMenu({ repo, target, vis }: Props) {
           </>
         );
       };
-      switch (target.section) {
-        case "local":
-          return (
-            <Menu>
-              <WriteMenuItem
-                repo={repo}
-                onClick={() => void commands.createBranch(repo, "HEAD", head)}
-              >
-                Create branch…
-              </WriteMenuItem>
-              <Sep />
-              {groupItems("refs/heads/")}
-            </Menu>
-          );
-        case "remote": {
-          // A single remote is shown without its own row, so offer its actions here.
-          const only = refs?.remotes.length === 1 ? refs.remotes[0] : undefined;
-          return (
-            <Menu>
-              {only ? (
-                <>
-                  <WriteMenuItem
-                    repo={repo}
-                    onClick={() => void commands.fetchRemote(repo, only.name)}
-                  >
-                    Fetch {only.name}
-                  </WriteMenuItem>
-                  <WriteMenuItem
-                    repo={repo}
-                    onClick={() => void commands.editRemoteUrl(repo, only.name, only.fetchUrl)}
-                  >
-                    Edit {only.name} URL…
-                  </WriteMenuItem>
-                  <Item onClick={() => commands.copy(only.fetchUrl, "Remote URL copied")}>
-                    Copy {only.name} URL
-                  </Item>
-                  <Sep />
-                  <WriteMenuItem repo={repo} onClick={() => void commands.addRemote(repo)}>
-                    Add remote…
-                  </WriteMenuItem>
-                </>
-              ) : (
-                <>
-                  <WriteMenuItem repo={repo} onClick={() => void commands.addRemote(repo)}>
-                    Add remote…
-                  </WriteMenuItem>
-                  <WriteMenuItem repo={repo} onClick={() => void commands.fetch(repo)}>
-                    Fetch all
-                  </WriteMenuItem>
-                </>
-              )}
-              <Sep />
-              {groupItems("refs/remotes/")}
-              {only && (
-                <>
-                  <Sep />
-                  <WriteMenuItem
-                    repo={repo}
-                    variant="destructive"
-                    onClick={() => void commands.removeRemote(repo, only.name)}
-                  >
-                    Remove {only.name}
-                  </WriteMenuItem>
-                </>
-              )}
-            </Menu>
-          );
+      const actions = (): ReactNode => {
+        switch (target.section) {
+          case "local":
+            return (
+              <>
+                <WriteMenuItem
+                  repo={repo}
+                  onClick={() => void commands.createBranch(repo, "HEAD", head)}
+                >
+                  Create branch…
+                </WriteMenuItem>
+                <Sep />
+                {groupItems("refs/heads/")}
+              </>
+            );
+          case "remote": {
+            // A single remote is shown without its own row, so offer its actions here.
+            const only = refs?.remotes.length === 1 ? refs.remotes[0] : undefined;
+            return (
+              <>
+                {only ? (
+                  <>
+                    <WriteMenuItem
+                      repo={repo}
+                      onClick={() => void commands.fetchRemote(repo, only.name)}
+                    >
+                      Fetch {only.name}
+                    </WriteMenuItem>
+                    <WriteMenuItem
+                      repo={repo}
+                      onClick={() => void commands.editRemoteUrl(repo, only.name, only.fetchUrl)}
+                    >
+                      Edit {only.name} URL…
+                    </WriteMenuItem>
+                    <Item onClick={() => commands.copy(only.fetchUrl, "Remote URL copied")}>
+                      Copy {only.name} URL
+                    </Item>
+                    <Sep />
+                    <WriteMenuItem repo={repo} onClick={() => void commands.addRemote(repo)}>
+                      Add remote…
+                    </WriteMenuItem>
+                  </>
+                ) : (
+                  <>
+                    <WriteMenuItem repo={repo} onClick={() => void commands.addRemote(repo)}>
+                      Add remote…
+                    </WriteMenuItem>
+                    <WriteMenuItem repo={repo} onClick={() => void commands.fetch(repo)}>
+                      Fetch all
+                    </WriteMenuItem>
+                  </>
+                )}
+                <Sep />
+                {groupItems("refs/remotes/")}
+                {only && (
+                  <>
+                    <Sep />
+                    <WriteMenuItem
+                      repo={repo}
+                      variant="destructive"
+                      onClick={() => void commands.removeRemote(repo, only.name)}
+                    >
+                      Remove {only.name}
+                    </WriteMenuItem>
+                  </>
+                )}
+              </>
+            );
+          }
+          case "tags":
+            return (
+              <>
+                <WriteMenuItem repo={repo} onClick={() => void commands.createTag(repo, "HEAD")}>
+                  Create tag at HEAD…
+                </WriteMenuItem>
+                <Sep />
+                {groupItems("refs/tags/")}
+              </>
+            );
+          case "contributors":
+            return (
+              <>
+                <ContributorItems vis={vis} />
+                {vis.contributors.length === 0 && <Item disabled>No contributors</Item>}
+              </>
+            );
+          case "worktrees":
+            return (
+              <>
+                <WriteMenuItem
+                  repo={repo}
+                  onClick={() => void commands.createWorktree(repo, "HEAD", head)}
+                >
+                  Create worktree…
+                </WriteMenuItem>
+                <WriteMenuItem repo={repo} onClick={() => void commands.pruneWorktrees(repo)}>
+                  Prune stale worktrees
+                </WriteMenuItem>
+              </>
+            );
+          case "stashes":
+          case "submodules":
+            return null;
         }
-        case "tags":
-          return (
-            <Menu>
-              <WriteMenuItem repo={repo} onClick={() => void commands.createTag(repo, "HEAD")}>
-                Create tag at HEAD…
-              </WriteMenuItem>
-              <Sep />
-              {groupItems("refs/tags/")}
-            </Menu>
-          );
-        case "contributors":
-          return (
-            <Menu>
-              <ContributorItems vis={vis} />
-              {vis.contributors.length === 0 && <Item disabled>No contributors</Item>}
-            </Menu>
-          );
-        case "worktrees":
-          return (
-            <Menu>
-              <WriteMenuItem
-                repo={repo}
-                onClick={() => void commands.createWorktree(repo, "HEAD", head)}
-              >
-                Create worktree…
-              </WriteMenuItem>
-              <WriteMenuItem repo={repo} onClick={() => void commands.pruneWorktrees(repo)}>
-                Prune stale worktrees
-              </WriteMenuItem>
-            </Menu>
-          );
-      }
+      };
+      const own = actions();
+      return (
+        <Menu>
+          {own}
+          {own && <Sep />}
+          <SectionToggles sections={target.sections} />
+        </Menu>
+      );
     }
   }
+}
+
+/** Shows or hides each sidebar section; the last one shown stays. */
+function SectionToggles({
+  sections,
+}: {
+  readonly sections: readonly { id: string; title: string }[];
+}) {
+  const hidden = useSectionStack((s) => s.hidden);
+  const setHidden = useSectionStack((s) => s.setHidden);
+  const shown = sections.filter((s) => !hidden[s.id]);
+  return sections.map((s) => (
+    <ContextMenuCheckboxItem
+      key={s.id}
+      checked={!hidden[s.id]}
+      disabled={shown.length === 1 && shown[0] === s}
+      onCheckedChange={(checked) => setHidden(s.id, !checked)}
+    >
+      {s.title}
+    </ContextMenuCheckboxItem>
+  ));
 }

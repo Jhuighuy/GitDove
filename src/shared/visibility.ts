@@ -9,8 +9,8 @@ import type { BranchOwners } from "./domain";
  *
  * The contributor filter lives in the same list: `author:<email>` hides one email
  * and `person:<name>` every email with that name (see `personOf`), like a group
- * prefix. A branch is hidden when all of its owners (see `BranchOwners`) are,
- * whatever its own entry says; that entry is kept for when they are shown again.
+ * prefix. A branch is hidden when its owner (see `BranchOwners`) is, whatever its
+ * own entry says; that entry is kept for when the owner is shown again.
  */
 export const stashKey = (hash: string): string => `stash:${hash}`;
 
@@ -96,7 +96,7 @@ export const isHidden = (hidden: HiddenList, name: string): boolean => {
   return false;
 };
 
-/** Whether the contributor filter hides a branch with these owners. */
+/** Whether the contributor filter hides a branch, by its owner. */
 export const isFilteredOut = (
   hidden: HiddenList,
   name: string,
@@ -104,9 +104,8 @@ export const isFilteredOut = (
 ): boolean => {
   const c = compile(hidden);
   if (!c.contributors) return false;
-  const emails = owners.byRef[name];
-  if (!emails || emails.length === 0) return false;
-  return emails.every((e) => emailHidden(c, e, owners.people));
+  const email = owners.byRef[name];
+  return email !== undefined && emailHidden(c, email, owners.people);
 };
 
 /**

@@ -101,9 +101,15 @@ export function Toolbar({ repo }: { repo: RepoId }) {
           <div className="text-muted-foreground text-[10px] tracking-wide uppercase">
             repository
           </div>
-          <div className="truncate text-sm font-semibold" title={info?.workTree}>
+          <button
+            type="button"
+            className="hover:text-primary block max-w-full cursor-pointer truncate text-sm font-semibold"
+            title={info ? `${info.workTree} (click to copy)` : undefined}
+            disabled={!info}
+            onClick={() => info && commands.copy(info.workTree, "Path copied")}
+          >
             {info?.name ?? "…"}
-          </div>
+          </button>
         </div>
         <div className="min-w-0">
           <div className="text-muted-foreground text-[10px] tracking-wide uppercase">branch</div>

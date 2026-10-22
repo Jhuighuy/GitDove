@@ -103,4 +103,45 @@ it("moves between tabs and closes them from the keyboard", async () => {
   expect(useTabs.getState().active).toBe("a");
   await press(tabs()[0]!, "Delete");
   expect(keys()).toEqual(["b", "c"]);
+  // Shift with an arrow key moves the tab itself, which keeps focus.
+  await press(tabs()[0]!, "ArrowRight");
+  expect(document.activeElement).toBe(tabs()[1]);
+  await act(async () => {
+    tabs()[1]!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", shiftKey: true, bubbles: true }),
+    );
+  });
+  expect(keys()).toEqual(["c", "b"]);
+  expect(document.activeElement).toBe(tabs()[0]);
+  expect(useTabs.getState().active).toBe("c");
+});
+
+it("reorders tabs by dragging them", async () => {
+  // Tabs are 100px wide, side by side.
+  tabs().forEach((el, i) => {
+    el.getBoundingClientRect = () => ({ left: i * 100, width: 100 }) as DOMRect;
+  });
+  const pointer = (target: EventTarget, type: string, clientX: number) =>
+    act(async () => {
+      target.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, clientX }));
+    });
+  await pointer(tabs()[0]!, "pointerdown", 50);
+  // A small wobble is still a click.
+  await pointer(window, "pointermove", 52);
+  expect(keys()).toEqual(["a", "b", "c"]);
+  // Past the middle of "b".
+  await pointer(window, "pointermove", 160);
+  expect(keys()).toEqual(["b", "a", "c"]);
+  await pointer(window, "pointermove", 260);
+  expect(keys()).toEqual(["b", "c", "a"]);
+  await pointer(window, "pointerup", 260);
+  await pointer(window, "pointermove", 0);
+  expect(keys()).toEqual(["b", "c", "a"]);
+  // Leaving the window ends a drag too.
+  await pointer(tabs()[0]!, "pointerdown", 50);
+  await pointer(window, "pointermove", 160);
+  expect(keys()).toEqual(["c", "b", "a"]);
+  await act(async () => window.dispatchEvent(new Event("blur")));
+  await pointer(window, "pointermove", 260);
+  expect(keys()).toEqual(["c", "b", "a"]);
 });

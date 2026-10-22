@@ -68,6 +68,8 @@ export interface Api {
   "shell.openTerminal": (repo: RepoId) => void;
   "shell.revealInFinder": (repo: RepoId, path?: string) => void;
   "shell.openExternal": (url: string) => void;
+  /** Whether a web origin (`https://host:port`) runs GitLab; self-hosted ones have any name. */
+  "web.isGitlab": (origin: string) => boolean;
 
   // Remote hosts
   "ssh.hosts": () => string[];
@@ -104,6 +106,8 @@ export interface Api {
   "repo.unstage": (repo: RepoId, paths: string[]) => void;
   "repo.unstageAll": (repo: RepoId) => void;
   "repo.discard": (repo: RepoId, paths: string[], untracked: string[]) => void;
+  /** Discards every staged and unstaged change and deletes untracked (not ignored) files. */
+  "repo.discardAll": (repo: RepoId) => void;
   "repo.applyPatch": (
     repo: RepoId,
     patch: string,

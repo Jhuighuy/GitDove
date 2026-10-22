@@ -304,7 +304,7 @@ it("indexes refs by hash, without hidden refs", async () => {
           worktrees: [],
           submodules: [],
           owners: {
-            byRef: { "refs/heads/topic": ["ann@x"] },
+            byRef: { "refs/heads/topic": "ann@x" },
             people: { "ann@x": { name: "Ann", time: 0 } },
             me: { email: null, name: null },
           },

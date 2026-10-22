@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   status: null as unknown,
   info: null as unknown,
   listeners: new Map<string, (payload: unknown) => void>(),
-  commands: { abort: vi.fn(), continue: vi.fn(), discard: vi.fn() },
+  commands: { abort: vi.fn(), continue: vi.fn(), discard: vi.fn(), discardAll: vi.fn() },
   toast: {
     loading: vi.fn(),
     success: vi.fn(),
@@ -197,6 +197,21 @@ it("stages, unstages and discards files", async () => {
   await settle();
   expect(apiCalls("repo.stageAll")).toEqual([[repo]]);
   expect(apiCalls("repo.unstageAll")).toEqual([[repo]]);
+});
+
+it("discards all changes, but not in the middle of a merge", async () => {
+  const discardAll = () =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="Discard all changes"]');
+  await render();
+  await click(discardAll()!);
+  expect(mocks.commands.discardAll.mock.calls).toEqual([[repo]]);
+  mocks.info = info({ state: "merging" });
+  await render();
+  expect(discardAll()!.disabled).toBe(true);
+  mocks.status = status({ staged: [], unstaged: [] });
+  mocks.info = info();
+  await render();
+  expect(discardAll()).toBeNull();
 });
 
 it("disables staging, discarding and committing while another operation runs", async () => {

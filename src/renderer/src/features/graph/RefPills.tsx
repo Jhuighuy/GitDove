@@ -97,6 +97,8 @@ export const RefPills = memo(function RefPills({ refs, color, onDoubleClick }: P
   );
 });
 
+const LOCATION_ICON = "size-3 shrink-0 opacity-70 @max-[130px]:hidden";
+
 /** Padding around the expanded pills, in pixels (`p-0.5`). */
 const POPUP_PAD = 2;
 
@@ -129,11 +131,12 @@ function PillView({
         onDoubleClick?.(ref);
       }}
     >
-      {head && <IconCheck className="size-3 shrink-0" />}
-      <span className="truncate">{pill.label}</span>
-      {pill.local && <IconDeviceLaptop className="size-3 shrink-0 opacity-70" />}
-      {pill.remotes.length > 0 && <IconCloud className="size-3 shrink-0 opacity-70" />}
-      {pill.tag && <IconTag className="size-3 shrink-0 opacity-70" />}
+      {head && <IconCheck className="size-3 shrink-0 @max-[80px]:hidden" />}
+      <span className="min-w-0 truncate">{pill.label}</span>
+      {/* In a narrow branch column, the name keeps the room (the tooltip still tells). */}
+      {pill.local && <IconDeviceLaptop className={LOCATION_ICON} />}
+      {pill.remotes.length > 0 && <IconCloud className={LOCATION_ICON} />}
+      {pill.tag && <IconTag className={LOCATION_ICON} />}
     </span>
   );
 }

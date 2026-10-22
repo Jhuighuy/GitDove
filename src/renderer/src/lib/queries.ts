@@ -57,6 +57,7 @@ export const keys = {
     [...keys.diffs(repo), target, "versions"] as const,
   searches: (repo: RepoId) => ["repo", repo, "search"] as const,
   search: (repo: RepoId, q: string) => [...keys.searches(repo), q] as const,
+  isGitlab: (origin: string) => ["web", "isGitlab", origin] as const,
 };
 
 export const useRepoInfo = (repo: RepoId) =>

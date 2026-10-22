@@ -42,6 +42,8 @@ const updater = vi.hoisted(() => ({
   install: vi.fn(),
 }));
 vi.mock("./updater", () => ({ updater }));
+const avatars = vi.hoisted(() => ({ isGitlab: vi.fn() }));
+vi.mock("./avatars", () => avatars);
 /** Terminal launchers are faked; everything else really runs. */
 const terminals = vi.hoisted(() => ({
   /** Programs that are "not installed". */
@@ -251,6 +253,31 @@ describe("shell handlers", () => {
     expect(await callExit("shell.openExternal", "https://x.org")).toEqual(
       Exit.fail(new InvalidInputError({ message: "Cannot open https://x.org: no handler" })),
     );
+  });
+
+  it("asks only plausible web origins whether they run GitLab", async () => {
+    avatars.isGitlab.mockImplementation((origin: string) =>
+      Effect.succeed(origin !== "https://git.other.io"),
+    );
+    expect(await call("web.isGitlab", "https://git.corp.io")).toBe(true);
+    // With its own scheme and port.
+    expect(await call("web.isGitlab", "http://code.corp.io:8443")).toBe(true);
+    expect(await call("web.isGitlab", "https://git.other.io")).toBe(false);
+    // Not asked: GitHub, ssh aliases, and anything that is not a bare http(s) origin.
+    for (const origin of [
+      "https://github.com",
+      "https://fedora",
+      "git.corp.io",
+      "https://git.corp.io/path",
+      "ftp://git.corp.io",
+      "https://user@git.corp.io",
+    ])
+      expect(await call("web.isGitlab", origin)).toBe(false);
+    expect(avatars.isGitlab.mock.calls).toEqual([
+      ["https://git.corp.io"],
+      ["http://code.corp.io:8443"],
+      ["https://git.other.io"],
+    ]);
   });
 
   it("reveals local files and folders", async () => {

@@ -51,6 +51,7 @@ done
 count() { n=$(cat "$d/$1" 2>/dev/null || echo 0); n=$((n + 1)); echo $n >"$d/$1"; echo $n; }
 if [ -n "$master" ]; then
   echo "master $host" >>"$d/log"
+  echo "master $cp" >>"$d/paths"
   case $host in
     denied|down) echo "debug1: trying key" >&2; echo "Permission denied (publickey)." >&2; exit 255 ;;
     later) if [ "$(count later-masters)" = 1 ]; then
@@ -68,6 +69,7 @@ if [ "$op" = check ]; then
 fi
 if [ -n "$op" ]; then
   echo "$op $(cat "$cp.alias" 2>/dev/null || echo "$cp")" >>"$d/log"
+  echo "$op $cp" >>"$d/paths"
   exit 0
 fi
 case $host in
@@ -319,6 +321,25 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
       expect(paths.size).toBe(2);
       for (const p of paths)
         expect(p.startsWith(`ControlPath=${join(state, "control")}/`)).toBe(true);
+    });
+
+    it("gives every master its own control socket", async () => {
+      // Two apps (or test workers) on one host: closing one must not close the other's master.
+      const a = hostsRuntime();
+      const b = hostsRuntime();
+      await a.run((h) => h.connect("good"));
+      await b.run((h) => h.connect("good"));
+      const paths = (kind: string) =>
+        readFileSync(join(state, "paths"), "utf8")
+          .split("\n")
+          .filter((l) => l.startsWith(`${kind} `))
+          .map((l) => l.slice(kind.length + 1));
+      const [first, second] = paths("master");
+      expect(first).not.toBe(second);
+      await a.runtime.dispose();
+      expect(paths("exit")).toEqual([first]);
+      await b.runtime.dispose();
+      expect(paths("exit")).toEqual([first, second]);
     });
 
     it("keeps command semantics on the runner", async () => {

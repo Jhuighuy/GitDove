@@ -189,9 +189,18 @@ const closeOrphanedMasters = (rootDir?: string) =>
     }
   }).pipe(Effect.ignore);
 
-/** The socket of `host`'s master: named after the alias, not after where it leads. */
-const controlPathFor = (host: string, root?: string) =>
-  join(controlDir(root), createHash("sha256").update(host).digest("hex").slice(0, 16));
+/** `Hosts` layers built so far, so that two in one process (as in tests) never share a master. */
+let layers = 0;
+
+/**
+ * The socket of `host`'s master in one `Hosts` layer: named after the alias, not after where it
+ * leads, so that closing one master never closes another's.
+ */
+const controlPathFor = (host: string, layer: number, root?: string) =>
+  join(
+    controlDir(root),
+    `${layer.toString(36)}-${createHash("sha256").update(host).digest("hex").slice(0, 16)}`,
+  );
 
 const baseSshOptions = [
   "-o",
@@ -225,11 +234,11 @@ const control = (controlPath: string, op: "check" | "exit", host: string) =>
 const lastLine = (stderr: string) => stderr.trim().split("\n").at(-1)?.trim() ?? "";
 
 /** Starts a long-lived SSH master connection that all commands multiplex over. */
-const acquireMaster = (host: string, root: string | undefined) =>
+const acquireMaster = (host: string, layer: number, root: string | undefined) =>
   Effect.acquireRelease(
     Effect.gen(function* () {
       const controlPath = yield* Effect.try({
-        try: () => controlPathFor(host, root),
+        try: () => controlPathFor(host, layer, root),
         catch: (e) =>
           new SshError({
             message: `Could not connect to ${host}: ${e instanceof Error ? e.message : String(e)}`,
@@ -701,10 +710,13 @@ export const makeHostsLayer = (
     Hosts,
     Effect.gen(function* () {
       const multiplex = options.multiplex ?? MULTIPLEX;
+      const layer = ++layers;
       if (multiplex) yield* Effect.forkDetach(closeOrphanedMasters(options.controlDir));
       const masters = yield* RcMap.make({
         lookup: (host: string) =>
-          multiplex ? acquireMaster(host, options.controlDir) : Effect.succeed(DIRECT as SshMaster),
+          multiplex
+            ? acquireMaster(host, layer, options.controlDir)
+            : Effect.succeed(DIRECT as SshMaster),
         idleTimeToLive: "10 minutes",
       });
       const backoff = new Backoff();
