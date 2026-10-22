@@ -78,6 +78,12 @@ export interface Api {
   // Repository lifecycle
   "repo.open": (location: RepoLocation) => RepoInfo;
   "repo.close": (repo: RepoId) => void;
+  /**
+   * Whether the caller shows the repository (e.g. in its active tab); repositories start out
+   * shown. Hidden ones do as little as possible: their remote is polled rarely, and file
+   * changes and graph checks wait until they are shown. Does not open the repository.
+   */
+  "repo.setVisible": (repo: RepoId, visible: boolean) => void;
   "repo.init": (location: RepoLocation) => RepoInfo;
   "repo.clone": (url: string, location: RepoLocation) => RepoInfo;
 

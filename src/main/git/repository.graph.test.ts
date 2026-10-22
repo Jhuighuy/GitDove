@@ -96,6 +96,21 @@ describe.skipIf(noShell).each(targets)("Repository graph on %s", (hostId) => {
     expect((await complete(repo, next.version)).count).toBe(2);
   });
 
+  it("checks the graph of a hidden repository once it is shown", async () => {
+    const events: GraphInfo[] = [];
+    const repo = await t.open(t.dir, { onGraphProgress: (_, info) => void events.push(info) });
+    const g = await complete(repo);
+    const settled = events.length;
+    repo.setVisible(false);
+    await sh("git commit -q --allow-empty -m hidden");
+    repo.invalidateGraph();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(events).toHaveLength(settled);
+    repo.setVisible(true);
+    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ count: 3, complete: true }));
+    expect(events.at(-1)!.version).toBeGreaterThan(g.version);
+  });
+
   it("reloads the graph after its own writes, without file system events", async () => {
     const g = await complete(t.repo);
     await sh("echo e > e.txt && git add e.txt");

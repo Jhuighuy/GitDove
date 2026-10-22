@@ -54,12 +54,13 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
   /** Watches a repository and records every notification. */
   const watch = (repo: Repository) => {
     const batches: Set<RepoChangeScope>[] = [];
-    const dispose = watchRepository(repo, (s) => batches.push(s));
+    const { dispose, setVisible } = watchRepository(repo, (s) => batches.push(s));
     disposers.push(dispose);
     const seen = () => new Set(batches.flatMap((b) => [...b]));
     return {
       batches,
       dispose,
+      setVisible,
       /**
        * Repeats `action` until `scope` is reported. Subscriptions start
        * asynchronously, so the first attempts may go unnoticed.
@@ -163,6 +164,32 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
     w.dispose();
     await w.quiet();
     touch(join(dir, "after"));
+    await sleep(500);
+    expect(w.batches).toEqual([]);
+  });
+
+  it("holds changes while hidden and reports them once shown", async () => {
+    const dir = freshRepo("hidden");
+    writeFileSync(join(dir, ".gitignore"), "target/\n");
+    const w = watch(localRepo({ workTree: dir, gitDir: join(dir, ".git") }));
+    await w.until("worktree", () => touch(join(dir, "probe")));
+    await w.quiet();
+    w.setVisible(false);
+    touch(join(dir, "a.txt"));
+    git(dir, "add", "a.txt");
+    await sleep(800);
+    expect(w.batches).toEqual([]);
+    w.setVisible(true);
+    expect(w.batches).toEqual([new Set(["worktree", "index"])]);
+    w.batches.length = 0;
+
+    // Only ignored files changed meanwhile: still nothing to report.
+    w.setVisible(false);
+    mkdirSync(join(dir, "target"), { recursive: true });
+    await sleep(300);
+    touch(join(dir, "target", "out"));
+    await sleep(800);
+    w.setVisible(true);
     await sleep(500);
     expect(w.batches).toEqual([]);
   });
@@ -278,7 +305,7 @@ describe("watchRepository on a remote repository", () => {
       state("ref: refs/heads/dev", "2.20", "444 5", "333 9", "2.2"),
     ]);
     const batches: RepoChangeScope[][] = [];
-    const dispose = watchRepository(repo, (s) => batches.push([...s].toSorted()));
+    const { dispose } = watchRepository(repo, (s) => batches.push([...s].toSorted()));
 
     await vi.advanceTimersByTimeAsync(0);
     expect(polls).toHaveBeenCalledTimes(1);
@@ -320,7 +347,7 @@ describe("watchRepository on a remote repository", () => {
     vi.useFakeTimers();
     const { repo, polls } = remoteRepo([state("x", "1", "2", "3")]);
     activity.setFocused(false);
-    const dispose = watchRepository(repo, () => {});
+    const { dispose } = watchRepository(repo, () => {});
     await vi.advanceTimersByTimeAsync(0);
     expect(polls).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(14_000);
@@ -333,6 +360,34 @@ describe("watchRepository on a remote repository", () => {
     expect(polls).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(2000);
     expect(polls).toHaveBeenCalledTimes(4);
+    dispose();
+  });
+
+  it("polls a hidden repository rarely, and right away once it is shown", async () => {
+    vi.useFakeTimers();
+    const { repo, polls } = remoteRepo([state("x", "1", "2", "3")]);
+    const { dispose, setVisible } = watchRepository(repo, () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls).toHaveBeenCalledTimes(1);
+    setVisible(false);
+    // The wait that began while it was shown ends as usual; the next ones are long.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(polls).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(polls).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(polls).toHaveBeenCalledTimes(3);
+    // The app coming to the front does not wake hidden repositories…
+    activity.setFocused(false);
+    activity.setFocused(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls).toHaveBeenCalledTimes(3);
+    // …showing them does.
+    setVisible(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(polls).toHaveBeenCalledTimes(5);
     dispose();
   });
 });

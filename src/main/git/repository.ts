@@ -462,6 +462,9 @@ export class Repository {
   private graphFailures = 0;
   private graphError: string | null = null;
   private disposed = false;
+  private visible = true;
+  /** Refs or HEAD changed while the repository was hidden. */
+  private changedWhileHidden = false;
   private hiddenRefs: ReadonlySet<string> = new Set();
   /** Local changes: the index, the work tree and local refs. */
   private readonly writes = Semaphore.makeUnsafe(1);
@@ -929,6 +932,11 @@ export class Repository {
   invalidateGraph(): void {
     this.graphDirty = true;
     if (this.disposed || (!this.graph && !this.graphLoad)) return;
+    if (!this.visible) {
+      // Checked once the repository is shown again (or the graph is asked for).
+      this.changedWhileHidden = true;
+      return;
+    }
     if (this.graphCheck) Effect.runFork(Fiber.interrupt(this.graphCheck));
     const fiber = this.fork(
       this.graphState().pipe(
@@ -962,6 +970,17 @@ export class Repository {
       ),
     );
     this.graphCheck = fiber;
+  }
+
+  /**
+   * Whether the repository is shown (e.g. its tab is active). A hidden repository does not
+   * check its graph when refs change, but once it is shown again.
+   */
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (!visible || !this.changedWhileHidden) return;
+    this.changedWhileHidden = false;
+    this.invalidateGraph();
   }
 
   /** Stops loading the graph for good: the repository was closed. */

@@ -18,6 +18,7 @@ const fake = vi.hoisted(() => ({
     repo: { id: string };
     listener: (s: Set<string>) => void;
     dispose: Mock<() => void>;
+    setVisible: Mock<(visible: boolean) => void>;
   }[],
 }));
 
@@ -46,6 +47,7 @@ vi.mock("./git/repository", async () => {
         hooks,
         setHiddenRefs: vi.fn(),
         invalidateGraph: vi.fn(),
+        setVisible: vi.fn(),
         dispose: vi.fn(),
       } as unknown as Repository;
     }),
@@ -57,8 +59,9 @@ vi.mock("electron-log/main", () => ({ default: log }));
 vi.mock("./git/watcher", () => ({
   watchRepository: vi.fn((repo: { id: string }, listener: (s: Set<string>) => void) => {
     const dispose = vi.fn();
-    fake.watchers.push({ repo, listener, dispose });
-    return dispose;
+    const setVisible = vi.fn();
+    fake.watchers.push({ repo, listener, dispose, setVisible });
+    return { dispose, setVisible };
   }),
 }));
 
@@ -277,6 +280,42 @@ describe("Repos", () => {
     );
     expect(repo.dispose).toHaveBeenCalledTimes(1);
     expect(fake.watchers[0]!.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides a repository that no owner shows", async () => {
+    const { run } = repos();
+    const repo = await run((r) => r.open(local("/repo/sub"), 1));
+    const watcher = fake.watchers[0]!;
+    const shown = () => vi.mocked(repo.setVisible).mock.calls.map(([v]) => v);
+
+    // By an alias too.
+    await run((r) => r.setVisible("local:/repo/sub", 1, false));
+    expect(shown()).toEqual([false]);
+    expect(watcher.setVisible.mock.calls).toEqual([[false]]);
+    // Another window shows it.
+    await run((r) => r.get("local:/repo", 2));
+    expect(shown()).toEqual([false, true]);
+    await run((r) => r.setVisible("local:/repo", 2, false));
+    await run((r) => r.setVisible("local:/repo", 2, false));
+    expect(shown()).toEqual([false, true, false]);
+    // The window that hid it last goes away; the other one still hides it.
+    await run((r) => r.releaseAll(2));
+    expect(shown()).toEqual([false, true, false]);
+    await run((r) => r.setVisible("local:/repo/sub", 1, true));
+    expect(shown()).toEqual([false, true, false, true]);
+    expect(watcher.setVisible.mock.calls).toEqual([[false], [true], [false], [true]]);
+  });
+
+  it("remembers that a repository is hidden without opening it", async () => {
+    const { run } = repos();
+    await run((r) => r.setVisible("local:/repo", 1, false));
+    expect(fake.open).not.toHaveBeenCalled();
+    const repo = await run((r) => r.open(local("/repo"), 1));
+    expect(repo.setVisible).toHaveBeenCalledWith(false);
+    // Closing it forgets that: reopened, it is shown.
+    await run((r) => r.release("local:/repo", 1));
+    const again = await run((r) => r.open(local("/repo"), 1));
+    expect(again.setVisible).not.toHaveBeenCalled();
   });
 
   it("rejects malformed ids", async () => {

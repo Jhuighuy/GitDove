@@ -6,7 +6,7 @@ import { Cause, Context, Deferred, Effect, Exit, FiberSet, Layer, Logger } from 
 import { InvalidInputError, type NotARepositoryError, RepoNotOpenError } from "./exec/errors";
 import { Hosts, LOCAL_HOST } from "./exec/hosts";
 import { type GitError, Repository } from "./git/repository";
-import { watchRepository } from "./git/watcher";
+import { type Watch, watchRepository } from "./git/watcher";
 
 /** Pushes events to the renderer(s). */
 export class Notifier extends Context.Service<
@@ -51,6 +51,9 @@ export type Owner = number;
 interface Entry {
   readonly repo: Repository;
   readonly owners: Set<Owner>;
+  readonly watch: Watch;
+  /** Whether some owner shows it (see `Repos.setVisible`). */
+  visible: boolean;
   readonly dispose: () => void;
 }
 
@@ -79,6 +82,12 @@ export class Repos extends Context.Service<
     readonly release: (id: RepoId, owner: Owner) => Effect.Effect<void>;
     /** `owner` went away (e.g. its window closed): releases everything it used. */
     readonly releaseAll: (owner: Owner) => Effect.Effect<void>;
+    /**
+     * Whether `owner` shows the repository (e.g. in its active tab). A repository that no owner
+     * shows does as little as possible: its remote is polled rarely, and file changes and graph
+     * checks wait until it is shown. Never opens the repository.
+     */
+    readonly setVisible: (id: RepoId, owner: Owner, visible: boolean) => Effect.Effect<void>;
   }
 >()("gitdove/Repos") {}
 
@@ -101,20 +110,46 @@ export const ReposLive = Layer.effect(
     /** Ids (canonical or aliases) explicitly closed and not opened again since. */
     const closed = new Set<RepoId>();
     const lookup = (id: RepoId) => entries.get(aliases.get(id) ?? id);
+    /** Ids, as owners name them -> owners that do not show them (see `setVisible`). */
+    const hiddenBy = new Map<RepoId, Set<Owner>>();
+    /** The ids an entry is known by: its own and its aliases. */
+    const idsOf = (entry: Entry) => [
+      entry.repo.id,
+      ...[...aliases].flatMap(([k, v]) => (v === entry.repo.id ? [k] : [])),
+    ];
+
+    /** Shows or hides a repository: it is shown while some owner (or nobody yet) shows it. */
+    const updateVisibility = (entry: Entry) => {
+      const ids = idsOf(entry);
+      const shows = (o: Owner) => !ids.some((id) => hiddenBy.get(id)?.has(o));
+      const visible = entry.owners.size === 0 || [...entry.owners].some(shows);
+      if (visible === entry.visible) return;
+      entry.visible = visible;
+      entry.repo.setVisible(visible);
+      entry.watch.setVisible(visible);
+    };
+
+    /** Forgets which of `ids` `owner` hid. */
+    const unhide = (owner: Owner, ids: Iterable<RepoId>) => {
+      for (const id of ids) {
+        const set = hiddenBy.get(id);
+        if (set?.delete(owner) && set.size === 0) hiddenBy.delete(id);
+      }
+    };
 
     const register = (repo: Repository): Entry => {
       const existing = entries.get(repo.id);
       if (existing) return existing;
       repo.setHiddenRefs(settings.hidden(repo.id));
-      const unwatch = watchRepository(repo, (scopes) => {
+      const watch = watchRepository(repo, (scopes) => {
         if (scopes.has("refs") || scopes.has("head")) repo.invalidateGraph();
         notifier.emit("repo.changed", { repo: repo.id, scopes: [...scopes] });
       });
       const dispose = () => {
-        unwatch();
+        watch.dispose();
         repo.dispose();
       };
-      const entry = { repo, owners: new Set<Owner>(), dispose };
+      const entry: Entry = { repo, owners: new Set<Owner>(), watch, visible: true, dispose };
       entries.set(repo.id, entry);
       return entry;
     };
@@ -141,6 +176,7 @@ export const ReposLive = Layer.effect(
         if (ready) {
           ready.owners.add(owner);
           closed.delete(ready.repo.id);
+          updateVisibility(ready);
           return Effect.succeed(ready.repo);
         }
         let waiting = claims.get(requested);
@@ -175,6 +211,7 @@ export const ReposLive = Layer.effect(
             for (const o of owners) entry.owners.add(o);
             // Every owner closed it while it was opening.
             if (entry.owners.size === 0) closeEntry(entry);
+            else updateVisibility(entry);
             return Deferred.succeed(deferred, entry.repo);
           }),
           Effect.map((entry) => entry.repo),
@@ -186,7 +223,10 @@ export const ReposLive = Layer.effect(
         (): Effect.Effect<Repository, OpenError | RepoNotOpenError | InvalidInputError> => {
           const entry = lookup(id);
           if (entry) {
-            entry.owners.add(owner);
+            if (!entry.owners.has(owner)) {
+              entry.owners.add(owner);
+              updateVisibility(entry);
+            }
             return Effect.succeed(entry.repo);
           }
           if (closed.has(id)) {
@@ -209,9 +249,10 @@ export const ReposLive = Layer.effect(
         const waiting = claims.get(id);
         waiting?.delete(owner);
         const entry = lookup(id);
+        unhide(owner, entry ? [id, ...idsOf(entry)] : [id]);
         if (entry) {
           entry.owners.delete(owner);
-          if (entry.owners.size > 0) return;
+          if (entry.owners.size > 0) return updateVisibility(entry);
           closed.add(entry.repo.id);
           for (const [k, v] of aliases) if (v === entry.repo.id) closed.add(k);
           closeEntry(entry);
@@ -222,9 +263,24 @@ export const ReposLive = Layer.effect(
     const releaseAll = (owner: Owner) =>
       Effect.sync(() => {
         for (const waiting of claims.values()) waiting.delete(owner);
+        unhide(owner, [...hiddenBy.keys()]);
         for (const entry of entries.values()) {
-          if (entry.owners.delete(owner) && entry.owners.size === 0) closeEntry(entry);
+          if (!entry.owners.delete(owner)) continue;
+          if (entry.owners.size === 0) closeEntry(entry);
+          else updateVisibility(entry);
         }
+      });
+
+    const setVisible = (id: RepoId, owner: Owner, visible: boolean) =>
+      Effect.sync(() => {
+        if (visible) unhide(owner, [id]);
+        else {
+          let set = hiddenBy.get(id);
+          if (!set) hiddenBy.set(id, (set = new Set()));
+          set.add(owner);
+        }
+        const entry = lookup(id);
+        if (entry) updateVisibility(entry);
       });
 
     yield* Effect.addFinalizer(() =>
@@ -239,6 +295,7 @@ export const ReposLive = Layer.effect(
       get,
       release,
       releaseAll,
+      setVisible,
     };
   }),
 );

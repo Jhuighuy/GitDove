@@ -328,13 +328,22 @@ export const refreshRepo = (
 ): Promise<void> =>
   Promise.all([...new Set(scopes)].map((s) => refetchScope(client, repo, s))).then(() => {});
 
-/** Sets which repositories are in background tabs; those brought forward catch up. */
+/** Tells the main process whether a repository is shown, so hidden ones do little work there. */
+const setVisible = (repo: RepoId, visible: boolean) =>
+  void api("repo.setVisible", repo, visible).catch(() => {});
+
+/**
+ * Sets which repositories are in background tabs; those brought forward catch up. The main
+ * process polls and checks background repositories less (see `repo.setVisible`).
+ */
 export const setBackgroundRepos = (repos: Iterable<RepoId>, client: QueryClient = queryClient) => {
   const next = new Set(repos);
   for (const repo of background) {
     if (next.has(repo)) continue;
+    setVisible(repo, true);
     void client.refetchQueries({ queryKey: keys.repo(repo), type: "active", stale: true });
   }
+  for (const repo of next) if (!background.has(repo)) setVisible(repo, false);
   background.clear();
   for (const repo of next) background.add(repo);
 };

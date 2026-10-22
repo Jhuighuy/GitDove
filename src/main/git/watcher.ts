@@ -116,11 +116,13 @@ const ignoredPaths = (repo: Repository, paths: readonly string[]): Effect.Effect
  * Watches a local repository with native file system events, and falls back to polling when
  * they are not available (e.g. out of inotify watches, or a network file system).
  */
-const watchLocal = (repo: Repository, listener: ChangeListener): (() => void) => {
+const watchLocal = (repo: Repository, listener: ChangeListener): Watch => {
   let disposed = false;
-  let stopPolling: (() => void) | null = null;
-  const batch = batcher((scopes, paths) => {
-    if (disposed) return;
+  let polling: Watch | null = null;
+  let visible = true;
+  /** Changes made while the repository was hidden, reported once it is shown. */
+  let held: { scopes: Set<RepoChangeScope>; paths: string[] | null } | null = null;
+  const deliver = (scopes: Set<RepoChangeScope>, paths: string[] | null) => {
     // Only ignored files changed (e.g. build output): nothing to show.
     if (scopes.size === 1 && scopes.has("worktree") && paths && paths.length > 0) {
       repo.fork(
@@ -131,6 +133,16 @@ const watchLocal = (repo: Repository, listener: ChangeListener): (() => void) =>
       return;
     }
     listener(scopes);
+  };
+  const batch = batcher((scopes, paths) => {
+    if (disposed) return;
+    if (visible) return deliver(scopes, paths);
+    held ??= { scopes: new Set(), paths: [] };
+    for (const s of scopes) held.scopes.add(s);
+    held.paths =
+      held.paths && paths && held.paths.length + paths.length <= MAX_PATHS
+        ? [...held.paths, ...paths]
+        : null;
   });
   const everything = () => {
     for (const s of ALL_SCOPES) batch.add(s);
@@ -153,7 +165,7 @@ const watchLocal = (repo: Repository, listener: ChangeListener): (() => void) =>
         .catch((e: unknown) => {
           if (disposed) return null;
           log.warn(`Cannot watch ${dir}, polling instead:`, e);
-          stopPolling ??= pollRepository(repo, listener);
+          polling ??= pollRepository(repo, listener, visible);
           return null;
         }),
     );
@@ -189,35 +201,37 @@ const watchLocal = (repo: Repository, listener: ChangeListener): (() => void) =>
     );
   }
 
-  return () => {
-    disposed = true;
-    batch.dispose();
-    stopPolling?.();
-    for (const s of subscriptions) {
-      void s.then((sub) => sub?.unsubscribe()).catch(() => {});
-    }
+  return {
+    dispose: () => {
+      disposed = true;
+      batch.dispose();
+      polling?.dispose();
+      for (const s of subscriptions) {
+        void s.then((sub) => sub?.unsubscribe()).catch(() => {});
+      }
+    },
+    setVisible: (value) => {
+      visible = value;
+      polling?.setVisible(value);
+      if (!value || !held || disposed) return;
+      const { scopes, paths } = held;
+      held = null;
+      deliver(scopes, paths);
+    },
   };
 };
 
-/** How often to poll while the app is in front, and while it is not. */
+/** How often to poll while the app is in front, while it is not, and hidden repositories. */
 const POLL_ACTIVE = Duration.seconds(2);
 const POLL_BACKGROUND = Duration.seconds(15);
-
-/** Sleeps, but wakes up early when the app becomes active again. */
-const sleepUnlessWoken = (duration: Duration.Duration) =>
-  Effect.raceFirst(
-    Effect.sleep(duration),
-    Effect.callback<void>((resume) => {
-      const stop = activity.onActive(() => resume(Effect.void));
-      return Effect.sync(() => void stop());
-    }),
-  );
+const POLL_HIDDEN = Duration.seconds(30);
 
 /**
  * Polls a repository for changes: remote ones, and local ones that cannot be watched. Each
- * poll is a single cheap shell invocation over the multiplexed SSH connection.
+ * poll is a single cheap shell invocation over the multiplexed SSH connection. A hidden
+ * repository (e.g. in a background tab) is polled rarely, and right away once it is shown.
  */
-const pollRepository = (repo: Repository, listener: ChangeListener): (() => void) => {
+const pollRepository = (repo: Repository, listener: ChangeListener, visible = true): Watch => {
   const script = String.raw`
 gd=${shellQuote(repo.gitDir)}
 common=${shellQuote(repo.commonDir)}
@@ -255,17 +269,53 @@ printf 'W:'; git status --porcelain=v2 -z --untracked-files=all --no-renames 2>/
     Effect.ignore,
   );
 
+  /** Ends the current wait early. */
+  const wakers = new Set<() => void>();
+  /**
+   * Waits until the next poll. A visible repository is also polled when the app becomes active
+   * again; a hidden one only when it is shown.
+   */
+  const pause = Effect.suspend(() =>
+    Effect.raceFirst(
+      Effect.sleep(!visible ? POLL_HIDDEN : activity.isActive() ? POLL_ACTIVE : POLL_BACKGROUND),
+      Effect.callback<void>((resume) => {
+        const wake = () => resume(Effect.void);
+        wakers.add(wake);
+        const stop = visible ? activity.onActive(wake) : () => {};
+        return Effect.sync(() => {
+          wakers.delete(wake);
+          stop();
+        });
+      }),
+    ),
+  );
+
   const loop = Effect.gen(function* () {
     for (;;) {
       yield* poll;
-      yield* sleepUnlessWoken(activity.isActive() ? POLL_ACTIVE : POLL_BACKGROUND);
+      yield* pause;
     }
   });
   const fiber = repo.fork(loop);
-  return () => {
-    Effect.runFork(Fiber.interrupt(fiber));
+  return {
+    dispose: () => {
+      Effect.runFork(Fiber.interrupt(fiber));
+    },
+    setVisible: (value) => {
+      const shown = value && !visible;
+      visible = value;
+      // A copy: a woken loop may poll and wait again right away, which must not end at once.
+      if (shown) for (const wake of Array.from(wakers)) wake();
+    },
   };
 };
 
-export const watchRepository = (repo: Repository, listener: ChangeListener): (() => void) =>
+/** Watches a repository; hidden repositories do as little as possible until shown. */
+export interface Watch {
+  readonly dispose: () => void;
+  /** Whether the repository is shown; changes made while hidden are reported once it is. */
+  readonly setVisible: (visible: boolean) => void;
+}
+
+export const watchRepository = (repo: Repository, listener: ChangeListener): Watch =>
   repo.host.kind === "local" ? watchLocal(repo, listener) : pollRepository(repo, listener);

@@ -154,6 +154,10 @@ const layer = Layer.mergeAll(
     release: (id, owner) =>
       Effect.sync(() => void services.connected.push(`close ${id} by ${owner}`)),
     releaseAll: (owner) => Effect.sync(() => void services.connected.push(`release ${owner}`)),
+    setVisible: (id, owner, visible) =>
+      Effect.sync(
+        () => void services.connected.push(`${visible ? "show" : "hide"} ${id} by ${owner}`),
+      ),
   }),
   Layer.succeed(Hosts, {
     get: (id) => {
@@ -495,6 +499,14 @@ describe("repository lifecycle handlers", () => {
     await call("repo.close", "local:/a");
     expect(services.connected).toEqual(["close local:/a by 1"]);
     expect(services.owners).toEqual([1]);
+  });
+
+  it("shows and hides repositories without opening them", async () => {
+    services.getRepo = () => Effect.die("must not open");
+    await call("repo.setVisible", "local:/a", false);
+    await call("repo.setVisible", "local:/a", true);
+    expect(services.connected).toEqual(["hide local:/a by 1", "show local:/a by 1"]);
+    expect(services.owners).toEqual([]);
   });
 
   it("initializes a repository on its host, then opens it", async () => {

@@ -118,6 +118,7 @@ const argSchemas = {
   "ssh.listDir": argsOf(SshHost, Schema.NullOr(Str)),
   "repo.open": argsOf(Location),
   "repo.close": repoArgs(),
+  "repo.setVisible": repoArgs(Bool),
   "repo.init": argsOf(Location),
   "repo.clone": argsOf(Str, Location),
   "repo.info": repoArgs(),
@@ -424,6 +425,10 @@ export const handlers: Handlers = {
   "repo.close": (id) =>
     Effect.gen(function* () {
       yield* (yield* Repos).release(id, yield* owner);
+    }),
+  "repo.setVisible": (id, visible) =>
+    Effect.gen(function* () {
+      yield* (yield* Repos).setVisible(id, yield* owner, visible);
     }),
   "repo.init": (location) =>
     Effect.gen(function* () {

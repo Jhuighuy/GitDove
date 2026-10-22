@@ -446,14 +446,22 @@ it("holds change events back while an operation runs in the repository", async (
 
 it("only marks data of background repositories stale, and refetches it when shown", async () => {
   mocks.api.mockResolvedValue("status");
+  const statusCalls = () => calls().filter(([method]) => method === "repo.status");
+  const visibility = () => calls().filter(([method]) => method === "repo.setVisible");
   await renderHook(() => [q.useRepoEvents(), q.useStatus(repo)], null);
-  await until(() => expect(calls()).toHaveLength(1));
+  await until(() => expect(statusCalls()).toHaveLength(1));
+  q.setBackgroundRepos([repo], client);
   q.setBackgroundRepos([repo], client);
   await act(async () => q.refreshRepo(repo, ["status"], client));
-  expect(calls()).toHaveLength(1);
+  expect(statusCalls()).toHaveLength(1);
   expect(client.getQueryState(keys.status(repo))?.isInvalidated).toBe(true);
   q.setBackgroundRepos([], client);
-  await until(() => expect(calls()).toHaveLength(2));
+  await until(() => expect(statusCalls()).toHaveLength(2));
+  // The main process is told only about changes.
+  expect(visibility()).toEqual([
+    ["repo.setVisible", repo, false],
+    ["repo.setVisible", repo, true],
+  ]);
 });
 
 it("refreshes everything but the opening and commits on request", async () => {
