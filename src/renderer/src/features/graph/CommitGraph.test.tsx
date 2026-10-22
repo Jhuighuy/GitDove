@@ -442,6 +442,34 @@ it("keeps the place to go back to while the history is too short to reach it", a
   expect(scroller().scrollTop).toBe(4000);
 });
 
+it("reveals a commit once it streams in", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 20, complete: false, maxLanes: 1 };
+  await render();
+  const lookups = () => mocks.api.filter(([m]) => m === "repo.findCommit").length;
+  // Not in the history yet.
+  mocks.found = -1;
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c150" }, true),
+  );
+  await settle();
+  expect(lookups()).toBe(1);
+  const stream = (count: number, complete: boolean) =>
+    act(async () => {
+      client.setQueryData(keys.graphInfo(repo), { version: 1, count, complete, maxLanes: 1 });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  await stream(100, false);
+  expect(lookups()).toBe(2);
+  // There now: scrolled to, and not looked up again.
+  mocks.found = 150;
+  await stream(200, true);
+  expect(lookups()).toBe(3);
+  expect(scroller().scrollTop).toBeGreaterThan(0);
+  await stream(200, true);
+  expect(lookups()).toBe(3);
+});
+
 it("does not take the user back once they scrolled themselves", async () => {
   mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
   mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };

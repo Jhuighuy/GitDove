@@ -192,8 +192,9 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     let cancelled = false;
     void api("repo.findCommit", repo, info.version, selection.hash).then(
       (index) => {
-        // Handled once it got here: a lookup cut short (e.g. by a diff) runs again.
-        if (cancelled) return;
+        // Handled once it got here: a lookup cut short (e.g. by a diff) runs again, and so
+        // does one for a commit that has not streamed in yet, as the history grows.
+        if (cancelled || (index < 0 && !info.complete)) return;
         viewOf(repo).revealed = revealToken;
         if (index < 0) return;
         // Going to the commit replaces going back to where the graph was.
@@ -205,9 +206,10 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     return () => {
       cancelled = true;
     };
-    // A request made before the graph loaded waits for it.
+    // A request made before the graph loaded waits for it, and one for a commit not loaded yet
+    // looks again as more arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revealToken, !info]);
+  }, [revealToken, !info, info?.count, info?.complete]);
 
   const hashes = useMemo(() => selectedHashes(selection), [selection]);
   // Arrows move on from the commit last clicked.
