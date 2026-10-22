@@ -129,10 +129,10 @@ it("runs simple commands with their api calls", async () => {
     [() => commands.pop(repo, 2), "repo.stashPop", [repo, 2]],
     [() => commands.applyStash(repo, 1), "repo.stashApply", [repo, 1]],
     [() => commands.checkout(repo, "topic"), "repo.checkout", [repo, "topic"]],
-    [() => commands.cherryPick(repo, "0123456789"), "repo.cherryPick", [repo, "0123456789"]],
     [() => commands.revert(repo, "0123456789"), "repo.revert", [repo, "0123456789"]],
     [() => commands.abort(repo), "repo.abortOperation", [repo]],
     [() => commands.continue(repo), "repo.continueOperation", [repo]],
+    [() => commands.skip(repo), "repo.skipOperation", [repo]],
     [() => commands.pruneWorktrees(repo), "repo.pruneWorktrees", [repo]],
     [() => commands.updateSubmodule(repo, "lib/x"), "repo.updateSubmodule", [repo, "lib/x"]],
     [() => commands.fetchRemote(repo, "upstream"), "repo.fetch", [repo, "upstream"]],
@@ -147,10 +147,12 @@ it("runs simple commands with their api calls", async () => {
 it("reports results in the status bar, not in toasts", async () => {
   await commands.fetch(repo);
   expect(noticeText()).toBeUndefined();
-  await commands.cherryPick(repo, "0123456789");
-  expect(noticeText()).toBe("Cherry-picked 0123456");
+  mocks.api.mockResolvedValueOnce("done");
   await commands.revert(repo, "abcdef0123");
   expect(noticeText()).toBe("Reverted abcdef0");
+  mocks.api.mockResolvedValueOnce("conflicts");
+  await commands.revert(repo, "abcdef0123");
+  expect(noticeText()).toBe("Stopped at conflicts: resolve them, then continue");
   await commands.stash(repo);
   expect(noticeText()).toBe("Changes stashed");
   await commands.updateSubmodule(repo, "lib/x");

@@ -10,6 +10,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { api, isMac } from "@/lib/api";
 import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
 import {
+  useEditableHistory,
   useGraphInfo,
   useGraphRows,
   useRefs,
@@ -27,6 +28,8 @@ import {
   useRepoUiStore,
 } from "@/stores/repo-ui";
 import { commands } from "../commands";
+import { historyCommands } from "../history/commands";
+import { editable } from "../history/plan";
 import { CommitContextMenu, type MenuTarget } from "./CommitContextMenu";
 import {
   GraphCell,
@@ -95,6 +98,8 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   const select = useRepoUiStore((s) => s.select);
   const columns = useColumns();
   const avatarProviders = useAvatarProviders(repo);
+  const { data: history } = useEditableHistory(repo);
+  const inBranch = useMemo(() => new Set(history?.commits ?? []), [history]);
 
   const changes = status
     ? status.staged.length + status.unstaged.length + status.conflicted.length
@@ -274,10 +279,70 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     virtualizer.scrollToIndex(next, { align: "auto" });
   };
 
+  // Dragging commits of the current branch onto others reorders (between rows) or squashes
+  // (onto a row) them, like GitHub Desktop.
+  const dragged = useRef<readonly string[] | null>(null);
+  const [dropAt, setDropAt] = useState<DropAt | null>(null);
+  const dragHandlers = useRef<DragHandlers | null>(null);
+  dragHandlers.current = {
+    start: (row, e) => {
+      const picked =
+        selection?.kind === "commits" && hashes.has(row.hash)
+          ? selection.commits.map((c) => c.row.hash)
+          : [row.hash];
+      if (!editable(history, picked)) return void e.preventDefault();
+      dragged.current = picked;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", picked.join("\n"));
+      setDragImage(e, picked.length === 1 ? row.subject : `${picked.length} commits`);
+    },
+    over: (row, e) => {
+      const from = dragged.current;
+      if (!from || !inBranch.has(row.hash) || from.includes(row.hash)) {
+        if (dropAt) setDropAt(null);
+        return;
+      }
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      const rect = e.currentTarget.getBoundingClientRect();
+      const y = (e.clientY - rect.top) / rect.height;
+      const zone = y < 0.3 ? "above" : y > 0.7 ? "below" : "onto";
+      if (dropAt?.hash !== row.hash || dropAt.zone !== zone) setDropAt({ hash: row.hash, zone });
+    },
+    drop: () => {
+      const from = dragged.current;
+      const at = dropAt;
+      dragged.current = null;
+      setDropAt(null);
+      if (!from || !at) return;
+      if (at.zone === "onto") void historyCommands.squashOnto(repo, from, at.hash);
+      else void historyCommands.reorder(repo, from, at.hash, at.zone);
+    },
+    end: () => {
+      dragged.current = null;
+      setDropAt(null);
+    },
+  };
+  const onDrag = useMemo<DragHandlers>(
+    () => ({
+      start: (row, e) => dragHandlers.current!.start(row, e),
+      over: (row, e) => dragHandlers.current!.over(row, e),
+      drop: () => dragHandlers.current!.drop(),
+      end: () => dragHandlers.current!.end(),
+    }),
+    [],
+  );
+
   const [menu, setMenu] = useState<MenuTarget | null>(null);
   const onRowContextMenu = useCallback(
     (row: GraphRow | null) => {
       if (row) {
+        // Within a selection of several commits, the menu is for all of them.
+        const selected = useRepoUiStore.getState().byRepo[repo]?.selection;
+        if (selected?.kind === "commits" && selected.commits.some((c) => c.row.hash === row.hash)) {
+          setMenu({ kind: "commits", rows: selected.commits.map((c) => c.row) });
+          return;
+        }
         select(repo, { kind: "commit", hash: row.hash });
         setMenu({ kind: "commit", row, refs: refsByHash.get(row.hash) ?? [], stashIndex: null });
       } else {
@@ -346,6 +411,9 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
                   wipAbove={offset > 0 && index === 0 && row.hash === headHash}
                   index={index}
                   selected={hashes.has(row.hash)}
+                  draggable={inBranch.has(row.hash)}
+                  drop={dropAt?.hash === row.hash ? dropAt.zone : null}
+                  onDrag={onDrag}
                   onPress={onPress}
                   onContextMenu={onRowContextMenu}
                   avatarProviders={avatarProviders}
@@ -369,6 +437,34 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Dragging commits
+// ---------------------------------------------------------------------------
+
+/** Where dragged commits go: next to a commit (above or below it), or squashed onto it. */
+interface DropAt {
+  readonly hash: string;
+  readonly zone: "above" | "below" | "onto";
+}
+
+interface DragHandlers {
+  start(row: GraphRow, e: React.DragEvent): void;
+  over(row: GraphRow, e: React.DragEvent): void;
+  drop(): void;
+  end(): void;
+}
+
+/** Shows what is dragged as a small pill rather than a picture of the whole row. */
+const setDragImage = (e: React.DragEvent, text: string) => {
+  const pill = document.createElement("div");
+  pill.textContent = text;
+  pill.className =
+    "fixed -top-96 left-0 max-w-80 truncate rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground shadow-lg";
+  document.body.append(pill);
+  e.dataTransfer.setDragImage(pill, 12, 12);
+  setTimeout(() => pill.remove(), 0);
+};
 
 // ---------------------------------------------------------------------------
 // Header with resizable columns
@@ -475,6 +571,11 @@ interface CommitRowProps {
   readonly wipAbove: boolean;
   readonly index: number;
   readonly selected: boolean;
+  /** The commit is on the current branch's editable history, so it can be dragged. */
+  readonly draggable: boolean;
+  /** Where dragged commits would go if dropped now. */
+  readonly drop: DropAt["zone"] | null;
+  readonly onDrag: DragHandlers;
   readonly onPress: (row: GraphRow, index: number, e: React.MouseEvent) => void;
   readonly onContextMenu: (row: GraphRow) => void;
   readonly avatarProviders: readonly AvatarProvider[];
@@ -487,13 +588,37 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
   const hasPills = p.refs.some((r) => r.kind !== "stash");
   return (
     <div
-      className={rowClass(p.selected)}
+      className={cn(
+        rowClass(p.selected),
+        p.drop === "onto" && "bg-primary/15 ring-primary ring-2 ring-inset",
+      )}
       style={p.style}
+      draggable={p.draggable}
+      onDragStart={(e) => p.onDrag.start(row, e)}
+      onDragOver={(e) => p.onDrag.over(row, e)}
+      onDrop={(e) => {
+        e.preventDefault();
+        p.onDrag.drop();
+      }}
+      onDragEnd={p.onDrag.end}
       onMouseDown={(e) => {
         if (e.button === 0) p.onPress(row, p.index, e);
       }}
       onContextMenu={() => p.onContextMenu(row)}
     >
+      {(p.drop === "above" || p.drop === "below") && (
+        <div
+          className={cn(
+            "bg-primary pointer-events-none absolute inset-x-0 z-10 h-0.5",
+            p.drop === "above" ? "-top-px" : "-bottom-px",
+          )}
+        />
+      )}
+      {p.drop === "onto" && (
+        <div className="bg-primary text-primary-foreground pointer-events-none absolute top-1/2 right-24 z-10 -translate-y-1/2 rounded px-1.5 py-0.5 text-[10px] font-semibold">
+          Squash into this commit
+        </div>
+      )}
       <div
         className="flex shrink-0 items-center overflow-hidden pl-2"
         style={{ width: columns.refs }}

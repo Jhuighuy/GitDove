@@ -48,7 +48,13 @@ beforeEach(() => {
 it("returns the result and refreshes the repository", async () => {
   await expect(runAction(repo, "Stage", async () => 42)).resolves.toBe(42);
   expect(notice()).toBeUndefined();
-  expect(invalidated).toEqual([[...keys.info(repo)], [...keys.refs(repo)], [...keys.status(repo)]]);
+  expect(invalidated).toEqual([
+    [...keys.info(repo)],
+    [...keys.refs(repo)],
+    [...keys.status(repo)],
+    [...keys.editable(repo)],
+    [...keys.undo(repo)],
+  ]);
 });
 
 it("reports success in the status bar, not in a toast", async () => {
@@ -80,7 +86,7 @@ it("reports failures as error toasts and still refreshes", async () => {
     description: "push rejected\n\n! [rejected] main -> main",
     duration: 10000,
   });
-  expect(invalidated).toHaveLength(3);
+  expect(invalidated).toHaveLength(5);
 });
 
 it("does not repeat a detail that equals the message", async () => {

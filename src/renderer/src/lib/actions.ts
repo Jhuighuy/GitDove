@@ -1,4 +1,4 @@
-import type { RepoId } from "@shared/domain";
+import type { Outcome, RepoId } from "@shared/domain";
 import { toast } from "sonner";
 import { busyOf, busyReason, useBusyStore } from "@/stores/busy";
 import { notify } from "@/stores/status";
@@ -66,5 +66,19 @@ export const runAction = async <A>(
     void queryClient.invalidateQueries({ queryKey: keys.info(repo) });
     void queryClient.invalidateQueries({ queryKey: keys.refs(repo) });
     void queryClient.invalidateQueries({ queryKey: keys.status(repo) });
+    void queryClient.invalidateQueries({ queryKey: keys.editable(repo) });
+    void queryClient.invalidateQueries({ queryKey: keys.undo(repo) });
   }
+};
+
+/**
+ * Reports how an operation that can stop part way ended: `done` when it finished, or that it
+ * stopped (the operation bar then shows what to do). Nothing when it failed (`undefined`).
+ */
+export const reportOutcome = (repo: RepoId, outcome: Outcome | undefined, done: string) => {
+  if (outcome === "done") notify(repo, done);
+  else if (outcome === "conflicts")
+    notify(repo, "Stopped at conflicts: resolve them, then continue", "info");
+  else if (outcome === "stopped")
+    notify(repo, "Stopped to edit a commit: change it, then continue", "info");
 };

@@ -44,6 +44,9 @@ export const keys = {
   fileVersions: (repo: RepoId, target: DiffTarget) =>
     ["repo", repo, "diff", target, "versions"] as const,
   search: (repo: RepoId, q: string) => ["repo", repo, "search", q] as const,
+  editable: (repo: RepoId) => ["repo", repo, "editable"] as const,
+  undo: (repo: RepoId) => ["repo", repo, "undo"] as const,
+  rebaseTodo: (repo: RepoId, base: string | null) => ["repo", repo, "rebase-todo", base] as const,
 };
 
 export const useRepoInfo = (repo: RepoId) =>
@@ -62,6 +65,17 @@ export const useStatus = (repo: RepoId) =>
     queryFn: () => api("repo.status", repo),
     placeholderData: keepPreviousData,
   });
+
+/** The commits of the current branch that history editing applies to. */
+export const useEditableHistory = (repo: RepoId) =>
+  useQuery({
+    queryKey: keys.editable(repo),
+    queryFn: () => api("repo.editableHistory", repo),
+    placeholderData: keepPreviousData,
+  });
+
+export const useUndoState = (repo: RepoId) =>
+  useQuery({ queryKey: keys.undo(repo), queryFn: () => api("repo.undoState", repo) });
 
 export const useGraphInfo = (repo: RepoId) =>
   useQuery({
@@ -210,6 +224,8 @@ export const useRepoEvents = () => {
     if (s.has("refs") || s.has("head") || s.has("config")) {
       void client.invalidateQueries({ queryKey: keys.info(repo) });
       void client.invalidateQueries({ queryKey: keys.refs(repo) });
+      void client.invalidateQueries({ queryKey: keys.editable(repo) });
+      void client.invalidateQueries({ queryKey: keys.undo(repo) });
     }
     if (s.has("index") || s.has("worktree") || s.has("head")) {
       void client.invalidateQueries({ queryKey: keys.status(repo) });

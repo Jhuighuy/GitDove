@@ -11,6 +11,7 @@ import { CommitContextMenu, type MenuTarget } from "./CommitContextMenu";
 const mocks = vi.hoisted(() => ({
   calls: [] as unknown[][],
   api: [] as unknown[][],
+  history: { head: "h", commits: [] as string[], bottom: null, unpushed: 0 },
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -31,6 +32,8 @@ vi.mock("@/lib/api", () => ({
         };
       case "repo.hiddenRefs":
         return [];
+      case "repo.editableHistory":
+        return mocks.history;
       case "repo.setHiddenRefs":
       case "repo.stageAll":
         return undefined;
@@ -46,6 +49,18 @@ vi.mock("../commands", () => ({
         (_, command: string) =>
         (...args: unknown[]) =>
           void mocks.calls.push([command, ...args.slice(command === "copy" ? 0 : 1)]),
+    },
+  ),
+}));
+
+vi.mock("../history/commands", () => ({
+  historyCommands: new Proxy(
+    {},
+    {
+      get:
+        (_, command: string) =>
+        (...args: unknown[]) =>
+          void mocks.calls.push([`history.${command}`, ...args.slice(1)]),
     },
   ),
 }));
@@ -90,6 +105,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.calls = [];
   mocks.api = [];
+  mocks.history = { head: "h", commits: [], bottom: null, unpushed: 0 };
 });
 
 const unmount = async () => {
@@ -163,12 +179,27 @@ it("renders no items without a target", async () => {
 
 it("stages or stashes everything from the WIP row", async () => {
   await open({ kind: "wip" });
-  expect(items()).toEqual(["Stage all changes", "Stash all changes"]);
+  expect(items()).toEqual([
+    "Stage all changes",
+    "Stash all changes",
+    "Save changes as patch…",
+    "Copy changes as patch",
+    "Apply patch…",
+  ]);
   await click("Stage all changes");
   await act(() => vi.waitFor(() => expect(mocks.api.at(-1)).toEqual(["repo.stageAll"])));
   await open({ kind: "wip" });
   await click("Stash all changes");
-  expect(mocks.calls).toEqual([["stash"]]);
+  for (const label of ["Save changes as patch…", "Copy changes as patch", "Apply patch…"]) {
+    await open({ kind: "wip" });
+    await click(label);
+  }
+  expect(mocks.calls).toEqual([
+    ["stash"],
+    ["history.workingPatch", "file"],
+    ["history.workingPatch", "clipboard"],
+    ["history.applyPatch"],
+  ]);
 });
 
 it("offers stash actions on stash commits", async () => {
@@ -193,7 +224,7 @@ it("disables changing actions while another operation runs", async () => {
     const disabled = (label: string) => find(label).getAttribute("aria-disabled") === "true";
     for (const label of [
       "Checkout this commit (detached)",
-      "Cherry-pick commit",
+      "Cherry-pick commit…",
       "Revert commit",
     ]) {
       expect(disabled(label)).toBe(true);
@@ -202,7 +233,7 @@ it("disables changing actions while another operation runs", async () => {
       expect(find(label).className).toContain("data-disabled:pointer-events-auto");
     }
     expect(disabled("Copy commit SHA")).toBe(false);
-    await click("Cherry-pick commit");
+    await click("Cherry-pick commit…");
     await click("Copy commit SHA");
     expect(mocks.calls).toEqual([["copy", HASH, "Commit SHA copied"]]);
   } finally {
@@ -217,9 +248,12 @@ it("offers commit actions", async () => {
     "Checkout this commit (detached)",
     "Create branch here…",
     "Create tag here…",
-    "Cherry-pick commit",
+    "Cherry-pick commit…",
     "Revert commit",
     "Reset main to this commit",
+    "Interactive rebase main onto this commit…",
+    "Save as patch…",
+    "Copy as patch",
     "Copy commit SHA",
     "Copy commit message",
   ]);
@@ -227,22 +261,105 @@ it("offers commit actions", async () => {
     "Checkout this commit (detached)",
     "Create branch here…",
     "Create tag here…",
-    "Cherry-pick commit",
+    "Cherry-pick commit…",
     "Revert commit",
+    "Interactive rebase main onto this commit…",
+    "Save as patch…",
+    "Copy as patch",
     "Copy commit SHA",
     "Copy commit message",
   ]) {
     await open(target);
     await click(label);
   }
+  const commit = { hash: HASH, subject: "Fix the thing" };
   expect(mocks.calls).toEqual([
     ["checkout", HASH],
     ["createBranch", HASH, "0123456"],
     ["createTag", HASH],
-    ["cherryPick", HASH],
+    ["history.cherryPick", [commit]],
     ["revert", HASH],
+    ["history.rebaseInteractive", HASH],
+    ["history.savePatch", [commit]],
+    ["history.copyPatch", [commit]],
     ["copy", HASH, "Commit SHA copied"],
     ["copy", "Fix the thing", "Message copied"],
+  ]);
+});
+
+it("edits commits of the current branch", async () => {
+  mocks.history = { head: "a", commits: ["a", HASH, "b"], bottom: null, unpushed: 0 };
+  const target: MenuTarget = { kind: "commit", row, refs: [], stashIndex: null };
+  const labels = [
+    "Edit commit message…",
+    "Edit commit",
+    "Squash into parent…",
+    "Drop commit…",
+    "Move commit up",
+    "Move commit down",
+    "Interactive rebase from here…",
+  ];
+  await open(target);
+  expect(items()).toEqual(expect.arrayContaining(labels));
+  expect(items()).not.toContain("Interactive rebase main onto this commit…");
+  for (const label of labels) {
+    await open(target);
+    await click(label);
+  }
+  const commit = { hash: HASH, subject: "Fix the thing" };
+  expect(mocks.calls).toEqual([
+    ["history.reword", HASH],
+    ["history.edit", commit],
+    ["history.squashIntoParent", HASH],
+    ["history.drop", [commit]],
+    ["history.move", [HASH], "up"],
+    ["history.move", [HASH], "down"],
+    ["history.rebaseFrom", [HASH]],
+  ]);
+
+  // The oldest editable commit has nothing to squash into or move below.
+  mocks.history = { head: HASH, commits: [HASH], bottom: null, unpushed: 0 };
+  await open(target);
+  expect(items()).not.toContain("Squash into parent…");
+  expect(items()).not.toContain("Move commit up");
+  expect(items()).not.toContain("Move commit down");
+});
+
+it("acts on several selected commits", async () => {
+  const other = { ...row, hash: "f".repeat(40), subject: "Other" };
+  const target: MenuTarget = { kind: "commits", rows: [other, row] };
+  await open(target);
+  expect(items()).toEqual([
+    "Cherry-pick 2 commits…",
+    "Save 2 commits as patch…",
+    "Copy as patch",
+    "Copy commit SHAs",
+  ]);
+  mocks.history = { head: other.hash, commits: [other.hash, HASH, "b"], bottom: null, unpushed: 0 };
+  const labels = [
+    "Cherry-pick 2 commits…",
+    "Squash 2 commits…",
+    "Drop 2 commits…",
+    "Move 2 commits down",
+    "Interactive rebase from here…",
+    "Copy commit SHAs",
+  ];
+  for (const label of labels) {
+    await open(target);
+    await click(label);
+  }
+  expect(items()).not.toContain("Move 2 commits up");
+  const commits = [
+    { hash: other.hash, subject: "Other" },
+    { hash: HASH, subject: "Fix the thing" },
+  ];
+  expect(mocks.calls).toEqual([
+    ["history.cherryPick", commits],
+    ["history.squash", [other.hash, HASH]],
+    ["history.drop", commits],
+    ["history.move", [other.hash, HASH], "down"],
+    ["history.rebaseFrom", [other.hash, HASH]],
+    ["copy", `${other.hash}\n${HASH}`, "Commit SHAs copied"],
   ]);
 });
 
@@ -271,6 +388,7 @@ it("offers branch actions for refs on the commit", async () => {
     "Checkout feature",
     "Merge feature into main",
     "Rebase main onto feature",
+    "Interactive rebase main onto feature…",
     "Rename feature…",
     "Copy branch name",
     "Delete feature",
@@ -286,6 +404,7 @@ it("offers branch actions for refs on the commit", async () => {
     ["checkoutRef", feature],
     ["merge", "feature"],
     ["rebase", "feature"],
+    ["history.rebaseInteractive", HASH],
     ["renameBranch", "feature"],
     ["copy", "feature", "Branch name copied"],
     ["deleteBranch", feature],

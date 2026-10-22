@@ -1,6 +1,8 @@
 import type { RepoId } from "@shared/domain";
 import {
+  IconArrowBackUp,
   IconArrowDown,
+  IconArrowForwardUp,
   IconArrowUp,
   IconChevronDown,
   IconGitBranch,
@@ -21,11 +23,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
-import { useRefs, useRepoInfo, useStatus } from "@/lib/queries";
+import { useRefs, useRepoInfo, useStatus, useUndoState } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { busyReason, useBusy } from "@/stores/busy";
 import { useLayout } from "@/stores/repo-ui";
 import { commands } from "../commands";
+import { historyCommands } from "../history/commands";
 
 /**
  * A button with a menu beside it: two halves that meet at a seam, each with its own hover, and
@@ -83,6 +86,7 @@ export function Toolbar({ repo }: { repo: RepoId }) {
   const { data: info } = useRepoInfo(repo);
   const { data: refs } = useRefs(repo);
   const { data: status } = useStatus(repo);
+  const { data: undo } = useUndoState(repo);
   const layout = useLayout();
   const busy = useBusy(repo);
   // While an operation runs, the actions that change the repository wait for it.
@@ -115,6 +119,21 @@ export function Toolbar({ repo }: { repo: RepoId }) {
       </div>
 
       <div className="flex items-center gap-0.5">
+        <ToolButton
+          label="Undo"
+          icon={<IconArrowBackUp />}
+          disabled={!undo?.undo || !!busy}
+          tooltip={reason ?? (undo?.undo ? `Undo ${undo.undo}` : "Nothing to undo")}
+          onClick={() => void historyCommands.undo(repo)}
+        />
+        <ToolButton
+          label="Redo"
+          icon={<IconArrowForwardUp />}
+          disabled={!undo?.redo || !!busy}
+          tooltip={reason ?? (undo?.redo ? `Redo ${undo.redo}` : "Nothing to redo")}
+          onClick={() => void historyCommands.redo(repo)}
+        />
+        <div className="bg-border mx-1.5 h-7 w-px" />
         <div className={SPLIT}>
           <ToolButton
             className="w-12 rounded-r-none"

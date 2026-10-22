@@ -167,7 +167,7 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     expect(await sh("git log -1 --format=%s")).toBe("side");
 
     await run(repo.checkout("main"));
-    await run(repo.cherryPick("side"));
+    await run(repo.cherryPick(["side"], { branch: null, recordOrigin: false, noCommit: false }));
     expect(await sh("git log -1 --format=%s")).toBe("side");
     await run(repo.revert("HEAD"));
     expect(await sh("git log -1 --format=%s")).toBe('Revert "side"');
@@ -278,13 +278,13 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
 
     it("aborts and continues a merge", async () => {
       await diverge();
-      expect((await fails(repo.merge("side", {})))._tag).toBe("CommandError");
+      expect(await run(repo.merge("side", {}))).toBe("conflicts");
       expect(await state()).toBe("merging");
       expect((await run(repo.status())).conflicted.map((f) => f.path)).toEqual(["f.txt"]);
       await run(repo.abortOperation());
       expect(await state()).toBe("clean");
 
-      await fails(repo.merge("side", {}));
+      await run(repo.merge("side", {}));
       await resolve();
       await run(repo.continueOperation());
       expect(await state()).toBe("clean");
@@ -293,13 +293,13 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
 
     it("aborts and continues a rebase", async () => {
       await diverge();
-      await fails(repo.rebase("side"));
+      expect(await run(repo.rebase("side"))).toBe("conflicts");
       expect(await state()).toBe("rebasing");
       await run(repo.abortOperation());
       expect(await state()).toBe("clean");
       expect(await sh("git log -1 --format=%s")).toBe("main");
 
-      await fails(repo.rebase("side"));
+      expect(await run(repo.rebase("side"))).toBe("conflicts");
       await resolve();
       await sh("git config core.editor true");
       await run(repo.continueOperation());
@@ -309,12 +309,20 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
 
     it("aborts and continues a cherry-pick", async () => {
       await diverge();
-      await fails(repo.cherryPick("side"));
+      expect(
+        await run(
+          repo.cherryPick(["side"], { branch: null, recordOrigin: false, noCommit: false }),
+        ),
+      ).toBe("conflicts");
       expect(await state()).toBe("cherry-picking");
       await run(repo.abortOperation());
       expect(await state()).toBe("clean");
 
-      await fails(repo.cherryPick("side"));
+      expect(
+        await run(
+          repo.cherryPick(["side"], { branch: null, recordOrigin: false, noCommit: false }),
+        ),
+      ).toBe("conflicts");
       await resolve();
       await sh("git config core.editor true");
       await run(repo.continueOperation());
@@ -324,12 +332,12 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
 
     it("aborts and continues a revert", async () => {
       await sh("echo three > f.txt && git commit -qam three");
-      await fails(repo.revert("HEAD~1"));
+      expect(await run(repo.revert("HEAD~1"))).toBe("conflicts");
       expect(await state()).toBe("reverting");
       await run(repo.abortOperation());
       expect(await state()).toBe("clean");
 
-      await fails(repo.revert("HEAD~1"));
+      expect(await run(repo.revert("HEAD~1"))).toBe("conflicts");
       await resolve();
       await sh("git config core.editor true");
       await run(repo.continueOperation());

@@ -43,7 +43,31 @@ export type RepoState =
   | "rebasing"
   | "cherry-picking"
   | "reverting"
-  | "bisecting";
+  | "bisecting"
+  /** Applying a patch series with `git am`. */
+  | "applying";
+
+/**
+ * Where the operation in progress stands: a rebase, merge, cherry-pick, revert or patch series
+ * that stopped at conflicts, or a rebase that stopped to let the user edit a commit.
+ */
+export interface OperationInfo {
+  /** The branch being rebased or patched (short name); null when HEAD was detached. */
+  readonly branch: string | null;
+  /** For a rebase: the commit the branch is rebased onto. */
+  readonly onto: string | null;
+  /** The commit being applied: where a rebase stopped, or the one picked, reverted or merged. */
+  readonly commit: string | null;
+  /** The subject of `commit`, or of the patch being applied. */
+  readonly subject: string | null;
+  /** The step being applied and how many there are (1-based), when git keeps count. */
+  readonly step: number | null;
+  readonly total: number | null;
+  /** Commits or patches still to apply after the current one. */
+  readonly remaining: number;
+  /** A rebase stopped to edit `commit` (an `edit` step), rather than at conflicts. */
+  readonly editing: boolean;
+}
 
 export interface RepoInfo {
   readonly id: RepoId;
@@ -54,6 +78,8 @@ export interface RepoInfo {
   readonly bare: boolean;
   readonly head: HeadInfo;
   readonly state: RepoState;
+  /** Details of the operation in progress; null when `state` is "clean" or "bisecting". */
+  readonly operation: OperationInfo | null;
 }
 
 export interface HeadInfo {
@@ -296,6 +322,111 @@ export type FileContent =
 export interface FileVersions {
   readonly old: FileContent;
   readonly new: FileContent;
+}
+
+// ---------------------------------------------------------------------------
+// History editing
+// ---------------------------------------------------------------------------
+
+/**
+ * How an operation that can stop part way ended: it finished, it stopped at conflicts for the
+ * user to resolve, or it stopped for the user to edit a commit. Either way it then continues
+ * (or is aborted) as the operation in progress, see `OperationInfo`.
+ */
+export type Outcome = "done" | "conflicts" | "stopped";
+
+/**
+ * The commits of the current branch that can be edited in place: HEAD and its first parents
+ * down to the first merge commit or the root, newest first. Older history is cut off.
+ */
+export interface EditableHistory {
+  readonly head: string | null;
+  readonly commits: readonly string[];
+  /** The parent of the oldest commit listed: a merge commit, or older history; null at the root. */
+  readonly bottom: string | null;
+  /** How many of `commits` (from the newest) are on no remote-tracking branch yet. */
+  readonly unpushed: number;
+}
+
+/** A commit as listed for an interactive rebase. */
+export interface RebaseCommit {
+  readonly hash: string;
+  readonly subject: string;
+  /** The whole message, subject included. */
+  readonly message: string;
+  readonly authorName: string;
+  readonly authorEmail: string;
+  readonly authorTime: number;
+  /** The commit is on a remote-tracking branch, so rewriting it rewrites published history. */
+  readonly pushed: boolean;
+}
+
+/** The commits a rebase onto `base` replays, oldest first. */
+export interface RebaseTodo {
+  /** The commit the rebase starts from; null to rewrite from the root commit. */
+  readonly base: string | null;
+  readonly baseSubject: string | null;
+  readonly commits: readonly RebaseCommit[];
+  /** Merge commits in the range, which the rebase leaves out (it flattens history). */
+  readonly merges: number;
+}
+
+/**
+ * What to do with a commit, see `RebaseStep`. `fixup` folds the commit into the one before it
+ * (the previous step that is not dropped); `edit` stops after the commit (and what is folded
+ * into it) for the user to change it.
+ */
+export type RebaseAction = "pick" | "edit" | "fixup" | "drop";
+
+export interface RebaseStep {
+  readonly hash: string;
+  readonly action: RebaseAction;
+  /** A new message for the commit, after anything folded into it. */
+  readonly message?: string;
+}
+
+/** Rewrites the commits since `base` (all of them, oldest first) as `steps` say. */
+export interface RewritePlan {
+  readonly base: string | null;
+  readonly steps: readonly RebaseStep[];
+  /** What it does, for the undo history, e.g. "Squash 3 commits". */
+  readonly label: string;
+}
+
+export interface CherryPickOptions {
+  /** The branch to pick the commits onto; null for the checked out one. */
+  readonly branch: string | null;
+  /** Adds "(cherry picked from commit …)" to the messages, like `git cherry-pick -x`. */
+  readonly recordOrigin: boolean;
+  /** Only applies the changes to the working tree and the index (checked out branch only). */
+  readonly noCommit: boolean;
+}
+
+/** What `git apply` makes of a patch, before it is applied. */
+export interface PatchInfo {
+  readonly files: readonly {
+    readonly path: string;
+    readonly additions: number | null;
+    readonly deletions: number | null;
+  }[];
+  /** Subjects of the commits in a mailbox patch (from `git format-patch`); empty for a diff. */
+  readonly commits: readonly string[];
+  /** Whether it applies to the working tree as it is, only with a three-way merge, or not. */
+  readonly applies: "clean" | "three-way" | "no";
+  /** Why it does not apply cleanly. */
+  readonly error: string | null;
+}
+
+/**
+ * How to apply a patch: to the working tree, to the working tree and the index, or as commits
+ * (a mailbox patch, with `git am`).
+ */
+export type PatchMode = "worktree" | "index" | "commit";
+
+/** Labels of the operations that can be undone and redone, e.g. "Commit “Fix a typo”". */
+export interface UndoState {
+  readonly undo: string | null;
+  readonly redo: string | null;
 }
 
 // ---------------------------------------------------------------------------
