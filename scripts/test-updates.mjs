@@ -110,14 +110,24 @@ async function launch(app) {
   child.stdout.on("data", (chunk) => (output += chunk));
   child.stderr.on("data", (chunk) => (output += chunk));
   const exited = new Promise((done) => child.once("exit", done));
+  let stderr = "";
   const endpoint = await new Promise((done, fail) => {
-    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      fail(new Error(`GitDove did not start within 60 s:\n${stderr}`));
+    }, 60_000);
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
       const match = /DevTools listening on (ws:\S+)/.exec(stderr);
-      if (match) done(match[1]);
+      if (match) {
+        clearTimeout(timer);
+        done(match[1]);
+      }
     });
-    child.once("exit", () => fail(new Error(`GitDove exited during startup:\n${stderr}`)));
+    child.once("exit", () => {
+      clearTimeout(timer);
+      fail(new Error(`GitDove exited during startup:\n${stderr}`));
+    });
   });
   const browser = await chromium.connectOverCDP(endpoint);
   const context = browser.contexts()[0];
@@ -153,7 +163,6 @@ const cases = {
     await a.exited;
     await sleep(3000);
     assert.equal(version(app), "1.0.0");
-    tampered = false;
   },
 
   async "installs on quit without relaunching"(app) {
@@ -192,6 +201,7 @@ async function runCase(name, run, installed) {
     console.log(`GitDove output:\n${output.slice(-4000)}`);
     return false;
   } finally {
+    tampered = false;
     for (const pid of running(app)) process.kill(pid, "SIGKILL");
   }
 }
