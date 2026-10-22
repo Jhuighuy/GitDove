@@ -260,15 +260,43 @@ it("sends open documents and pending requests to a new worker after a crash", ()
   const first = worker();
   const doc = (sent().at(-1) as { doc: number }).doc;
   hl.ensure("dark", 1, 0, CHUNK + 1);
-  replyLines(doc, 3, 1);
+  first.reply({
+    type: "tokens",
+    doc,
+    theme: "dark",
+    side: 1,
+    chunk: 0,
+    starts: Uint32Array.from([0, 2, 2, 2]),
+    tokens: Uint32Array.from([6, 0]),
+    paletteBase: 0,
+    palette: ["#ff0000|0"],
+  });
+  expect(tokenStyle(0)?.color).toBe("#ff0000");
   first.crash();
   expect(first.terminated).toBe(true);
   expect(worker()).not.toBe(first);
-  // Only the chunk that did not arrive is requested again.
+  // The new worker numbers styles afresh: the old tokens and styles go, and every chunk is
+  // requested again.
+  expect(hl.tokens("dark", 1, 0)).toBeNull();
+  expect(tokenStyle(0)).toBeUndefined();
   expect(sent()).toEqual([
     expect.objectContaining({ type: "open", doc }),
+    { type: "highlight", doc, theme: "dark", side: 1, chunk: 0 },
     { type: "highlight", doc, theme: "dark", side: 1, chunk: 1 },
   ]);
+  // Late messages of the old worker are dropped.
+  first.reply({
+    type: "tokens",
+    doc,
+    theme: "dark",
+    side: 1,
+    chunk: 1,
+    starts: Uint32Array.from([0]),
+    tokens: Uint32Array.from([]),
+    paletteBase: 0,
+    palette: ["#00ff00|0"],
+  });
+  expect(tokenStyle(0)).toBeUndefined();
   // After a few crashes, highlighting is given up.
   worker().crash();
   worker().crash();

@@ -21,6 +21,8 @@ const styles: CSSProperties[] = [];
 const startWorker = () => {
   const w = new Worker(new URL("./highlight.worker.ts", import.meta.url), { type: "module" });
   w.addEventListener("message", (e: MessageEvent<HighlightResponse>) => {
+    // A replaced worker's last messages use its own style numbering.
+    if (worker !== w) return;
     const msg = e.data;
     if (msg.type === "tokens" && msg.palette) {
       msg.palette.forEach((s, i) => (styles[msg.paletteBase + i] = toStyle(s)));
@@ -28,13 +30,14 @@ const startWorker = () => {
     docs.get(msg.doc)?.receive(msg);
   });
   // An uncaught error leaves the worker in an unknown state: start a new one and send it the open
-  // documents again, unless it keeps failing.
+  // documents again, unless it keeps failing. It numbers its styles from 0 again.
   w.addEventListener("error", (e: Event) => {
     e.preventDefault();
     if (worker !== w) return;
     w.terminate();
     worker = null;
     restarts++;
+    styles.length = 0;
     for (const doc of docs.values()) doc.restart();
   });
   return w;
@@ -131,12 +134,18 @@ export class DocHighlighter {
     });
   }
 
-  /** Sends the document and its outstanding requests to a new worker. */
+  /**
+   * Sends the document and its requests to a new worker. Tokens from the old one name its
+   * styles, which the new one numbers afresh: they are dropped and asked for again.
+   */
   restart() {
     if (!this.id || this.plain) return;
+    this.chunks.clear();
+    this.fallback = null;
+    this.changed();
     this.sendOpen();
     for (const key of this.requested) {
-      if (this.plain || this.chunks.has(key)) continue;
+      if (this.plain) break;
       const [theme, side, chunk] = key.split(":");
       send({
         type: "highlight",
@@ -189,6 +198,11 @@ export class DocHighlighter {
     // Chunks highlighted as dependencies arrive without being requested.
     this.requested.add(key);
     this.chunks.set(key, { starts: msg.starts, tokens: msg.tokens });
+    this.changed();
+  }
+
+  /** Notifies subscribers on the next frame. */
+  private changed() {
     if (!this.frame) {
       this.frame = requestAnimationFrame(() => {
         this.frame = 0;
