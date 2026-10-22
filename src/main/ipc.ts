@@ -2,6 +2,7 @@ import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:c
 import { isAbsolute, relative, resolve } from "node:path";
 import { type DirEntry, type RepoId, type RepoLocation, repoLocationOf } from "@shared/domain";
 import {
+  APP_THEMES,
   type ApiArgs,
   type ApiMethod,
   type ApiResult,
@@ -15,7 +16,15 @@ import {
   type RpcError,
   type RpcResult,
 } from "@shared/ipc";
-import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  shell,
+  type WebContents,
+} from "electron";
 import log from "electron-log/main";
 import { Cause, Context, Effect, Exit, type ManagedRuntime, Schema } from "effect";
 import { mayRunGitlab } from "@shared/avatars";
@@ -111,6 +120,7 @@ const argSchemas = {
   "app.setState": argsOf(State),
   "app.version": noArgs,
   "app.edit": argsOf(Schema.Literals(EDIT_COMMANDS)),
+  "app.setTheme": argsOf(Schema.Literals(APP_THEMES)),
   "dialog.pickDirectory": noArgs,
   "shell.openTerminal": repoArgs(),
   "shell.revealInFinder": repoArgs(Schema.optional(Str)),
@@ -364,6 +374,8 @@ export const handlers: Handlers = {
           (yield* Caller).webContents[command]();
         })
       : Effect.fail(new InvalidInputError({ message: `Unknown edit command: ${String(command)}` })),
+  // Windows follow through `nativeTheme`'s "updated" event (see index.ts).
+  "app.setTheme": (theme) => Effect.sync(() => void (nativeTheme.themeSource = theme)),
   "dialog.pickDirectory": () =>
     Effect.gen(function* () {
       // Attached to the window that asked, which need not be focused.

@@ -30,6 +30,7 @@ const electron = vi.hoisted(() => ({
     ),
   },
   ipcMain: { handle: vi.fn(), on: vi.fn() },
+  nativeTheme: { themeSource: "system" },
   shell: {
     showItemInFolder: vi.fn(),
     openPath: vi.fn(async () => ""),
@@ -218,6 +219,13 @@ describe("app and dialog handlers", () => {
     const next = { tabs: [], activeTab: null, recent: ["local:/a"] };
     await call("app.setState", next);
     expect(state.saveState).toHaveBeenCalledWith(next);
+  });
+
+  it("sets the theme of what the main process draws", async () => {
+    await call("app.setTheme", "dark");
+    expect(electron.nativeTheme.themeSource).toBe("dark");
+    await call("app.setTheme", "system");
+    expect(electron.nativeTheme.themeSource).toBe("system");
   });
 
   it("reports the version and platform", async () => {
@@ -625,6 +633,7 @@ describe("registerIpc", () => {
     const bad: [string, unknown][] = [
       ["app.version", "not-an-array"],
       ["app.version", [1]],
+      ["app.setTheme", ["blue"]],
       ["repo.status", []],
       ["repo.status", [42]],
       ["repo.status", ["nope"]],

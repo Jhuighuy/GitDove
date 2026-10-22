@@ -31,6 +31,9 @@ export type ResetMode = "soft" | "mixed" | "hard";
 export const EDIT_COMMANDS = ["undo", "redo", "cut", "copy", "paste", "selectAll"] as const;
 export type EditCommand = (typeof EDIT_COMMANDS)[number];
 
+export const APP_THEMES = ["light", "dark", "system"] as const;
+export type AppTheme = (typeof APP_THEMES)[number];
+
 /** Most rows `repo.graphRows` returns at once. */
 export const MAX_GRAPH_ROWS = 4096;
 
@@ -64,6 +67,11 @@ export interface Api {
   "app.version": () => { version: string; platform: string };
   /** Runs an Edit menu command in the focused window, e.g. from a text field's context menu. */
   "app.edit": (command: EditCommand) => void;
+  /**
+   * The app's theme, for what the main process draws: window backgrounds, title bar buttons,
+   * native menus and dialogs. They follow the system until this is called.
+   */
+  "app.setTheme": (theme: AppTheme) => void;
   "dialog.pickDirectory": () => string | null;
   "shell.openTerminal": (repo: RepoId) => void;
   "shell.revealInFinder": (repo: RepoId, path?: string) => void;

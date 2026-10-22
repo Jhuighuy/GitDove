@@ -205,7 +205,10 @@ const buildMenu = () => {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 };
 
-/** Window colors before the renderer paints, matching the system theme (the default theme). */
+/**
+ * Window colors before the renderer paints, and of the title bar buttons: the app's theme once
+ * the renderer set it (`app.setTheme`), the system's until then.
+ */
 const chrome = () =>
   nativeTheme.shouldUseDarkColors
     ? { background: "#18181b", symbols: "#a1a1aa" }
@@ -297,9 +300,13 @@ const main = async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+  // The system's theme changed, or the app's (`app.setTheme`).
   nativeTheme.on("updated", () => {
-    if (isMac) return;
-    for (const win of BrowserWindow.getAllWindows()) win.setTitleBarOverlay(titleBarOverlay());
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      win.setBackgroundColor(chrome().background);
+      if (!isMac) win.setTitleBarOverlay(titleBarOverlay());
+    }
   });
 };
 
