@@ -299,6 +299,25 @@ describe("Repos", () => {
     expect(fake.watchers[0]!.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("does not reopen a repository closed while it was opening for late requests", async () => {
+    const { run, runExit } = repos();
+    await run((r) =>
+      Effect.all(
+        [
+          r.open(local("/repo/sub"), 1).pipe(Effect.exit),
+          Effect.andThen(Effect.sleep("5 millis"), r.release("local:/repo/sub", 1)),
+        ],
+        { concurrency: "unbounded" },
+      ),
+    );
+    for (const id of ["local:/repo", "local:/repo/sub"]) {
+      expect(await runExit((r) => r.get(id, 1))).toEqual(
+        Exit.fail(new RepoNotOpenError({ message: "The repository is closed", repo: id })),
+      );
+    }
+    expect(fake.open).toHaveBeenCalledTimes(1);
+  });
+
   it("disposes a repository opened twice at once by different names", async () => {
     const { run } = repos();
     const [a, b] = await run((r) =>

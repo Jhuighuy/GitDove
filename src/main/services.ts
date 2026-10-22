@@ -214,11 +214,16 @@ export const ReposLive = Layer.effect(
               if (Exit.isFailure(exit)) return Deferred.failCause(deferred, exit.cause);
               const entry = exit.value;
               if (entry.repo.id !== requested) aliases.set(requested, entry.repo.id);
-              closed.delete(entry.repo.id);
               for (const o of owners) entry.owners.add(o);
-              // Every owner closed it while it was opening.
-              if (entry.owners.size === 0) closeEntry(entry);
-              else updateVisibility(entry);
+              if (entry.owners.size > 0) {
+                closed.delete(entry.repo.id);
+                updateVisibility(entry);
+              } else {
+                // Every owner closed it (or went away) while it was opening. If it was closed,
+                // late requests must not reopen it, by any of its names.
+                if (closed.has(requested)) for (const id of idsOf(entry)) closed.add(id);
+                closeEntry(entry);
+              }
               return Deferred.succeed(deferred, entry.repo);
             }),
           ),
