@@ -156,15 +156,15 @@ it("opens diffs of unstaged, untracked and staged files", async () => {
   await render();
   await click(row("src/edit.ts"));
   expect(ui()?.diff).toEqual({ kind: "unstaged", path: "src/edit.ts", untracked: false });
-  expect(row("src/edit.ts").className).toContain("bg-primary/25");
+  expect(row("src/edit.ts").className).toContain("bg-selected");
   await click(row("new.ts"));
   expect(ui()?.diff).toEqual({ kind: "unstaged", path: "new.ts", untracked: true });
   await click(row("orig.ts → moved.ts"));
   expect(ui()?.diff).toEqual({ kind: "staged", path: "moved.ts", oldPath: "orig.ts" });
   await click(row("staged.ts"));
   expect(ui()?.diff).toEqual({ kind: "staged", path: "staged.ts" });
-  expect(row("staged.ts").className).toContain("bg-primary/25");
-  expect(row("src/edit.ts").className).not.toContain("bg-primary/25");
+  expect(row("staged.ts").className).toContain("bg-selected");
+  expect(row("src/edit.ts").className).not.toContain("bg-selected");
 });
 
 it("stages, unstages and discards files", async () => {

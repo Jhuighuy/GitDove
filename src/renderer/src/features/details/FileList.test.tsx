@@ -78,7 +78,7 @@ it("lists files with their folder, stats and rename source", async () => {
   expect(b!.title).toBe("old/b.ts → new/b.ts");
   expect(b!.textContent).toBe("Rb.tsnew");
   // Only the selected file is highlighted.
-  expect(rows().map((r) => r.className.includes("bg-primary/25"))).toEqual([false, true, false]);
+  expect(rows().map((r) => r.className.includes("bg-selected"))).toEqual([false, true, false]);
 });
 
 it("opens files and reports context menus", async () => {

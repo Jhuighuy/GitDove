@@ -510,7 +510,7 @@ function Item({
     <div
       className={cn(
         "group hover:bg-sidebar-accent flex h-6 cursor-default items-center gap-1.5 pr-2 pl-1 text-[12px] select-none [&_svg]:size-3.5 [&_svg]:shrink-0",
-        active && "bg-primary/20 hover:bg-primary/25 font-semibold",
+        active && "bg-selected hover:bg-selected font-semibold",
       )}
       title={title ?? label}
       onClick={onClick}

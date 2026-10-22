@@ -682,7 +682,7 @@ const textPoint = (node: Node, offset: number, isEnd: boolean): TextPoint | null
 
 const lineBg = (l: Line, selected: boolean) =>
   selected
-    ? "bg-primary/25"
+    ? "bg-selected"
     : l.kind === "add"
       ? "bg-success/12"
       : l.kind === "del"

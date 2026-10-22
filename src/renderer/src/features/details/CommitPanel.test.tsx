@@ -183,7 +183,7 @@ it("opens file diffs and highlights the open one", async () => {
     path: "docs/new.md",
     oldPath: "docs/old.md",
   });
-  expect(rows().map((r) => r.className.includes("bg-primary/25"))).toEqual([false, true]);
+  expect(rows().map((r) => r.className.includes("bg-selected"))).toEqual([false, true]);
   await act(async () => rows()[0]!.click());
   expect(useRepoUiStore.getState().byRepo[repo]?.diff).toEqual({
     kind: "commit",
@@ -194,7 +194,7 @@ it("opens file diffs and highlights the open one", async () => {
   await act(async () =>
     useRepoUiStore.getState().openDiff(repo, { kind: "commit", hash: "other", path: "x" }),
   );
-  expect(rows().some((r) => r.className.includes("bg-primary/25"))).toBe(false);
+  expect(rows().some((r) => r.className.includes("bg-selected"))).toBe(false);
 });
 
 it("links pull requests and URLs in the message", async () => {

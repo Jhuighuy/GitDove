@@ -142,7 +142,7 @@ const buttonByText = (label: string) => {
 const status = () => container.textContent?.match(/\d+ lines? selected/)?.[0] ?? null;
 const selectedIds = () =>
   [...container.querySelectorAll<HTMLElement>("[data-line]")]
-    .filter((el) => el.className.includes("bg-primary/25"))
+    .filter((el) => el.className.includes("bg-selected"))
     .map((el) => Number(el.dataset.line));
 
 it("shows the path, the target and lines with syntax and word highlighting", async () => {

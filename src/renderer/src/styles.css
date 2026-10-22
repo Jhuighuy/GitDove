@@ -39,6 +39,7 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-primary-hover: var(--primary-hover);
+  --color-selected: var(--selected);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -65,6 +66,8 @@
   --primary: #a8432e;
   --primary-hover: #913b2b;
   --primary-foreground: #fffaf5;
+  /* Selected rows and lines: a terracotta wash, lighter on white. */
+  --selected: color-mix(in oklch, var(--primary) 16%, transparent);
   --secondary: oklch(0.97 0.003 67);
   --secondary-foreground: oklch(0.216 0.006 56.043);
   --muted: oklch(0.97 0.003 67);
@@ -116,6 +119,7 @@
   --primary: #e7a082;
   --primary-hover: #f0b79a;
   --primary-foreground: #2c1e1a;
+  --selected: color-mix(in oklch, var(--primary) 22%, transparent);
   --secondary: oklch(0.268 0.007 45);
   --secondary-foreground: oklch(0.985 0.002 75);
   --muted: oklch(0.268 0.007 45);
@@ -164,6 +168,15 @@
   }
   html {
     @apply font-sans;
+    color-scheme: light;
+    /* Native controls (checkboxes, ranges) take the accent too. */
+    accent-color: var(--primary);
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  ::selection {
+    background-color: color-mix(in oklch, var(--primary) 30%, transparent);
   }
 }
 

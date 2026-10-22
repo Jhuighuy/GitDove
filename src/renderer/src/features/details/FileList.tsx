@@ -55,7 +55,7 @@ export const FileList = memo(function FileList({
             key={`${f.oldPath ?? ""}:${f.path}`}
             className={cn(
               "group flex h-6 cursor-default items-center gap-2 px-3 text-[12px] select-none",
-              selectedPath === f.path ? "bg-primary/25" : "hover:bg-muted/60",
+              selectedPath === f.path ? "bg-selected" : "hover:bg-muted/60",
             )}
             title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
             onClick={(e) => {
