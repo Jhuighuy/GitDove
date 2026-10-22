@@ -7,6 +7,7 @@ const electron = vi.hoisted(() => ({
   bridge: null as Bridge | null,
   onEvent: null as null | ((e: unknown, event: string, payload: unknown) => void),
   invoke: vi.fn(async (..._args: unknown[]) => ({ ok: true, value: 1 })),
+  send: vi.fn(),
 }));
 vi.mock("electron", () => ({
   contextBridge: {
@@ -16,6 +17,7 @@ vi.mock("electron", () => ({
   },
   ipcRenderer: {
     invoke: electron.invoke,
+    send: electron.send,
     on: (_channel: string, f: (e: unknown, event: string, payload: unknown) => void) => {
       electron.onEvent = f;
     },
@@ -39,6 +41,20 @@ describe("preload bridge", () => {
     const bridge = await load();
     await bridge.invoke("repo.status", "local:/a");
     expect(electron.invoke).toHaveBeenCalledWith("gitdove:invoke", "repo.status", ["local:/a"]);
+  });
+
+  it("numbers cancellable requests and cancels them by number", async () => {
+    const bridge = await load();
+    const cancels: (() => void)[] = [];
+    await bridge.invokeCancellable("repo.status", ["local:/a"], (c) => cancels.push(c));
+    await bridge.invokeCancellable("repo.refs", ["local:/a"], (c) => cancels.push(c));
+    expect(electron.invoke.mock.calls.slice(-2)).toEqual([
+      ["gitdove:invoke", "repo.status", ["local:/a"], 1],
+      ["gitdove:invoke", "repo.refs", ["local:/a"], 2],
+    ]);
+    expect(electron.send).not.toHaveBeenCalled();
+    cancels[1]!();
+    expect(electron.send).toHaveBeenCalledExactlyOnceWith("gitdove:cancel", 2);
   });
 
   it("delivers events to every listener even when one throws", async () => {

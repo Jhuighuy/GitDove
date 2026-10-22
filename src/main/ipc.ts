@@ -5,7 +5,9 @@ import {
   type ApiArgs,
   type ApiMethod,
   type ApiResult,
+  CANCELLABLE_METHODS,
   EDIT_COMMANDS,
+  IPC_CANCEL,
   IPC_INVOKE,
   isRepoId,
   isSshHost,
@@ -575,6 +577,8 @@ const serializeError = (cause: Cause.Cause<AppError>): RpcError => {
   return { tag: "Defect", message: Cause.pretty(cause).split("\n")[0] ?? "Unexpected error" };
 };
 
+const CANCELLABLE: ReadonlySet<string> = new Set(CANCELLABLE_METHODS);
+
 /** Failures that are part of normal operation, not worth a warning. */
 const EXPECTED = new Set(["StaleGraphError", "CancelledError", "Interrupted"]);
 
@@ -585,6 +589,8 @@ const badRequest = (message: string): RpcResult<never> => {
 
 /** Installs the single IPC entry point that dispatches to {@link handlers}. */
 export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, never>) => {
+  /** Cancellable requests in flight, by renderer (`webContents.id`) and request id. */
+  const inFlight = new Map<number, Map<number, AbortController>>();
   // Repositories a renderer used are released when it goes away (e.g. its window closed).
   const senders = new WeakSet<WebContents>();
   const track = (sender: WebContents) => {
@@ -592,14 +598,24 @@ export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, nev
     senders.add(sender);
     const id = sender.id;
     sender.once("destroyed", () => {
+      for (const controller of inFlight.get(id)?.values() ?? []) controller.abort();
+      inFlight.delete(id);
       runtime
         .runPromise(Effect.flatMap(Repos, (repos) => repos.releaseAll(id)))
         .catch((e: unknown) => log.warn("Cannot release repositories", e));
     });
   };
+  ipcMain.on(IPC_CANCEL, (event, requestId: unknown) => {
+    if (typeof requestId === "number") inFlight.get(event.sender.id)?.get(requestId)?.abort();
+  });
   ipcMain.handle(
     IPC_INVOKE,
-    async (event, method: unknown, input: unknown): Promise<RpcResult<unknown>> => {
+    async (
+      event,
+      method: unknown,
+      input: unknown,
+      requestId?: unknown,
+    ): Promise<RpcResult<unknown>> => {
       if (typeof method !== "string" || !Object.hasOwn(handlers, method)) {
         return badRequest(`Unknown method ${String(method).slice(0, 100)}`);
       }
@@ -613,12 +629,30 @@ export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, nev
       const handler = handlers[method as ApiMethod] as (
         ...a: readonly unknown[]
       ) => Effect.Effect<unknown, AppError, Services | Caller>;
+      // Only reads can be cancelled (see CANCELLABLE_METHODS): cancelling interrupts the
+      // handler, which kills its commands.
+      const sender = event.sender.id;
+      const controller =
+        typeof requestId === "number" && CANCELLABLE.has(method) ? new AbortController() : null;
+      if (controller) {
+        let requests = inFlight.get(sender);
+        if (!requests) inFlight.set(sender, (requests = new Map()));
+        requests.set(requestId as number, controller);
+      }
       const started = performance.now();
-      const exit = await runtime.runPromiseExit(
-        handler(...(args.value as readonly unknown[])).pipe(
-          Effect.provideService(Caller, { webContents: event.sender }),
-        ),
-      );
+      const exit = await runtime
+        .runPromiseExit(
+          handler(...(args.value as readonly unknown[])).pipe(
+            Effect.provideService(Caller, { webContents: event.sender }),
+          ),
+          controller ? { signal: controller.signal } : undefined,
+        )
+        .finally(() => {
+          const requests = inFlight.get(sender);
+          if (!controller || requests?.get(requestId as number) !== controller) return;
+          requests.delete(requestId as number);
+          if (requests.size === 0) inFlight.delete(sender);
+        });
       const ms = performance.now() - started;
       if (ms > 500) log.info(`${method} took ${ms.toFixed(0)}ms`);
       if (Exit.isSuccess(exit)) return { ok: true, value: exit.value };

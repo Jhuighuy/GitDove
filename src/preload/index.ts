@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-import { type Bridge, IPC_EVENT, IPC_INVOKE } from "@shared/ipc";
+import { type Bridge, IPC_CANCEL, IPC_EVENT, IPC_INVOKE } from "@shared/ipc";
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
 type Listener = (payload: unknown) => void;
@@ -18,8 +18,17 @@ ipcRenderer.on(IPC_EVENT, (_e: IpcRendererEvent, event: string, payload: unknown
   }
 });
 
+/** Id of the last cancellable request; ids are per renderer. */
+let lastRequest = 0;
+
 const bridge: Bridge = {
   invoke: (method, ...args) => ipcRenderer.invoke(IPC_INVOKE, method, args),
+  invokeCancellable: (method, args, onStart) => {
+    const id = ++lastRequest;
+    const result = ipcRenderer.invoke(IPC_INVOKE, method, args, id);
+    onStart(() => ipcRenderer.send(IPC_CANCEL, id));
+    return result;
+  },
   on: (event, listener) => {
     let set = listeners.get(event);
     if (!set) {

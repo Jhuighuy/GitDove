@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RepoLocation } from "@shared/domain";
-import { IPC_INVOKE, type RpcResult } from "@shared/ipc";
+import { IPC_CANCEL, IPC_INVOKE, type RpcResult } from "@shared/ipc";
 import type { WebContents } from "electron";
 import { Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,7 +29,7 @@ const electron = vi.hoisted(() => ({
       }),
     ),
   },
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
   shell: {
     showItemInFolder: vi.fn(),
     openPath: vi.fn(async () => ""),
@@ -764,6 +764,101 @@ describe("registerIpc", () => {
     expect(renderer.once).toHaveBeenCalledWith("destroyed", expect.any(Function));
     renderer.once.mock.calls[0]![1]();
     await vi.waitFor(() => expect(services.connected).toEqual(["release 5"]));
+  });
+
+  describe.skipIf(process.platform === "win32")("cancellation", () => {
+    type Cancel = (event: unknown, id: unknown) => void;
+    const setup = () => {
+      registerIpc(runtime);
+      const handler = electron.ipcMain.handle.mock.lastCall![1] as (
+        event: unknown,
+        method: unknown,
+        args: unknown,
+        id?: unknown,
+      ) => Promise<RpcResult<unknown>>;
+      const [channel, cancel] = electron.ipcMain.on.mock.lastCall as [string, Cancel];
+      expect(channel).toBe(IPC_CANCEL);
+      return { handler, cancel };
+    };
+    let dir = "";
+    beforeAll(() => {
+      dir = realpathSync(mkdtempSync(join(tmpdir(), "gitdove-cancel-")));
+    });
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+    /** A repository whose `status` runs a command that takes long; returns its pid file. */
+    const slowStatus = (name: string) => {
+      const pidFile = join(dir, name);
+      services.repo = Object.assign(fakeRepo({ kind: "local", path: "/work/repo" }), {
+        status: () => spawn("/bin/sh", ["-c", `echo $$ > '${pidFile}'; exec sleep 30`]),
+        commit: () => Effect.sleep("300 millis").pipe(Effect.as("committed")),
+      });
+      return async () => {
+        await vi.waitFor(() => expect(readFileSync(pidFile, "utf8")).toMatch(/^\d+\n$/));
+        return Number(readFileSync(pidFile, "utf8"));
+      };
+    };
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    it("interrupts a read and kills its command", async () => {
+      const { handler, cancel } = setup();
+      const pid = slowStatus("status");
+      const result = handler({ sender }, "repo.status", ["local:/work/repo"], 7);
+      const running = await pid();
+      expect(alive(running)).toBe(true);
+      // Another renderer's request with the same id is someone else's.
+      cancel({ sender: { id: 2 } }, 7);
+      cancel({ sender }, 8);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(alive(running)).toBe(true);
+
+      cancel({ sender }, 7);
+      expect(await result).toEqual({
+        ok: false,
+        error: { tag: "Interrupted", message: "Operation was cancelled" },
+      });
+      await vi.waitFor(() => expect(alive(running)).toBe(false));
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+
+    it("never interrupts writes, nor requests without an id", async () => {
+      const { handler, cancel } = setup();
+      const pid = slowStatus("plain");
+      const write = handler(
+        { sender },
+        "repo.commit",
+        ["local:/work/repo", "m", { amend: false }],
+        9,
+      );
+      cancel({ sender }, 9);
+      expect(await write).toEqual({ ok: true, value: "committed" });
+
+      const read = handler({ sender }, "repo.status", ["local:/work/repo"]);
+      const running = await pid();
+      cancel({ sender }, undefined);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(alive(running)).toBe(true);
+      process.kill(running);
+      expect(await read).toMatchObject({ ok: false });
+    });
+
+    it("interrupts the requests of a renderer that goes away", async () => {
+      const renderer = { id: 6, once: vi.fn() };
+      const { handler } = setup();
+      const pid = slowStatus("gone");
+      const result = handler({ sender: renderer }, "repo.status", ["local:/work/repo"], 1);
+      const running = await pid();
+      renderer.once.mock.calls[0]![1]();
+      expect(await result).toMatchObject({ ok: false, error: { tag: "Interrupted" } });
+      await vi.waitFor(() => expect(alive(running)).toBe(false));
+    });
   });
 
   it("logs slow calls", async () => {

@@ -13,7 +13,7 @@ import {
 import { useCallback, useMemo } from "react";
 import { isFilteredOut, isHidden } from "@shared/visibility";
 import { busyOf } from "@/stores/busy";
-import { api, ApiError, useEvent } from "./api";
+import { api, ApiError, apiWithSignal, useEvent } from "./api";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -61,19 +61,34 @@ export const keys = {
 };
 
 export const useRepoInfo = (repo: RepoId) =>
-  useQuery({ queryKey: keys.info(repo), queryFn: () => api("repo.info", repo) });
+  useQuery({
+    queryKey: keys.info(repo),
+    queryFn: ({ signal }) => apiWithSignal(signal, "repo.info", repo),
+  });
 
 export const useRefs = (repo: RepoId) =>
-  useQuery({ queryKey: keys.refs(repo), queryFn: () => api("repo.refs", repo) });
+  useQuery({
+    queryKey: keys.refs(repo),
+    queryFn: ({ signal }) => apiWithSignal(signal, "repo.refs", repo),
+  });
 
 export const useHiddenRefs = (repo: RepoId) =>
-  useQuery({ queryKey: keys.hidden(repo), queryFn: () => api("repo.hiddenRefs", repo) });
+  useQuery({
+    queryKey: keys.hidden(repo),
+    queryFn: ({ signal }) => apiWithSignal(signal, "repo.hiddenRefs", repo),
+  });
 
 export const useStatus = (repo: RepoId) =>
-  useQuery({ queryKey: keys.status(repo), queryFn: () => api("repo.status", repo) });
+  useQuery({
+    queryKey: keys.status(repo),
+    queryFn: ({ signal }) => apiWithSignal(signal, "repo.status", repo),
+  });
 
 export const useGraphInfo = (repo: RepoId) =>
-  useQuery({ queryKey: keys.graphInfo(repo), queryFn: () => api("repo.graphInfo", repo) });
+  useQuery({
+    queryKey: keys.graphInfo(repo),
+    queryFn: ({ signal }) => apiWithSignal(signal, "repo.graphInfo", repo),
+  });
 
 // Commits never change and change events leave these queries alone, but a commit's file list
 // can be large: drop it soon after no view shows it.
@@ -90,7 +105,10 @@ export const useCommitDetails = (
 ) =>
   useQuery({
     queryKey: keys.commit(repo, hash ?? ""),
-    queryFn: hash === null ? skipToken : () => api("repo.commitDetails", repo, hash),
+    queryFn:
+      hash === null
+        ? skipToken
+        : ({ signal }) => apiWithSignal(signal, "repo.commitDetails", repo, hash),
     gcTime: COMMIT_GC_MS,
     placeholderData: keepPrevious ? keepPreviousData : undefined,
   });
@@ -99,14 +117,20 @@ export const useCommitDetails = (
 export const useCompare = (repo: RepoId, base: string | null, tip: string | null) =>
   useQuery({
     queryKey: keys.compare(repo, base, tip ?? ""),
-    queryFn: tip === null ? skipToken : () => api("repo.compare", repo, base, tip),
+    queryFn:
+      tip === null
+        ? skipToken
+        : ({ signal }) => apiWithSignal(signal, "repo.compare", repo, base, tip),
     gcTime: COMMIT_GC_MS,
   });
 
 export const useDiff = (repo: RepoId, target: DiffTarget | null) =>
   useQuery({
     queryKey: [...keys.diffs(repo), target],
-    queryFn: target === null ? skipToken : () => api("repo.diff", repo, target),
+    queryFn:
+      target === null
+        ? skipToken
+        : ({ signal }) => apiWithSignal(signal, "repo.diff", repo, target),
     placeholderData: keepPreviousData,
     gcTime: 30 * 1000,
   });
@@ -114,7 +138,7 @@ export const useDiff = (repo: RepoId, target: DiffTarget | null) =>
 export const useFileVersions = (repo: RepoId, target: DiffTarget) =>
   useQuery({
     queryKey: keys.fileVersions(repo, target),
-    queryFn: () => api("repo.fileVersions", repo, target),
+    queryFn: ({ signal }) => apiWithSignal(signal, "repo.fileVersions", repo, target),
     // Whole files can be large: drop them as soon as no view shows them.
     gcTime: 0,
   });
@@ -174,8 +198,15 @@ export const useGraphRows = (
   return useQueries({
     queries: pages.map(({ page, size }) => ({
       queryKey: keys.graphPage(repo, version, page, size),
-      queryFn: () =>
-        api("repo.graphRows", repo, version, page * GRAPH_PAGE, page * GRAPH_PAGE + size),
+      queryFn: ({ signal }) =>
+        apiWithSignal(
+          signal,
+          "repo.graphRows",
+          repo,
+          version,
+          page * GRAPH_PAGE,
+          page * GRAPH_PAGE + size,
+        ),
       staleTime: Infinity,
       gcTime: 60 * 1000,
       placeholderData: () => placeholderPage(client, repo, version, page),

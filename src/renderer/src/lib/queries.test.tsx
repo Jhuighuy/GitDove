@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   api: vi.fn(),
+  signals: [] as (AbortSignal | undefined)[],
   listeners: new Map<string, (payload: unknown) => void>(),
 }));
 vi.mock("./api", () => ({
@@ -16,6 +17,10 @@ vi.mock("./api", () => ({
     }
   },
   api: mocks.api,
+  apiWithSignal: (signal: AbortSignal | undefined, ...args: unknown[]) => {
+    mocks.signals.push(signal);
+    return mocks.api(...args);
+  },
   useEvent: (event: string, listener: (payload: unknown) => void) => {
     mocks.listeners.set(event, listener);
   },
@@ -34,6 +39,7 @@ let client: QueryClient;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.api.mockReset();
+  mocks.signals.length = 0;
   mocks.listeners.clear();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root = createRoot(document.createElement("div"));
@@ -139,6 +145,19 @@ it("fetches repository data through the api", async () => {
       ["repo.fileVersions", repo, target],
     ]),
   );
+  // Each with its query's signal, so that the main process stops what nobody waits for.
+  expect(mocks.signals).toHaveLength(calls().length);
+  expect(mocks.signals.every((s) => s instanceof AbortSignal)).toBe(true);
+});
+
+it("cancels a query that no view waits for any more", async () => {
+  mocks.api.mockReturnValue(new Promise(() => {}));
+  await renderHook(() => q.useCommitDetails(repo, "abc"), null);
+  await until(() => expect(mocks.signals).toHaveLength(1));
+  expect(mocks.signals[0]!.aborted).toBe(false);
+  await act(async () => root.unmount());
+  root = createRoot(document.createElement("div"));
+  expect(mocks.signals[0]!.aborted).toBe(true);
 });
 
 it("does not fetch commit details or diffs without a target", async () => {

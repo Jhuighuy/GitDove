@@ -186,6 +186,30 @@ export type ApiMethod = keyof Api;
 export type ApiArgs<M extends ApiMethod> = Parameters<Api[M]>;
 export type ApiResult<M extends ApiMethod> = ReturnType<Api[M]>;
 
+/**
+ * Methods that only read, whose requests can be cancelled (see `Bridge.invokeCancellable`),
+ * which stops their git commands, e.g. when no view waits for a query any more. Writes never
+ * are: abandoning a query must not stop an operation halfway.
+ */
+export const CANCELLABLE_METHODS = [
+  "repo.info",
+  "repo.refs",
+  "repo.graphInfo",
+  "repo.graphRows",
+  "repo.graphHashes",
+  "repo.findCommit",
+  "repo.findCommits",
+  "repo.search",
+  "repo.status",
+  "repo.commitDetails",
+  "repo.compare",
+  "repo.diff",
+  "repo.fileVersions",
+  "repo.lastCommitMessage",
+  "repo.hiddenRefs",
+] as const satisfies readonly ApiMethod[];
+export type CancellableMethod = (typeof CANCELLABLE_METHODS)[number];
+
 /** Serialized error crossing the IPC boundary. */
 export interface RpcError {
   readonly tag: string;
@@ -226,12 +250,24 @@ export type MenuCommand =
 
 export type EventName = keyof Events;
 
+/** Requests: `(method, args, requestId?)`; a request id makes the request cancellable. */
 export const IPC_INVOKE = "gitdove:invoke";
+/** Cancels the caller's request with this id (sent, not invoked). */
+export const IPC_CANCEL = "gitdove:cancel";
 export const IPC_EVENT = "gitdove:event";
 
 /** Shape of the bridge exposed by the preload script as `window.gitdove`. */
 export interface Bridge {
   invoke<M extends ApiMethod>(method: M, ...args: ApiArgs<M>): Promise<RpcResult<ApiResult<M>>>;
+  /**
+   * Like {@link invoke}, for a read-only method. `onStart` gets a function that cancels the
+   * request; the request then fails with an "Interrupted" error, unless it was done already.
+   */
+  invokeCancellable<M extends CancellableMethod>(
+    method: M,
+    args: ApiArgs<M>,
+    onStart: (cancel: () => void) => void,
+  ): Promise<RpcResult<ApiResult<M>>>;
   on<E extends EventName>(event: E, listener: (payload: Events[E]) => void): () => void;
   platform: string;
 }

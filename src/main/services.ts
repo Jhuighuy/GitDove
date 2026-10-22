@@ -191,31 +191,35 @@ export const ReposLive = Layer.effect(
         // Connecting first skips the backoff after failed attempts (see `Hosts.connect`).
         const connect =
           reconnect && location.kind === "ssh" ? hosts.connect(location.host) : Effect.void;
-        return connect.pipe(
-          Effect.andThen(
-            Repository.open(host, location, {
-              onGraphProgress: (repo, info) =>
-                notifier.emit("repo.graphProgress", { repo: repo.id, info }),
-              fork,
+        // In the background: callers only wait for it, so one that is interrupted (e.g. a
+        // cancelled query) does not interrupt the open the others wait for.
+        fork(
+          connect.pipe(
+            Effect.andThen(
+              Repository.open(host, location, {
+                onGraphProgress: (repo, info) =>
+                  notifier.emit("repo.graphProgress", { repo: repo.id, info }),
+                fork,
+              }),
+            ),
+            Effect.map(register),
+            Effect.onExit((exit) => {
+              opening.delete(requested);
+              const owners = claims.get(requested) ?? new Set();
+              claims.delete(requested);
+              if (Exit.isFailure(exit)) return Deferred.failCause(deferred, exit.cause);
+              const entry = exit.value;
+              if (entry.repo.id !== requested) aliases.set(requested, entry.repo.id);
+              closed.delete(entry.repo.id);
+              for (const o of owners) entry.owners.add(o);
+              // Every owner closed it while it was opening.
+              if (entry.owners.size === 0) closeEntry(entry);
+              else updateVisibility(entry);
+              return Deferred.succeed(deferred, entry.repo);
             }),
           ),
-          Effect.map(register),
-          Effect.onExit((exit) => {
-            opening.delete(requested);
-            const owners = claims.get(requested) ?? new Set();
-            claims.delete(requested);
-            if (Exit.isFailure(exit)) return Deferred.failCause(deferred, exit.cause);
-            const entry = exit.value;
-            if (entry.repo.id !== requested) aliases.set(requested, entry.repo.id);
-            closed.delete(entry.repo.id);
-            for (const o of owners) entry.owners.add(o);
-            // Every owner closed it while it was opening.
-            if (entry.owners.size === 0) closeEntry(entry);
-            else updateVisibility(entry);
-            return Deferred.succeed(deferred, entry.repo);
-          }),
-          Effect.map((entry) => entry.repo),
         );
+        return Deferred.await(deferred);
       });
 
     const get = (id: RepoId, owner: Owner) =>
