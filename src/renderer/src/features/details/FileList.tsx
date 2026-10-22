@@ -1,4 +1,4 @@
-import type { ChangeKind, FileChange } from "@shared/domain";
+import type { ChangeKind, ConflictCode, FileChange } from "@shared/domain";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   memo,
@@ -25,11 +25,22 @@ const KIND: Record<ChangeKind, { letter: string; className: string; label: strin
   conflicted: { letter: "!", className: "text-red-500", label: "Conflicted" },
 };
 
-export function ChangeBadge({ kind }: { kind: ChangeKind }) {
+/** How a conflicted file conflicts, in the words of `git status`. */
+export const CONFLICT: Record<ConflictCode, string> = {
+  UU: "both modified",
+  AA: "both added",
+  DD: "both deleted",
+  AU: "added by us",
+  UA: "added by them",
+  DU: "deleted by us",
+  UD: "deleted by them",
+};
+
+export function ChangeBadge({ kind, title }: { kind: ChangeKind; title?: string }) {
   const k = KIND[kind];
   return (
     <span
-      title={k.label}
+      title={title ?? k.label}
       className={cn("w-3 shrink-0 text-center font-mono text-[11px] font-bold", k.className)}
     >
       {k.letter}
@@ -206,11 +217,17 @@ const FileRow = memo(function FileRow({
         if (!(e.target as Element).closest("[data-row-actions]")) onOpen(index);
       }}
     >
-      <ChangeBadge kind={f.kind} />
+      <ChangeBadge
+        kind={f.kind}
+        title={f.conflict ? `Conflicted: ${CONFLICT[f.conflict]}` : undefined}
+      />
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <span className="shrink-0 truncate">{basename(f.path)}</span>
         {dir && <span className="text-muted-foreground min-w-0 truncate text-[11px]">{dir}</span>}
       </span>
+      {f.conflict && (
+        <span className="shrink-0 text-[11px] text-red-500">{CONFLICT[f.conflict]}</span>
+      )}
       {actions && actions.length > 0 && (
         <span
           data-row-actions
@@ -251,6 +268,20 @@ const FileRow = memo(function FileRow({
     </div>
   );
 });
+
+/** "N files changed", counting files left out of a truncated list. */
+export const filesChanged = (listed: number, total = listed) =>
+  `${total.toLocaleString()} ${total === 1 ? "file" : "files"} changed`;
+
+/** Says how many changed files a truncated list leaves out. */
+export function MoreFiles({ listed, total }: { listed: number; total: number | undefined }) {
+  const more = total === undefined ? 0 : total - listed;
+  return (
+    <div className="text-muted-foreground px-3 py-1.5 text-[11px]" title="Too many files to list">
+      {more > 0 ? `…and ${more.toLocaleString()} more files` : "…and more files"}
+    </div>
+  );
+}
 
 const keyLabel = (key: string) =>
   key === "delete" ? "Delete" : key === "backspace" ? "Backspace" : key.toUpperCase();

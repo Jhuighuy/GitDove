@@ -7,7 +7,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { type PickedCommit, useRepoUiStore } from "@/stores/repo-ui";
 import { CommitsPanel } from "./CommitsPanel";
 
-const mocks = vi.hoisted(() => ({ compared: [] as unknown[][] }));
+const mocks = vi.hoisted(() => ({
+  compared: [] as unknown[][],
+  more: {} as Partial<Comparison>,
+}));
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
@@ -32,6 +35,7 @@ vi.mock("@/lib/api", () => ({
           },
           { path: "b.ts", oldPath: null, kind: "added", additions: 2, deletions: 0, binary: false },
         ],
+        ...mocks.more,
       } satisfies Comparison;
     }
     throw new Error(`unexpected ${method}`);
@@ -64,6 +68,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.compared = [];
+  mocks.more = {};
   useRepoUiStore.setState({ byRepo: {} });
   container = document.createElement("div");
   document.body.append(container);
@@ -116,6 +121,13 @@ it("lists the commits and the changes from the oldest one's parent to the newest
     kind: "commit",
     hash: "4".repeat(40),
   });
+});
+
+it("says how many files a truncated comparison leaves out", async () => {
+  mocks.more = { truncated: true, totalFiles: 10_002 };
+  await render([picked(1), picked(4)]);
+  expect(container.textContent).toContain("10,002 files changed");
+  expect(container.textContent).toContain("…and 10,000 more files");
 });
 
 it("compares a root commit with the empty tree", async () => {

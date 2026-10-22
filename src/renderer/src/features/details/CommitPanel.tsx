@@ -9,7 +9,7 @@ import { useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
 import { fileTarget } from "../diff/targets";
 import { Avatar, useAvatarProviders } from "@/components/Avatar";
-import { FileList } from "./FileList";
+import { FileList, filesChanged, MoreFiles } from "./FileList";
 
 /** How long a selection must stay before its details load, while moving through commits. */
 const SETTLE_MS = 100;
@@ -131,9 +131,12 @@ export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
 
       <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-xs">
         <span className="font-medium tabular-nums">
-          {data.files.length} {data.files.length === 1 ? "file" : "files"} changed
+          {filesChanged(data.files.length, data.totalFiles)}
         </span>
-        <span className="ml-auto font-mono text-[11px] tabular-nums">
+        <span
+          className="ml-auto font-mono text-[11px] tabular-nums"
+          title={data.truncated ? "In the files listed" : undefined}
+        >
           <span className="text-emerald-500">+{additions}</span>{" "}
           <span className="text-red-500">-{deletions}</span>
         </span>
@@ -146,6 +149,7 @@ export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
           onOpen={onOpen}
           scroller={scroller}
         />
+        {data.truncated && <MoreFiles listed={data.files.length} total={data.totalFiles} />}
       </div>
     </div>
   );

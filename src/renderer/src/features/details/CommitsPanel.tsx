@@ -7,7 +7,7 @@ import { useCompare } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { type PickedCommit, useRepoUiStore } from "@/stores/repo-ui";
 import { fileTarget } from "../diff/targets";
-import { FileList } from "./FileList";
+import { FileList, filesChanged, MoreFiles } from "./FileList";
 
 /**
  * Details of several selected commits: the commits, and the changes from the parent of the
@@ -82,9 +82,7 @@ export function CommitsPanel({
 
       <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-xs">
         <span className="font-medium tabular-nums">
-          {data
-            ? `${data.files.length} ${data.files.length === 1 ? "file" : "files"} changed`
-            : "Changes"}
+          {data ? filesChanged(data.files.length, data.totalFiles) : "Changes"}
         </span>
         <span
           className="text-muted-foreground truncate"
@@ -93,7 +91,10 @@ export function CommitsPanel({
           in {shortHash(oldest.hash)}…{shortHash(tip.hash)}
         </span>
         {data && (
-          <span className="ml-auto font-mono text-[11px] tabular-nums">
+          <span
+            className="ml-auto font-mono text-[11px] tabular-nums"
+            title={data.truncated ? "In the files listed" : undefined}
+          >
             <span className="text-emerald-500">+{additions}</span>{" "}
             <span className="text-red-500">-{deletions}</span>
           </span>
@@ -104,13 +105,16 @@ export function CommitsPanel({
         className={cn("min-h-0 flex-1 overflow-y-auto", !data && "flex items-start")}
       >
         {data ? (
-          <FileList
-            label="Changed files"
-            files={data.files}
-            selectedPath={selectedPath}
-            onOpen={onOpen}
-            scroller={scroller}
-          />
+          <div>
+            <FileList
+              label="Changed files"
+              files={data.files}
+              selectedPath={selectedPath}
+              onOpen={onOpen}
+              scroller={scroller}
+            />
+            {data.truncated && <MoreFiles listed={data.files.length} total={data.totalFiles} />}
+          </div>
         ) : error ? (
           <div className="text-destructive p-3 text-sm">{error.message}</div>
         ) : (

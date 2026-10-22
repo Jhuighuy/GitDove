@@ -100,6 +100,21 @@ it("lists files with their folder, stats and rename source", async () => {
   expect(list().getAttribute("aria-activedescendant")).toBe(readme!.id);
 });
 
+it("says how a conflicted file conflicts", async () => {
+  await show({
+    files: [
+      file("a.ts", { kind: "conflicted", conflict: "UD" }),
+      file("b.ts", { kind: "conflicted", conflict: "AA" }),
+    ],
+    selectedPath: null,
+    onOpen: () => {},
+  });
+  const [a, b] = rows();
+  expect(a!.textContent).toBe("!a.tsdeleted by them");
+  expect(b!.textContent).toBe("!b.tsboth added");
+  expect(a!.querySelector("span")!.title).toBe("Conflicted: deleted by them");
+});
+
 it("renders only the rows on screen", async () => {
   const files = Array.from({ length: 5000 }, (_, i) => file(`f${i}.ts`));
   await show({ files, selectedPath: null, onOpen: () => {} });

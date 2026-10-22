@@ -142,6 +142,16 @@ it("shows the commit message, author and file stats", async () => {
   ).toEqual(["src/engine.ts", "docs/old.md → docs/new.md"]);
 });
 
+it("says how many files a truncated list leaves out", async () => {
+  mocks.commit = details({ truncated: true, totalFiles: 12_345 });
+  await render();
+  expect(text()).toContain("12,345 files changed");
+  expect(text()).toContain("…and 12,343 more files");
+  mocks.commit = details();
+  await render("eeee");
+  expect(text()).not.toContain("more files");
+});
+
 it("shows a separate committer, merge parents and singular counts", async () => {
   mocks.commit = details({
     body: "",
