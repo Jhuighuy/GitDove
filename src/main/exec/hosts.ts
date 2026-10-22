@@ -474,27 +474,31 @@ interface SshContext {
   /** When each host's runner may be tried again after it failed to start. */
   readonly runnerRetryAt: Map<string, number>;
   readonly backoff: Backoff;
+  readonly multiplex: boolean;
 }
 
 /** Returns the host's master connection, reconnecting if it died (or, with `verify`, hangs). */
 const liveMaster = (ctx: SshContext, host: string, verify = false) =>
-  ctx.backoff.guard(
-    host,
-    Effect.gen(function* () {
-      const master = yield* getOrRetry(ctx.masters, host);
-      const alive =
-        master.isAlive() &&
-        (!verify ||
-          master.controlPath === null ||
-          (yield* control(master.controlPath, "check", host).pipe(
-            Effect.as(true),
-            Effect.orElseSucceed(() => false),
-          )));
-      if (alive) return master;
-      yield* RcMap.invalidate(ctx.masters, host);
-      return yield* getOrRetry(ctx.masters, host);
-    }),
-  );
+  // Without multiplexing, the runner's connection is the one that fails (and backs off).
+  !ctx.multiplex
+    ? Effect.succeed(DIRECT)
+    : ctx.backoff.guard(
+        host,
+        Effect.gen(function* () {
+          const master = yield* getOrRetry(ctx.masters, host);
+          const alive =
+            master.isAlive() &&
+            (!verify ||
+              master.controlPath === null ||
+              (yield* control(master.controlPath, "check", host).pipe(
+                Effect.as(true),
+                Effect.orElseSucceed(() => false),
+              )));
+          if (alive) return master;
+          yield* RcMap.invalidate(ctx.masters, host);
+          return yield* getOrRetry(ctx.masters, host);
+        }),
+      );
 
 /** A host whose alias is not valid: every command fails before running ssh. */
 const invalidHost = (host: string, message: string): Host => {
@@ -709,6 +713,7 @@ export const makeHostsLayer = (
       const ctx: SshContext = {
         masters,
         backoff,
+        multiplex,
         runnerRetryAt,
         runners: yield* RcMap.make({
           lookup: (host: string) =>
