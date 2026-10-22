@@ -172,7 +172,7 @@ export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
     let last = 0;
     for (const m of s.matchAll(REF_RE)) {
       // GitLab paths may name nested groups; on a host not known to be GitLab, `!` says it is.
-      const gitlab = repo.forge === "gitlab" || (repo.forge === "other" && m[0][0] === "!");
+      const gitlab = repo.forge === "gitlab" || (repo.forge === "other" && m[0].startsWith("!"));
       const ref = reference(s, m, gitlab);
       if (!ref || ref.start < last || (ref.sigil === "!" && !gitlab)) continue;
       if (ref.start > last) out.push({ text: s.slice(last, ref.start) });
