@@ -1,7 +1,8 @@
 import type { RepoId, RepoLocation } from "@shared/domain";
 import { repoIdOf, repoLocationOf } from "@shared/domain";
 import type { EventName, Events } from "@shared/ipc";
-import { Context, Deferred, Effect, Exit, Layer } from "effect";
+import log from "electron-log/main";
+import { Cause, Context, Deferred, Effect, Exit, Layer, Logger } from "effect";
 import { InvalidInputError, type NotARepositoryError, RepoNotOpenError } from "./exec/errors";
 import { Hosts, LOCAL_HOST } from "./exec/hosts";
 import { type GitError, Repository } from "./git/repository";
@@ -21,6 +22,26 @@ export class RepoSettings extends Context.Service<
     readonly setHidden: (repo: RepoId, hidden: readonly string[]) => void;
   }
 >()("gitdove/RepoSettings") {}
+
+/** Writes Effect logs to the app log (Help › Show Logs) instead of the console. */
+export const electronLogger = Logger.make(({ logLevel, message, cause }) => {
+  const parts: unknown[] = Array.isArray(message) ? [...message] : [message];
+  if (cause.reasons.length > 0) parts.push(Cause.pretty(cause));
+  switch (logLevel) {
+    case "Fatal":
+    case "Error":
+      return log.error(...parts);
+    case "Warn":
+      return log.warn(...parts);
+    case "Info":
+      return log.info(...parts);
+    default:
+      return log.debug(...parts);
+  }
+});
+
+/** Replaces the default (console) logger; provide it to every layer so their fibers use it. */
+export const LoggerLive = Logger.layer([electronLogger]);
 
 type OpenError = GitError | NotARepositoryError;
 

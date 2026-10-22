@@ -1,11 +1,11 @@
 import type { RepoLocation } from "@shared/domain";
 import type { RepoChangeScope } from "@shared/ipc";
-import { Effect, Exit, Layer, ManagedRuntime } from "effect";
+import { Context, Effect, Exit, Layer, ManagedRuntime, RcMap } from "effect";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { InvalidInputError, NotARepositoryError, RepoNotOpenError } from "./exec/errors";
 import { type Host, Hosts } from "./exec/hosts";
 import type { Repository } from "./git/repository";
-import { Notifier, RepoSettings, Repos, ReposLive } from "./services";
+import { LoggerLive, Notifier, RepoSettings, Repos, ReposLive } from "./services";
 
 interface Hooks {
   readonly onGraphProgress: (repo: Repository, info: unknown) => void;
@@ -49,6 +49,8 @@ vi.mock("./git/repository", async () => {
   );
   return { Repository: { open: fake.open } };
 });
+const log = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock("electron-log/main", () => ({ default: log }));
 vi.mock("./git/watcher", () => ({
   watchRepository: vi.fn((repo: { id: string }, listener: (s: Set<string>) => void) => {
     const dispose = vi.fn();
@@ -277,5 +279,43 @@ describe("Repos", () => {
     current = null;
     expect(fake.watchers.map((w) => w.dispose.mock.calls.length)).toEqual([1, 1]);
     expect(opened.map((r) => vi.mocked(r.dispose).mock.calls.length)).toEqual([1, 1]);
+  });
+});
+
+describe("LoggerLive", () => {
+  it("writes Effect logs to the app log by level", async () => {
+    const runtime = ManagedRuntime.make(LoggerLive);
+    await runtime.runPromise(
+      Effect.all([
+        Effect.logInfo("hello", 42),
+        Effect.logWarning("careful"),
+        Effect.logError("bad", new Error("boom")),
+        Effect.logFatal("worse"),
+      ]),
+    );
+    await runtime.dispose();
+    expect(log.info).toHaveBeenCalledWith("hello", 42);
+    expect(log.warn).toHaveBeenCalledWith("careful");
+    expect(log.error).toHaveBeenCalledWith("bad", expect.any(Error));
+    expect(log.error).toHaveBeenCalledWith("worse");
+  });
+
+  it("reaches fibers that layers start, even for callers outside the runtime", async () => {
+    // Like the SSH masters in `HostsLive`: an RcMap made while building a layer.
+    class Pool extends Context.Service<Pool, RcMap.RcMap<string, string>>()("test/Pool") {}
+    const PoolLive = Layer.effect(
+      Pool,
+      RcMap.make({ lookup: (key: string) => Effect.as(Effect.logInfo(`open ${key}`), key) }),
+    );
+    const runtime = ManagedRuntime.make(PoolLive.pipe(Layer.provide(LoggerLive)));
+    const pool = await runtime.runPromise(
+      Effect.gen(function* () {
+        return yield* Pool;
+      }),
+    );
+    // A fiber of the default runtime, e.g. a watcher started with `Effect.runFork`.
+    await Effect.runPromise(Effect.scoped(RcMap.get(pool, "fedora")));
+    await runtime.dispose();
+    expect(log.info).toHaveBeenCalledWith("open fedora");
   });
 });
