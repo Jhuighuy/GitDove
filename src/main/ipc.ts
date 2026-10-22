@@ -598,23 +598,30 @@ const badRequest = (message: string): RpcResult<never> => {
   return { ok: false, error: { tag: "BadRequest", message } };
 };
 
-/** Installs the single IPC entry point that dispatches to {@link handlers}. */
-export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, never>) => {
+/**
+ * Installs the single IPC entry point that dispatches to {@link handlers}. Returns a function
+ * that forgets a renderer that is gone but whose web contents live on (its process crashed):
+ * stops its requests and releases its repositories.
+ */
+export const registerIpc = (
+  runtime: ManagedRuntime.ManagedRuntime<Services, never>,
+): { readonly releaseRenderer: (sender: WebContents) => Promise<void> } => {
   /** Cancellable requests in flight, by renderer (`webContents.id`) and request id. */
   const inFlight = new Map<number, Map<number, AbortController>>();
+  const release = (id: number) => {
+    for (const controller of inFlight.get(id)?.values() ?? []) controller.abort();
+    inFlight.delete(id);
+    return runtime
+      .runPromise(Effect.flatMap(Repos, (repos) => repos.releaseAll(id)))
+      .catch((e: unknown) => log.warn("Cannot release repositories", e));
+  };
   // Repositories a renderer used are released when it goes away (e.g. its window closed).
   const senders = new WeakSet<WebContents>();
   const track = (sender: WebContents) => {
     if (senders.has(sender)) return;
     senders.add(sender);
     const id = sender.id;
-    sender.once("destroyed", () => {
-      for (const controller of inFlight.get(id)?.values() ?? []) controller.abort();
-      inFlight.delete(id);
-      runtime
-        .runPromise(Effect.flatMap(Repos, (repos) => repos.releaseAll(id)))
-        .catch((e: unknown) => log.warn("Cannot release repositories", e));
-    });
+    sender.once("destroyed", () => void release(id));
   };
   ipcMain.on(IPC_CANCEL, (event, requestId: unknown) => {
     if (typeof requestId === "number") inFlight.get(event.sender.id)?.get(requestId)?.abort();
@@ -673,4 +680,5 @@ export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, nev
       return { ok: false, error };
     },
   );
+  return { releaseRenderer: (sender) => release(sender.id) };
 };

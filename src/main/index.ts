@@ -216,6 +216,12 @@ const chrome = () =>
 
 const titleBarOverlay = () => ({ color: "#00000000", symbolColor: chrome().symbols, height: 40 });
 
+/** Releases what a crashed renderer used, see `registerIpc`. */
+let releaseRenderer: ((sender: Electron.WebContents) => Promise<void>) | null = null;
+/** A window whose renderer crashed more than this often in this long is not reloaded. */
+const MAX_CRASHES = 3;
+const CRASH_WINDOW_MS = 60_000;
+
 const createWindow = () => {
   const win = new BrowserWindow({
     width: 1440,
@@ -241,6 +247,21 @@ const createWindow = () => {
   });
 
   win.once("ready-to-show", () => win.show());
+  // A crashed renderer: its repositories are released (its tabs open them again), then the
+  // window loads again, unless it keeps crashing.
+  const crashes: number[] = [];
+  win.webContents.on("render-process-gone", (_e, details) => {
+    log.error(`Renderer process gone: ${details.reason} (exit code ${details.exitCode})`);
+    if (details.reason === "clean-exit" || win.isDestroyed()) return;
+    const now = Date.now();
+    crashes.push(now);
+    while (crashes[0]! < now - CRASH_WINDOW_MS) crashes.shift();
+    void (releaseRenderer?.(win.webContents) ?? Promise.resolve()).then(() => {
+      if (win.isDestroyed()) return;
+      if (crashes.length > MAX_CRASHES) log.error("The renderer keeps crashing: not reloading it");
+      else win.webContents.reload();
+    });
+  });
   win.on("focus", () => activity.setFocused(true));
   win.on("blur", () =>
     activity.setFocused(
@@ -284,7 +305,7 @@ const main = async () => {
   if (isMac && !app.isPackaged) app.dock?.setIcon(dockIcon);
   // The login shell may take a while: spawns wait for it, the window does not.
   Effect.runSync(loadEnvironment);
-  registerIpc(runtime);
+  ({ releaseRenderer } = registerIpc(runtime));
   restrictPermissions();
   handleAvatarProtocol();
   buildMenu();

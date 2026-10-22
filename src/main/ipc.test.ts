@@ -783,6 +783,13 @@ describe("registerIpc", () => {
     await vi.waitFor(() => expect(services.connected).toEqual(["release 5"]));
   });
 
+  it("releases the repositories of a renderer whose process crashed", async () => {
+    const renderer = { id: 7, once: vi.fn() };
+    const { releaseRenderer } = registerIpc(runtime);
+    await releaseRenderer(renderer as unknown as WebContents);
+    expect(services.connected).toEqual(["release 7"]);
+  });
+
   describe.skipIf(process.platform === "win32")("cancellation", () => {
     type Cancel = (event: unknown, id: unknown) => void;
     const setup = () => {
