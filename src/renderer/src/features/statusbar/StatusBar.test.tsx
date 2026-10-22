@@ -119,7 +119,9 @@ it("says why the history is cut off or outdated, and retries on request", async 
   mocks.graphInfo = { ...info, count: 2400 };
   const retry = [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
   await act(async () => retry.click());
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: keys.repo(LOCAL) });
+  // Only the graph, not the refs, status or diffs.
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: [...keys.repo(LOCAL), "graph"] });
+  expect(invalidate).toHaveBeenCalledOnce();
   expect(mocks.api).toContainEqual(["repo.graphInfo", LOCAL]);
   await setCached(keys.graphInfo(LOCAL), mocks.graphInfo);
   expect(text()).toContain("History incomplete at 2,400 commits");

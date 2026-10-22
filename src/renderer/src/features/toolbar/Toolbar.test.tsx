@@ -227,9 +227,11 @@ it("toggles the sidebar and details panels", async () => {
   await render();
   const sidebar = container.querySelector<HTMLElement>("[title='Toggle sidebar']")!;
   const details = container.querySelector<HTMLElement>("[title='Toggle details panel']")!;
+  expect(sidebar.getAttribute("aria-pressed")).toBe("true");
   await click(sidebar);
   expect(useLayout.getState().sidebar).toBe(false);
   expect(sidebar.className).toContain("text-muted-foreground");
+  expect(sidebar.getAttribute("aria-pressed")).toBe("false");
   await click(details);
   expect(useLayout.getState().details).toBe(false);
   await click(sidebar);

@@ -105,7 +105,8 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
 function GraphError({ repo, graph, error }: { repo: RepoId; graph?: GraphInfo; error: string }) {
   const client = useQueryClient();
   const retry = () => {
-    void client.invalidateQueries({ queryKey: keys.repo(repo) });
+    // The graph's queries only: its info and pages.
+    void client.invalidateQueries({ queryKey: [...keys.repo(repo), "graph"] });
     // Asked for explicitly: with the graph view closed (e.g. a diff is open), the only graph
     // query left is the disabled one above, which invalidating does not refetch.
     client
