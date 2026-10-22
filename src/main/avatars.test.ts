@@ -181,7 +181,9 @@ describe("avatar lookup", () => {
     expect(fetch.mock.calls.find((c) => c[0].includes("/api/v4/"))?.[1]?.headers).toEqual({
       accept: "application/json",
     });
-    expect(log.info).toHaveBeenCalledWith("avatars: gitlab.example.org is GitLab");
+    expect(log.info).toHaveBeenCalledWith(
+      "avatars: gitlab.example.org is GitLab (HTTP 200, application/json)",
+    );
   });
 
   it("skips hosts that are not GitLab", async () => {
@@ -195,7 +197,67 @@ describe("avatar lookup", () => {
     expect((await request("a@x.org", ["gitlab:git.example.org"])).body).toBe("png:gravatar");
     expect((await request("a@x.org", ["gitlab:git.example.org"], 32)).body).toBe("png:gravatar");
     expect(fetched().filter((u) => u.startsWith("https://git.example.org/"))).toHaveLength(1);
-    expect(log.info).toHaveBeenCalledWith("avatars: git.example.org is not GitLab");
+    expect(log.info).toHaveBeenCalledWith(
+      "avatars: git.example.org is not GitLab (HTTP 200, text/html)",
+    );
+  });
+
+  it("recognizes GitLab instances that refuse anonymous lookups", async () => {
+    await load();
+    serve({
+      "https://gitlab.corp.example/api/v4/avatar": new Response(
+        JSON.stringify({ message: "403 Forbidden - Unauthorized access" }),
+        { status: 403, headers: { "content-type": "application/json" } },
+      ),
+      [gravatar("a@x.org")]: png("gravatar"),
+    });
+    expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).body).toBe("png:gravatar");
+    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
+    expect(fetched().filter((u) => u.includes("/api/v4/"))).toHaveLength(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      "avatars: gitlab.corp.example is GitLab but refuses anonymous avatar lookups " +
+        "(HTTP 403, application/json)",
+    );
+  });
+
+  it("probes again when the GitLab host was unreachable", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await load();
+    serve({ "https://gitlab.corp.example/": () => Promise.reject(new TypeError("offline")) });
+    expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
+    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
+    expect(fetched().filter((u) => u.includes("gitdove-probe"))).toHaveLength(1);
+    // Nothing was cached, so the same avatar is asked for again once GitLab is up.
+    vi.advanceTimersByTime(61_000);
+    serve({
+      "https://gitlab.corp.example/api/v4/avatar?email=gitdove-probe": json({
+        avatar_url: "https://www.gravatar.com/avatar/0000?d=identicon",
+      }),
+      "https://gitlab.corp.example/api/v4/avatar?email=a%40x.org": json({
+        avatar_url: "https://gitlab.corp.example/uploads/a.png",
+      }),
+      "https://gitlab.corp.example/uploads/a.png": png("gitlab"),
+    });
+    expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).body).toBe("png:gitlab");
+    expect(fetched().filter((u) => u.includes("gitdove-probe"))).toHaveLength(2);
+  });
+
+  it("ignores GitLab's default picture and other avatar services' placeholders", async () => {
+    await load();
+    const unknown = json({ avatar_url: "https://gitlab.corp.example/assets/no_avatar.png" });
+    const hash = "0123456789abcdef0123456789abcdef";
+    serve({
+      "https://gitlab.corp.example/api/v4/avatar?email=gitdove-probe": unknown,
+      "https://gitlab.corp.example/api/v4/avatar?email=a%40x.org": unknown,
+      "https://gitlab.corp.example/api/v4/avatar?email=b%40x.org": json({
+        avatar_url: `https://avatars.corp.example/avatar/${hash}?s=64&d=identicon`,
+      }),
+      [`https://avatars.corp.example/avatar/${hash}?s=64&d=404`]: png("libravatar"),
+      "https://gitlab.corp.example/assets/no_avatar.png": png("placeholder"),
+      "https://www.gravatar.com/": png("gravatar"),
+    });
+    expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).body).toBe("png:gravatar");
+    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).body).toBe("png:libravatar");
   });
 
   it("ignores GitLab answers without a usable avatar URL", async () => {

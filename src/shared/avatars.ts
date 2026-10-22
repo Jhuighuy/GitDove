@@ -11,11 +11,17 @@ export type AvatarProvider = "github" | `gitlab:${string}`;
 
 const HOST_RE = /^[a-z0-9.-]+(:\d+)?$/i;
 
-/** Extracts the host from a git remote URL (`https://…`, `ssh://…` or scp-like `git@host:path`). */
+/**
+ * Extracts the host from a git remote URL (`https://…`, `ssh://…` or scp-like
+ * `git@host:path`). HTTP(S) remotes keep their port, which the web UI shares.
+ */
 export const remoteHost = (url: string): string | null => {
+  const web = /^https?:\/\/(?:[^@/]+@)?([^/:]+(?::\d+)?)/i.exec(url);
   const m =
-    /^[a-z+]+:\/\/(?:[^@/]+@)?([^/:]+)/i.exec(url) ?? /^(?:[^@/]+@)?([^/:]+):(?!\/\/)/.exec(url);
-  return m?.[1]?.toLowerCase() ?? null;
+    web ??
+    /^[a-z+]+:\/\/(?:[^@/]+@)?([^/:]+)/i.exec(url) ??
+    /^(?:[^@/]+@)?([^/:]+):(?!\/\/)/.exec(url);
+  return m?.[1]?.toLowerCase().replace(/:443$/, "") ?? null;
 };
 
 /** Hosts known not to run GitLab, so they are never probed. */
@@ -41,10 +47,11 @@ export const providersForRemotes = (urls: readonly string[]): AvatarProvider[] =
   for (const url of urls) {
     const host = remoteHost(url);
     if (!host || !HOST_RE.test(host)) continue;
-    if (host === "github.com" || host.endsWith(".github.com")) out.add("github");
-    else if (NOT_GITLAB.some((h) => host === h || host.endsWith(`.${h}`))) continue;
+    const name = host.replace(/:\d+$/, "");
+    if (name === "github.com" || name.endsWith(".github.com")) out.add("github");
+    else if (NOT_GITLAB.some((h) => name === h || name.endsWith(`.${h}`))) continue;
     // Dot-less names are LAN/ssh aliases (e.g. "fedora"), unlikely to serve HTTPS.
-    else if (host.includes(".") || host.includes("gitlab")) out.add(`gitlab:${host}`);
+    else if (name.includes(".") || name.includes("gitlab")) out.add(`gitlab:${host}`);
   }
   return [...out];
 };
