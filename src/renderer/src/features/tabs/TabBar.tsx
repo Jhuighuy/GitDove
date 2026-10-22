@@ -1,6 +1,6 @@
 import { repoDisplayName, repoLocationOf } from "@shared/domain";
 import { IconFolder, IconPlus, IconServer, IconX } from "@tabler/icons-react";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { isMac } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -33,9 +33,18 @@ export function TabBar() {
   const focusTab = (index: number) =>
     list.current?.querySelectorAll<HTMLElement>('[role="tab"]')[index]?.focus();
 
+  // A tab closed from the keyboard hands the focus on to the tab shown next.
+  const refocus = useRef(false);
+  useLayoutEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    list.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
+  });
+
   /**
    * Arrow keys, Home and End move between tabs (activating them); with Shift, the arrow keys
-   * move the tab itself along the bar (as dragging it does). Delete closes a tab.
+   * move the tab itself along the bar (as dragging it does). Delete (or Backspace, the delete
+   * key of a Mac keyboard) closes one.
    */
   const onKeyDown = (e: React.KeyboardEvent, index: number) => {
     const key = tabs[index]!.key;
@@ -64,8 +73,9 @@ export function TabBar() {
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       activate(key);
-    } else if (e.key === "Delete") {
+    } else if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
+      refocus.current = true;
       closeTab(key);
     }
   };

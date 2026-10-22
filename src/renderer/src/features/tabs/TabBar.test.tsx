@@ -114,6 +114,12 @@ it("moves between tabs and closes them from the keyboard", async () => {
   expect(keys()).toEqual(["c", "b"]);
   expect(document.activeElement).toBe(tabs()[0]);
   expect(useTabs.getState().active).toBe("c");
+  // The focus goes on to the tab shown next; Backspace (a Mac's delete key) closes too.
+  const shown = tabs().find((t) => t.getAttribute("aria-selected") === "true");
+  expect(document.activeElement).toBe(shown);
+  await press(shown!, "Backspace");
+  expect(keys()).toHaveLength(1);
+  expect(document.activeElement).toBe(tabs()[0]);
 });
 
 it("reorders tabs by dragging them", async () => {
