@@ -66,6 +66,37 @@ const GIT_CONFIG = [
   "log.showSignature=false",
 ];
 
+/** Modes of what a reset restores as a file: regular, executable, symlink (not a submodule). */
+const FILE_MODES = new Set(["100644", "100755", "120000"]);
+
+/** Paths that `git diff --raw -z --no-renames` reports as a file (in HEAD or the index) now
+ * deleted (`D`) or replaced by something else (`T`), with what replaced it if git knows. */
+const replacedFiles = (raw: string) => {
+  const out: { path: string; deleted: boolean; nowRepo: boolean }[] = [];
+  const fields = raw.split("\0");
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    // ":<old mode> <new mode> <old sha> <new sha> <status>", then the path.
+    const [oldMode = "", newMode = "", , , status = ""] = fields[i]!.slice(1).split(" ");
+    if (!FILE_MODES.has(oldMode) || (status !== "D" && status !== "T")) continue;
+    out.push({ path: fields[i + 1]!, deleted: status === "D", nowRepo: newMode === "160000" });
+  }
+  return out;
+};
+
+/** Submodules that `git diff --cached --raw -z --no-renames` reports as added. */
+const newSubmodules = (raw: string) => {
+  const out: string[] = [];
+  const fields = raw.split("\0");
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const [, newMode = "", , , status = ""] = fields[i]!.slice(1).split(" ");
+    if (status === "A" && newMode === "160000") out.push(fields[i + 1]!);
+  }
+  return out;
+};
+
+/** How many paths one directory check takes, to keep its script small. */
+const DIR_CHECK_BATCH = 500;
+
 /** Largest diff we render before truncating (bytes). */
 const MAX_DIFF_BYTES = 8 * 1024 * 1024;
 
@@ -926,6 +957,93 @@ export class Repository {
     );
   }
 
+  discardAll() {
+    return this.write(
+      Effect.gen({ self: this }, function* () {
+        // In the middle of a merge or rebase, resetting would drop resolutions half way.
+        const { state } = yield* this.info();
+        if (state !== "clean") {
+          return yield* new InvalidInputError({
+            message: `Abort or finish the ${state.replace("-", " ")} first`,
+          });
+        }
+        // A folder where a tracked file belongs: restoring the file would delete it, with what
+        // is in it (git lists none of that as a change). Refuse before deleting anything.
+        const hasHead = yield* this.hasHead();
+        const blocking = yield* this.foldersForFiles(hasHead);
+        if (blocking.length > 0) {
+          return yield* new InvalidInputError({
+            message: `Folders are where tracked files belong: ${blocking.join(", ")}. Move them away first.`,
+          });
+        }
+        const untracked = this.gitText([
+          "ls-files",
+          "--others",
+          "--exclude-standard",
+          "--directory",
+          "-z",
+        ]).pipe(Effect.map((s) => s.split("\0").filter(Boolean)));
+        const before = yield* untracked;
+        // Clean first: discarding may undo ignore rules (an edited .gitignore) that keep ignored
+        // files out of `clean`, or add rules that would keep staged files from it.
+        yield* this.run(["clean", "-f", "-d", "-q"]);
+        // Then drop staged and unstaged changes, deleting new files that are staged. Without
+        // commits, everything in the index is new (forced: a staged file edited since differs
+        // from both the index and the work tree).
+        // Newly added submodules: their folders are not ours to delete, only their entries.
+        let added: string[] = [];
+        if (hasHead) {
+          added = newSubmodules(
+            yield* this.gitText([
+              "diff",
+              "--cached",
+              "--raw",
+              "-z",
+              "--no-renames",
+              "--no-abbrev",
+              "--ignore-submodules=none",
+              "HEAD",
+            ]),
+          );
+          // Never into submodules, whatever `submodule.recurse` says: their changes are reported.
+          // The reset unstages new ones and leaves their folders.
+          yield* this.run(["reset", "--hard", "-q", "--no-recurse-submodules"]);
+        } else {
+          added = (yield* this.gitText(["ls-files", "-s", "-z"]))
+            .split("\0")
+            .filter((entry) => entry.startsWith("160000 "))
+            .map((entry) => entry.slice(entry.indexOf("\t") + 1));
+          if (added.length > 0) {
+            yield* this.run(
+              ["rm", "--cached", "-r", "-q", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"],
+              { stdin: added.join("\0") },
+            );
+          }
+          yield* this.run(["rm", "-r", "-q", "-f", "--ignore-unmatch", "."]);
+        }
+        // What is left is not ours to delete without asking: say so. `clean` keeps untracked
+        // nested repositories (unless forced twice), and the reset leaves the files inside
+        // submodules alone. Files that were ignored before the reset are kept on purpose.
+        const nested = (yield* untracked).filter((p) => before.includes(p));
+        const submodules = hasHead
+          ? (yield* this.gitText(["diff", "--name-only", "-z", "--ignore-submodules=none", "HEAD"]))
+              .split("\0")
+              .filter(Boolean)
+          : [];
+        const kept = [
+          ...(nested.length > 0 ? [`nested repositories: ${nested.join(", ")}`] : []),
+          ...(submodules.length > 0 ? [`changes in submodules: ${submodules.join(", ")}`] : []),
+          ...(added.length > 0 ? [`the folders of new submodules: ${added.join(", ")}`] : []),
+        ];
+        if (kept.length > 0) {
+          return yield* new InvalidInputError({
+            message: `Discarded the other changes, but kept ${kept.join("; ")}`,
+          });
+        }
+      }),
+    );
+  }
+
   applyPatch(patch: string, opts: { cached: boolean; reverse: boolean }) {
     return this.write(
       this.run(
@@ -1325,6 +1443,33 @@ export class Repository {
 
   removeRemote(name: string) {
     return this.write(this.run(["remote", "remove", name]));
+  }
+
+  /**
+   * Tracked files (not submodules) that a folder replaced in the work tree, sorted: deleted
+   * from the index (`git rm`, or moved away with `git mv`, hence no renames), only from the
+   * work tree, or replaced by a repository (`git add` of one makes a type change).
+   */
+  private foldersForFiles(hasHead: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      const diff = ["diff", "--raw", "-z", "--no-renames", "--no-abbrev"];
+      const replaced = [
+        ...(hasHead ? replacedFiles(yield* this.gitText([...diff, "HEAD"])) : []),
+        ...replacedFiles(yield* this.gitText(diff)),
+      ];
+      const found = new Set(replaced.filter((r) => r.nowRepo).map((r) => r.path));
+      // Whether a deleted file's place is now a folder, git does not say: ask the file system.
+      const deleted = [...new Set(replaced.filter((r) => r.deleted).map((r) => r.path))];
+      for (let i = 0; i < deleted.length; i += DIR_CHECK_BATCH) {
+        const batch = deleted.slice(i, i + DIR_CHECK_BATCH);
+        const script =
+          `for p in ${batch.map(shellQuote).join(" ")}; do ` +
+          `if [ -d "$p" ]; then printf '%s\\000' "$p"; fi; done`;
+        const dirs = (yield* this.host.sh(script, { cwd: this.workTree })).stdout.toString();
+        for (const p of dirs.split("\0")) if (p) found.add(p);
+      }
+      return [...found].toSorted((a, b) => a.localeCompare(b));
+    });
   }
 
   private hasHead() {

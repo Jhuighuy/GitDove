@@ -131,3 +131,22 @@ it("expands the other pills in place, and checks them out on double click", asyn
   act(() => pills[1]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
   expect(onDoubleClick).toHaveBeenCalledWith(dev);
 });
+
+it("gives up its icons before its name in a narrow column", () => {
+  act(() =>
+    root.render(
+      <RefPills
+        refs={[ref("refs/heads/main", { isHead: true }), ref("refs/remotes/origin/main")]}
+        color={0}
+      />,
+    ),
+  );
+  const pill = container.querySelector('[title="main, origin/main"]')!;
+  const icons = [...pill.querySelectorAll("svg")].map((s) => s.getAttribute("class"));
+  // The laptop and the cloud go first, then the check mark.
+  expect(icons).toHaveLength(3);
+  expect(icons[0]).toContain("@max-[80px]:hidden");
+  expect(icons[1]).toContain("@max-[130px]:hidden");
+  expect(icons[2]).toContain("@max-[130px]:hidden");
+  expect(pill.querySelector("span")!.className).toContain("min-w-0 truncate");
+});

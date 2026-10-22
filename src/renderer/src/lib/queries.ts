@@ -44,6 +44,7 @@ export const keys = {
   fileVersions: (repo: RepoId, target: DiffTarget) =>
     ["repo", repo, "diff", target, "versions"] as const,
   search: (repo: RepoId, q: string) => ["repo", repo, "search", q] as const,
+  isGitlab: (origin: string) => ["web", "isGitlab", origin] as const,
 };
 
 export const useRepoInfo = (repo: RepoId) =>

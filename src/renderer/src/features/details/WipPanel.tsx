@@ -5,6 +5,7 @@ import {
   IconPlus,
   IconArrowBackUp,
   IconAlertTriangle,
+  IconTrash,
 } from "@tabler/icons-react";
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
@@ -58,6 +59,8 @@ export function WipPanel({ repo }: { repo: RepoId }) {
   const unstaged = status?.unstaged ?? [];
   const conflicted = status?.conflicted ?? [];
   const total = staged.length + unstaged.length + conflicted.length;
+  // Resetting in the middle of a merge or rebase would leave it half done.
+  const inProgress = !!info && info.state !== "clean";
   const selected = (kind: "staged" | "unstaged") => (diff?.kind === kind ? diff.path : null);
 
   const openUnstaged = (f: FileChange) => openDiff(repo, fileTarget({ kind: "unstaged" }, f));
@@ -68,7 +71,30 @@ export function WipPanel({ repo }: { repo: RepoId }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-10 shrink-0 items-center justify-center gap-1.5 border-b px-3 text-xs">
+      <div className="relative flex h-10 shrink-0 items-center justify-center gap-1.5 border-b px-3 text-xs">
+        {total > 0 && (
+          <Tooltip>
+            {/* A wrapper triggers the tooltip: disabled buttons get no pointer events. */}
+            <TooltipTrigger render={<span className="absolute left-2 flex" />}>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Discard all changes"
+                className="hover:bg-destructive/15 hover:text-destructive text-muted-foreground size-6"
+                disabled={!!busy || inProgress}
+                onClick={() => void commands.discardAll(repo)}
+              >
+                <IconTrash className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {blocked ??
+                (inProgress
+                  ? `Abort or finish the ${info?.state.replace("-", " ")} first`
+                  : "Discard all changes")}
+            </TooltipContent>
+          </Tooltip>
+        )}
         <span className="font-medium tabular-nums">
           {total} file {total === 1 ? "change" : "changes"}
         </span>

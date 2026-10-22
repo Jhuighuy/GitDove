@@ -16,6 +16,8 @@ interface TabsState {
   newTab(): void;
   closeTab(key: string): void;
   activate(key: string): void;
+  /** Moves a tab to `index` in the tab order. */
+  moveTab(key: string, index: number): void;
   cycle(delta: number): void;
   removeRecent(repo: RepoId): void;
 }
@@ -104,6 +106,15 @@ export const useTabs = create<TabsState>()((set, get) => {
 
     activate(key) {
       if (get().active !== key) update({ active: key });
+    },
+
+    moveTab(key, index) {
+      const { tabs } = get();
+      const tab = tabs.find((t) => t.key === key);
+      if (!tab || tabs[index]?.key === key) return;
+      const rest = tabs.filter((t) => t.key !== key);
+      const at = Math.max(0, Math.min(index, rest.length));
+      update({ tabs: [...rest.slice(0, at), tab, ...rest.slice(at)] });
     },
 
     cycle(delta) {

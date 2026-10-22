@@ -182,7 +182,7 @@ describe("avatar lookup", () => {
       accept: "application/json",
     });
     expect(log.info).toHaveBeenCalledWith(
-      "avatars: gitlab.example.org is GitLab (HTTP 200, application/json)",
+      "avatars: https://gitlab.example.org is GitLab (HTTP 200, application/json)",
     );
   });
 
@@ -198,7 +198,35 @@ describe("avatar lookup", () => {
     expect((await request("a@x.org", ["gitlab:git.example.org"], 32)).body).toBe("png:gravatar");
     expect(fetched().filter((u) => u.startsWith("https://git.example.org/"))).toHaveLength(1);
     expect(log.info).toHaveBeenCalledWith(
-      "avatars: git.example.org is not GitLab (HTTP 200, text/html)",
+      "avatars: https://git.example.org is not GitLab (HTTP 200, text/html)",
+    );
+  });
+
+  it("takes a host answering null for not GitLab", async () => {
+    await load();
+    serve({
+      "https://git.example.org/api/v4/avatar?email=gitdove-probe": json(null),
+      [gravatar("a@x.org")]: png("gravatar"),
+    });
+    expect((await request("a@x.org", ["gitlab:git.example.org"])).body).toBe("png:gravatar");
+    expect(log.info).toHaveBeenCalledWith(
+      "avatars: https://git.example.org is not GitLab (HTTP 200, application/json)",
+    );
+  });
+
+  it("recognizes GitLab by the header on its answers, error pages included", async () => {
+    await load();
+    serve({
+      "https://git.corp.example/api/v4/avatar": new Response("<html>Not Found</html>", {
+        status: 404,
+        headers: { "content-type": "text/html", "x-gitlab-meta": '{"correlation_id":"x"}' },
+      }),
+      [gravatar("a@x.org")]: png("gravatar"),
+    });
+    expect((await request("a@x.org", ["gitlab:git.corp.example"])).body).toBe("png:gravatar");
+    expect(log.warn).toHaveBeenCalledWith(
+      "avatars: https://git.corp.example is GitLab but refuses anonymous avatar lookups " +
+        "(HTTP 404, text/html)",
     );
   });
 
@@ -215,7 +243,7 @@ describe("avatar lookup", () => {
     expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
     expect(fetched().filter((u) => u.includes("/api/v4/"))).toHaveLength(1);
     expect(log.warn).toHaveBeenCalledWith(
-      "avatars: gitlab.corp.example is GitLab but refuses anonymous avatar lookups " +
+      "avatars: https://gitlab.corp.example is GitLab but refuses anonymous avatar lookups " +
         "(HTTP 403, application/json)",
     );
   });

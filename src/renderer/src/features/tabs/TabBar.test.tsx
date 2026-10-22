@@ -87,3 +87,33 @@ it("opens new tabs from the button and by double-clicking the empty bar", async 
   expect(keys()).toHaveLength(2);
   expect(tabs()[1]!.getAttribute("aria-selected")).toBe("true");
 });
+
+it("reorders tabs by dragging them", async () => {
+  // Tabs are 100px wide, side by side.
+  tabs().forEach((el, i) => {
+    el.getBoundingClientRect = () => ({ left: i * 100, width: 100 }) as DOMRect;
+  });
+  const pointer = (target: EventTarget, type: string, clientX: number) =>
+    act(async () => {
+      target.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, clientX }));
+    });
+  await pointer(tabs()[0]!, "pointerdown", 50);
+  // A small wobble is still a click.
+  await pointer(window, "pointermove", 52);
+  expect(keys()).toEqual(["a", "b", "c"]);
+  // Past the middle of "b".
+  await pointer(window, "pointermove", 160);
+  expect(keys()).toEqual(["b", "a", "c"]);
+  await pointer(window, "pointermove", 260);
+  expect(keys()).toEqual(["b", "c", "a"]);
+  await pointer(window, "pointerup", 260);
+  await pointer(window, "pointermove", 0);
+  expect(keys()).toEqual(["b", "c", "a"]);
+  // Leaving the window ends a drag too.
+  await pointer(tabs()[0]!, "pointerdown", 50);
+  await pointer(window, "pointermove", 160);
+  expect(keys()).toEqual(["c", "b", "a"]);
+  await act(async () => window.dispatchEvent(new Event("blur")));
+  await pointer(window, "pointermove", 260);
+  expect(keys()).toEqual(["c", "b", "a"]);
+});

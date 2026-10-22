@@ -40,7 +40,8 @@ vi.mock("../commands", () => ({
       get:
         (_, command: string) =>
         (...args: unknown[]) =>
-          void mocks.commands.push([command, ...args.slice(1)]),
+          // The repository is left out, but not the text to copy.
+          void mocks.commands.push([command, ...args.slice(command === "copy" ? 0 : 1)]),
     },
   ),
 }));
@@ -155,7 +156,10 @@ const menuItem = (label: string) => {
 it("shows the repository, its branch and ahead/behind counts", async () => {
   await render();
   expect(container.textContent).toContain("project");
-  expect(container.querySelector("[title='/work/project']")?.textContent).toBe("project");
+  const name = container.querySelector<HTMLElement>("[title='/work/project (click to copy)']")!;
+  expect(name.textContent).toBe("project");
+  await act(async () => name.click());
+  expect(mocks.commands).toContainEqual(["copy", "/work/project", "Path copied"]);
   expect(container.textContent).toContain("main");
   expect(tool("Pull").textContent).toBe("Pull3");
   expect(tool("Push").textContent).toBe("Push2");

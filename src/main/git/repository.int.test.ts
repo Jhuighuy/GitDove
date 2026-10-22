@@ -4,7 +4,7 @@
  *   GITDOVE_INT_LOCAL=~/some/repo GITDOVE_INT_SSH=host:/path/to/repo npx vitest run int
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import type { RepoLocation } from "@shared/domain";
 import { Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
 import { Repository } from "./repository";
@@ -20,6 +20,8 @@ if (process.env.GITDOVE_INT_SSH) {
 
 describe.skipIf(targets.length === 0)("Repository (integration)", () => {
   const runtime = ManagedRuntime.make(Layer.mergeAll(HostsLive));
+  // Closes the SSH connections, which would otherwise outlive the tests.
+  afterAll(() => runtime.dispose());
 
   for (const [name, location] of targets) {
     it(`queries ${name} repository`, async () => {

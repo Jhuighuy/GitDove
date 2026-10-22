@@ -1,5 +1,6 @@
 import { repoDisplayName, repoLocationOf } from "@shared/domain";
 import { IconFolder, IconPlus, IconServer, IconX } from "@tabler/icons-react";
+import { useState } from "react";
 import { isMac } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useTabs } from "@/stores/tabs";
@@ -7,8 +8,45 @@ import { useTabs } from "@/stores/tabs";
 const drag = { WebkitAppRegion: "drag" } as React.CSSProperties;
 const noDrag = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
 
+/** How far the pointer moves before a press on a tab becomes a drag, in pixels. */
+const DRAG_THRESHOLD = 4;
+
 export function TabBar() {
-  const { tabs, active, activate, closeTab, newTab } = useTabs();
+  const { tabs, active, activate, closeTab, newTab, moveTab } = useTabs();
+  const [dragging, setDragging] = useState<string | null>(null);
+
+  /** Drags a tab along the bar: it takes the place of the tabs whose middle it passes. */
+  const startDrag = (e: React.PointerEvent<HTMLElement>, key: string) => {
+    if (e.button !== 0) return;
+    const bar = e.currentTarget.parentElement!;
+    const startX = e.clientX;
+    let started = false;
+    const move = (ev: PointerEvent) => {
+      if (!started && Math.abs(ev.clientX - startX) < DRAG_THRESHOLD) return;
+      started = true;
+      setDragging(key);
+      const others = [...bar.querySelectorAll<HTMLElement>('[role="tab"]')].filter(
+        (el) => el.dataset.key !== key,
+      );
+      const index = others.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left + r.width / 2 < ev.clientX;
+      }).length;
+      moveTab(key, index);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("blur", up);
+      setDragging(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    // Released outside the window, the pointer may never come back up here.
+    window.addEventListener("blur", up);
+  };
 
   return (
     <div
@@ -30,6 +68,7 @@ export function TabBar() {
             key={tab.key}
             style={noDrag}
             role="tab"
+            data-key={tab.key}
             aria-selected={isActive}
             title={loc ? (loc.kind === "ssh" ? `${loc.host}:${loc.path}` : loc.path) : "New tab"}
             className={cn(
@@ -37,7 +76,9 @@ export function TabBar() {
               isActive
                 ? "bg-background text-foreground"
                 : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+              dragging === tab.key && "z-10 shadow-md",
             )}
+            onPointerDown={(e) => startDrag(e, tab.key)}
             onMouseDown={(e) => {
               if (e.button === 0) activate(tab.key);
               if (e.button === 1) {
@@ -61,6 +102,7 @@ export function TabBar() {
                 isActive ? "opacity-70" : "opacity-0 group-hover:opacity-70",
               )}
               onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => closeTab(tab.key)}
               aria-label="Close tab"
             >

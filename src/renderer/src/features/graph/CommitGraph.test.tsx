@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   found: 0 as number | null,
   /** Holds `repo.findCommit` answers back until it settles. */
   gate: null as Promise<void> | null,
+  infoGate: null as Promise<void> | null,
   /** Holds `repo.graphRows` answers back until it settles. */
   rowsGate: null as Promise<void> | null,
 }));
@@ -31,6 +32,7 @@ vi.mock("@/lib/api", () => ({
     mocks.api.push([method, ...args.slice(1)]);
     switch (method) {
       case "repo.graphInfo":
+        await mocks.infoGate;
         if (mocks.infoError) throw mocks.infoError;
         return mocks.info;
       case "repo.graphRows": {
@@ -122,10 +124,19 @@ beforeEach(() => {
   mocks.refs = snapshot;
   mocks.found = 0;
   mocks.gate = null;
+  mocks.infoGate = null;
   mocks.rowsGate = null;
   repo = `local:/graph${++n}`;
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+  // happy-dom lays nothing out: the scroll container is as tall as the rows it holds.
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return (
+      Number.parseFloat((this.firstElementChild as HTMLElement | null)?.style.height ?? "0") || 0
+    );
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -283,6 +294,227 @@ it("scrolls to a commit revealed elsewhere", async () => {
   await act(async () => useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c4" }));
   await settle();
   expect(mocks.api.filter(([m]) => m === "repo.findCommit")).toEqual([]);
+});
+
+it("comes back where it was after being replaced (e.g. by a diff)", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  mocks.found = 150;
+  await render();
+  // A commit revealed from the sidebar is scrolled to once.
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c150" }, true),
+  );
+  await settle();
+  expect(mocks.api.filter(([m]) => m === "repo.findCommit")).toHaveLength(1);
+  // Then the user scrolls elsewhere.
+  await act(async () => {
+    scroller().scrollTop = 1234;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render(null);
+  expect(scroller().scrollTop).toBe(1234);
+  expect(mocks.api.filter(([m]) => m === "repo.findCommit")).toHaveLength(1);
+});
+
+it("comes back where it was once a history that was not loaded yet arrives", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 1234;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  let release = () => {};
+  mocks.infoGate = new Promise((r) => (release = r));
+  root = createRoot(container);
+  await render(null);
+  // Nothing to scroll yet: the browser keeps it at the top.
+  await act(async () => {
+    scroller().scrollTop = 0;
+  });
+  release();
+  await act(() =>
+    vi.waitFor(() => {
+      if (!container.textContent?.includes("Commit")) throw new Error("no rows");
+    }),
+  );
+  await settle();
+  expect(scroller().scrollTop).toBe(1234);
+});
+
+it("waits for the history to reach where it was, while it streams in", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 4000;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  // Back with only the first rows loaded: too few to reach the place.
+  mocks.info = { version: 2, count: 20, complete: false, maxLanes: 1 };
+  root = createRoot(container);
+  await render(null);
+  await act(async () => {
+    scroller().scrollTop = 0;
+  });
+  const stream = (count: number, complete: boolean) =>
+    act(async () => {
+      client.setQueryData(keys.graphInfo(repo), { version: 2, count, complete, maxLanes: 1 });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  await stream(60, false);
+  expect(scroller().scrollTop).toBe(0);
+  await stream(200, true);
+  expect(scroller().scrollTop).toBe(4000);
+});
+
+it("does not take the user back after revealing a commit meanwhile", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 4000;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  mocks.info = { version: 2, count: 20, complete: false, maxLanes: 1 };
+  root = createRoot(container);
+  await render(null);
+  // A branch picked in the sidebar.
+  mocks.found = 5;
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c5" }, true),
+  );
+  await settle();
+  const revealed = scroller().scrollTop;
+  await act(async () => {
+    client.setQueryData(keys.graphInfo(repo), {
+      version: 2,
+      count: 200,
+      complete: true,
+      maxLanes: 1,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(scroller().scrollTop).toBe(revealed);
+  expect(revealed).toBeLessThan(4000);
+});
+
+it("keeps the place to go back to while the history is too short to reach it", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 4000;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  // Twice back with too short a history: the browser clamps, and a diff replaces it again.
+  for (let i = 0; i < 2; i++) {
+    await act(async () => root.unmount());
+    mocks.info = { version: 2, count: 20, complete: false, maxLanes: 1 };
+    root = createRoot(container);
+    await render(null);
+    await act(async () => {
+      scroller().scrollTop = 200;
+      scroller().dispatchEvent(new Event("scroll"));
+    });
+  }
+  // A commit that is not in the history yet does not cancel going back either.
+  mocks.found = -1;
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c199" }, true),
+  );
+  await settle();
+  await act(async () => {
+    client.setQueryData(keys.graphInfo(repo), {
+      version: 2,
+      count: 200,
+      complete: true,
+      maxLanes: 1,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(scroller().scrollTop).toBe(4000);
+});
+
+it("reveals a commit once it streams in", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 20, complete: false, maxLanes: 1 };
+  await render();
+  const lookups = () => mocks.api.filter(([m]) => m === "repo.findCommit").length;
+  // Not in the history yet.
+  mocks.found = -1;
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c150" }, true),
+  );
+  await settle();
+  expect(lookups()).toBe(1);
+  const stream = (count: number, complete: boolean) =>
+    act(async () => {
+      client.setQueryData(keys.graphInfo(repo), { version: 1, count, complete, maxLanes: 1 });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  await stream(100, false);
+  expect(lookups()).toBe(2);
+  // There now: scrolled to, and not looked up again.
+  mocks.found = 150;
+  await stream(200, true);
+  expect(lookups()).toBe(3);
+  expect(scroller().scrollTop).toBeGreaterThan(0);
+  await stream(200, true);
+  expect(lookups()).toBe(3);
+});
+
+it("does not take the user back once they scrolled themselves", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 4000;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  mocks.info = { version: 2, count: 20, complete: false, maxLanes: 1 };
+  root = createRoot(container);
+  await render(null);
+  await act(async () => {
+    scroller().dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 10 }));
+    scroller().scrollTop = 10;
+  });
+  await act(async () => {
+    client.setQueryData(keys.graphInfo(repo), {
+      version: 2,
+      count: 200,
+      complete: true,
+      maxLanes: 1,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(scroller().scrollTop).toBe(10);
+});
+
+it("reveals a commit again when the graph went away before finding it", async () => {
+  mocks.found = 3;
+  let release = () => {};
+  mocks.gate = new Promise((r) => (release = r));
+  await render();
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c3" }, true),
+  );
+  // Replaced (e.g. by a diff) while the commit is looked up.
+  await act(async () => root.unmount());
+  release();
+  await settle();
+  mocks.gate = null;
+  mocks.api = [];
+  root = createRoot(container);
+  await render();
+  expect(mocks.api).toContainEqual(["repo.findCommit", 1, "c3"]);
 });
 
 it("shows loading, empty and error states", async () => {

@@ -50,11 +50,22 @@ export const providersForRemotes = (urls: readonly string[]): AvatarProvider[] =
     if (!host || !HOST_RE.test(host)) continue;
     const name = host.replace(/:\d+$/, "");
     if (name === "github.com" || name.endsWith(".github.com")) out.add("github");
-    else if (NOT_GITLAB.some((h) => name === h || name.endsWith(`.${h}`))) continue;
-    // Dot-less names are LAN/ssh aliases (e.g. "fedora"), unlikely to serve HTTPS.
-    else if (name.includes(".") || name.includes("gitlab")) out.add(`gitlab:${host}`);
+    else if (mayRunGitlab(host)) out.add(`gitlab:${host}`);
   }
   return [...out];
+};
+
+/** Whether a host (with or without a port) is worth asking if it runs GitLab. */
+export const mayRunGitlab = (host: string): boolean => {
+  if (!HOST_RE.test(host)) return false;
+  const name = host.replace(/:\d+$/, "");
+  return (
+    name !== "github.com" &&
+    !name.endsWith(".github.com") &&
+    !NOT_GITLAB.some((h) => name === h || name.endsWith(`.${h}`)) &&
+    // Dot-less names are LAN/ssh aliases (e.g. "fedora"), unlikely to serve HTTPS.
+    (name.includes(".") || name.includes("gitlab"))
+  );
 };
 
 export const avatarUrl = (email: string, providers: readonly AvatarProvider[], size: number) =>
