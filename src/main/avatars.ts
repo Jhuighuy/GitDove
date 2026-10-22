@@ -123,55 +123,11 @@ const avatarUrlOf = (host: string, res: Response) =>
  * `gitlab` with the avatar URL served for unknown users, `locked` for GitLab
  * refusing anonymous calls, or `other`.
  */
-type GitlabProbe =
-  | { readonly kind: "gitlab"; readonly unknown: string }
-  | { readonly kind: "locked" | "other" };
-
-/** A probe that failed on the network is retried after this long. */
-const PROBE_RETRY = 60 * 1000;
-
-const summary = (res: Response) => {
-  const final = URL.canParse(res.url) ? new URL(res.url).host : "";
-  return `HTTP ${res.status}, ${res.headers.get("content-type") ?? "no type"}${
-    res.redirected && final ? `, redirected to ${final}` : ""
-  }`;
-};
-
-const probeGitlab = (host: string) =>
-  Effect.gen(function* () {
-    const res = yield* gitlabAvatarApi(host, "gitdove-probe@invalid.invalid", 16);
-    const why = summary(res);
-    if (res.status === 401 || res.status === 403) {
-      const message = yield* body(host, () => res.json() as Promise<{ message?: unknown }>).pipe(
-        Effect.map((b) => b.message),
-        Effect.orElseSucceed(() => null),
-      );
-      if (typeof message === "string" && /^40[13]\b/.test(message)) {
-        log.warn(`avatars: ${host} is GitLab but refuses anonymous avatar lookups (${why})`);
-        return { kind: "locked" } satisfies GitlabProbe;
-      }
-    }
-    const probe: GitlabProbe = yield* avatarUrlOf(host, res).pipe(
-      Effect.map((unknown) => ({ kind: "gitlab" as const, unknown })),
-      Effect.catchIf(
-        (e) => !e.transient,
-        () => Effect.succeed({ kind: "other" as const }),
-      ),
-    );
-    log.info(`avatars: ${host} is ${probe.kind === "gitlab" ? "" : "not "}GitLab (${why})`);
-    return probe;
-  }).pipe(Effect.tapError(() => Effect.sync(() => log.warn(`avatars: cannot reach ${host}`))));
-
-/**
- * Whether a remote's host runs GitLab. Self-hosted instances can have any name,
- * so ask once per session instead of guessing from the host name. Network
- * failures (e.g. VPN not up yet) are not remembered for long.
- */
-const gitlabHosts = new Map<string, { probe: Effect.Effect<GitlabProbe, NoAvatar>; at: number }>();
-const isGitlab = (host: string) => {
-  let entry = gitlabHosts.get(host);
-  if (!entry) {
-    const probe = Effect.runSync(
+const gitlabHosts = new Map<string, Effect.Effect<boolean>>();
+export const isGitlab = (host: string) => {
+  let probe = gitlabHosts.get(host);
+  if (!probe) {
+    probe = Effect.runSync(
       Effect.cached(
         probeGitlab(host).pipe(
           Effect.tapError(() =>

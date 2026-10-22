@@ -2,13 +2,19 @@ import { expect, it } from "vitest";
 import { linkify, referenceRepo, webRepo } from "./links";
 
 it("finds the web page of a remote", () => {
-  const gh = { forge: "github", origin: "https://github.com", path: "ada/engine" };
+  const gh = {
+    forge: "github",
+    host: "github.com",
+    origin: "https://github.com",
+    path: "ada/engine",
+  };
   expect(webRepo("git@github.com:ada/engine.git")).toEqual(gh);
   expect(webRepo("https://github.com/ada/engine.git")).toEqual(gh);
   expect(webRepo("https://user:token@github.com/ada/engine/")).toEqual(gh);
   expect(webRepo("ssh://git@github.com:22/ada/engine.git")).toEqual(gh);
   expect(webRepo("ssh://git@gitlab.example.org/group/sub/project.git")).toEqual({
     forge: "gitlab",
+    host: "gitlab.example.org",
     origin: "https://gitlab.example.org",
     path: "group/sub/project",
   });
@@ -69,6 +75,12 @@ it("links issue and pull request references", () => {
     ["!5", "https://gitlab.com/g/p/-/merge_requests/5"],
     ["#6", "https://gitlab.com/g/p/-/issues/6"],
   ]);
+  // GitLab projects may sit in nested groups; GitHub's are owner/repo only.
+  expect(links("See group/repo!1234 and g/sub/r#7", "https://gitlab.com/g/p")).toEqual([
+    ["group/repo!1234", "https://gitlab.com/group/repo/-/merge_requests/1234"],
+    ["g/sub/r#7", "https://gitlab.com/g/sub/r/-/issues/7"],
+  ]);
+  expect(links("g/sub/r#7", gh)).toEqual([]);
   expect(links("(pull request #7)", "https://bitbucket.org/t/r")).toEqual([
     ["#7", "https://bitbucket.org/t/r/pull-requests/7"],
   ]);

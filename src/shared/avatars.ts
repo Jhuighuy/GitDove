@@ -48,14 +48,20 @@ export const providersForRemotes = (urls: readonly string[]): AvatarProvider[] =
   for (const url of urls) {
     const host = remoteHost(url);
     if (!host || !HOST_RE.test(host)) continue;
-    const name = host.replace(/:\d+$/, "");
-    if (name === "github.com" || name.endsWith(".github.com")) out.add("github");
-    else if (NOT_GITLAB.some((h) => name === h || name.endsWith(`.${h}`))) continue;
-    // Dot-less names are LAN/ssh aliases (e.g. "fedora"), unlikely to serve HTTPS.
-    else if (name.includes(".") || name.includes("gitlab")) out.add(`gitlab:${host}`);
+    if (host === "github.com" || host.endsWith(".github.com")) out.add("github");
+    else if (mayRunGitlab(host)) out.add(`gitlab:${host}`);
   }
   return [...out];
 };
+
+/** Whether a host is worth asking if it runs GitLab (see `providersForRemotes`). */
+export const mayRunGitlab = (host: string): boolean =>
+  HOST_RE.test(host) &&
+  host !== "github.com" &&
+  !host.endsWith(".github.com") &&
+  !NOT_GITLAB.some((h) => host === h || host.endsWith(`.${h}`)) &&
+  // Dot-less names are LAN/ssh aliases (e.g. "fedora"), unlikely to serve HTTPS.
+  (host.includes(".") || host.includes("gitlab"));
 
 export const avatarUrl = (email: string, providers: readonly AvatarProvider[], size: number) =>
   `${AVATAR_SCHEME}://avatar/?e=${encodeURIComponent(email.trim().toLowerCase())}` +

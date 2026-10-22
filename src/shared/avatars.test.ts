@@ -3,6 +3,7 @@ import {
   avatarUrl,
   githubNoreply,
   parseAvatarUrl,
+  mayRunGitlab,
   providersForRemotes,
   remoteHost,
 } from "./avatars";
@@ -62,4 +63,11 @@ describe("avatars", () => {
     });
     expect(githubNoreply("a@gmail.com")).toBeNull();
   });
+});
+
+it("tells which hosts may run GitLab", () => {
+  for (const host of ["gitlab.com", "git.corp.example.com", "gitlab", "gitlab.inria.fr"])
+    expect(mayRunGitlab(host)).toBe(true);
+  for (const host of ["github.com", "api.github.com", "codeberg.org", "fedora", "bad host", ""])
+    expect(mayRunGitlab(host)).toBe(false);
 });

@@ -12,6 +12,8 @@ import {
 import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
 import log from "electron-log/main";
 import { Cause, Context, Effect, Exit, type ManagedRuntime } from "effect";
+import { mayRunGitlab } from "@shared/avatars";
+import { isGitlab } from "./avatars";
 import { type AppError, InvalidInputError } from "./exec/errors";
 import { Hosts } from "./exec/hosts";
 import { shellQuote } from "./exec/shell";
@@ -108,6 +110,8 @@ export const handlers: Handlers = {
     /^https?:\/\//.test(url)
       ? Effect.promise(() => shell.openExternal(url))
       : Effect.fail(new InvalidInputError({ message: `Refusing to open ${url}` })),
+
+  "web.isGitlab": (host) => (mayRunGitlab(host) ? isGitlab(host) : Effect.succeed(false)),
 
   // Remote hosts ---------------------------------------------------------------
   "ssh.hosts": () =>

@@ -40,6 +40,8 @@ const updater = vi.hoisted(() => ({
   install: vi.fn(),
 }));
 vi.mock("./updater", () => ({ updater }));
+const avatars = vi.hoisted(() => ({ isGitlab: vi.fn() }));
+vi.mock("./avatars", () => avatars);
 /** Terminal launchers are faked; everything else really runs. */
 const terminals = vi.hoisted(() => ({
   spawn: vi.fn((..._args: unknown[]) => ({ unref: terminals.unref })),
@@ -194,6 +196,16 @@ describe("shell handlers", () => {
       Exit.fail(new InvalidInputError({ message: "Refusing to open file:///etc/passwd" })),
     );
     expect(electron.shell.openExternal).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks only plausible hosts whether they run GitLab", async () => {
+    avatars.isGitlab.mockImplementation((host: string) => Effect.succeed(host === "git.corp.io"));
+    expect(await call("web.isGitlab", "git.corp.io")).toBe(true);
+    expect(await call("web.isGitlab", "git.other.io")).toBe(false);
+    // Not asked: GitHub, ssh aliases, and anything that is not a host name.
+    for (const host of ["github.com", "fedora", "evil.io/path", "x.io:22@y"])
+      expect(await call("web.isGitlab", host)).toBe(false);
+    expect(avatars.isGitlab.mock.calls).toEqual([["git.corp.io"], ["git.other.io"]]);
   });
 
   it("reveals local files and folders", async () => {

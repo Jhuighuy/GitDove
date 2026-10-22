@@ -9,6 +9,7 @@ export type Forge = "github" | "gitlab" | "bitbucket" | "other";
 /** Where a repository lives on the web, e.g. `https://github.com` and `owner/repo`. */
 export interface WebRepo {
   readonly forge: Forge;
+  readonly host: string;
   readonly origin: string;
   readonly path: string;
 }
@@ -54,7 +55,7 @@ export const webRepo = (url: string): WebRepo | null => {
         : host.includes("gitlab")
           ? "gitlab"
           : "other";
-  return { forge, origin, path };
+  return { forge, host, origin, path };
 };
 
 /** The remote that references point to: `upstream` (of a fork), then `origin`, then any. */
@@ -129,17 +130,21 @@ const QUALIFIER = /[\w./-]/;
 const JOINED = /[\w/&#!-]/;
 
 /**
- * The reference at `m` in `s` (`#12`, `owner/repo#12`) with where it starts, or null when the
- * match is part of a word, an entity or the like.
+ * The reference at `m` in `s` (`#12`, `owner/repo#12`, on GitLab also `group/sub/repo!12`)
+ * with where it starts, or null when the match is part of a word, an entity or the like.
  */
-const reference = (s: string, m: RegExpMatchArray) => {
+const reference = (s: string, m: RegExpMatchArray, nested: boolean) => {
   const at = m.index!;
   const end = at + m[0].length;
   if (end < s.length && WORD.test(s[end]!)) return null;
   let start = at;
   while (start > 0 && QUALIFIER.test(s[start - 1]!)) start--;
   const qualifier = s.slice(start, at);
-  if (qualifier && !/^[\w.-]+\/[\w.-]+$/.test(qualifier)) return null;
+  if (qualifier) {
+    const parts = qualifier.split("/");
+    if (parts.length < 2 || (!nested && parts.length > 2)) return null;
+    if (!parts.every((p) => /^[\w.-]+$/.test(p))) return null;
+  }
   if (start > 0 && JOINED.test(s[start - 1]!)) return null;
   return { start, end, path: qualifier || null, sigil: m[0][0]!, n: m[0].slice(1) };
 };
@@ -152,7 +157,7 @@ export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
     if (!repo) return void out.push({ text: s });
     let last = 0;
     for (const m of s.matchAll(REF_RE)) {
-      const ref = reference(s, m);
+      const ref = reference(s, m, repo.forge === "gitlab");
       if (!ref || ref.start < last || (ref.sigil === "!" && repo.forge !== "gitlab")) continue;
       if (ref.start > last) out.push({ text: s.slice(last, ref.start) });
       out.push({
