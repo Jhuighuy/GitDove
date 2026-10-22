@@ -101,6 +101,61 @@ export const squashPlan = (
   return plan(base, steps, `Squash ${hashes.length} commits`);
 };
 
+/**
+ * The plan that turns the history (newest first) into `order` (all of it, newest first):
+ * everything above the deepest commit that changes place is rewritten. Null if nothing moves.
+ */
+const planFor = (history: EditableHistory, order: readonly RebaseStep[], label: string) => {
+  let deepest = -1;
+  order.forEach((step, i) => {
+    if (step.hash !== history.commits[i] || step.action !== "pick" || step.message) deepest = i;
+  });
+  if (deepest < 0) return null;
+  const { base } = rangeTo(history, deepest);
+  return plan(base, order.slice(0, deepest + 1).toReversed(), label);
+};
+
+/**
+ * Moves `hashes` (keeping their order) next to `target`, above (newer) or below (older) it, as
+ * dragging them there in the graph does.
+ */
+export const reorderPlan = (
+  history: EditableHistory,
+  hashes: readonly string[],
+  target: string,
+  side: "above" | "below",
+) => {
+  if (!indexesOf(history, [...hashes, target]) || hashes.includes(target)) return null;
+  const moved = new Set(hashes);
+  const block = history.commits.filter((h) => moved.has(h));
+  const rest = history.commits.filter((h) => !moved.has(h));
+  const at = rest.indexOf(target) + (side === "below" ? 1 : 0);
+  const order = [...rest.slice(0, at), ...block, ...rest.slice(at)].map(pick);
+  return planFor(history, order, many("Move", hashes.length, "commit"));
+};
+
+/** Squashes `hashes` into `target`, where `target` is, with `message`. */
+export const squashOntoPlan = (
+  history: EditableHistory,
+  hashes: readonly string[],
+  target: string,
+  message: string,
+) => {
+  if (!indexesOf(history, [...hashes, target]) || hashes.includes(target)) return null;
+  const folded = new Set(hashes);
+  const order: RebaseStep[] = [];
+  for (const h of history.commits) {
+    if (folded.has(h)) continue;
+    // Newest first, what is folded sits right above the commit it is folded into.
+    if (h === target) {
+      for (const f of history.commits.filter((x) => folded.has(x)))
+        order.push({ hash: f, action: "fixup" });
+      order.push({ hash: h, action: "pick", message });
+    } else order.push(pick(h));
+  }
+  return planFor(history, order, `Squash ${hashes.length + 1} commits`);
+};
+
 /** Stops at `hash` so that the user can change it. */
 export const editPlan = (history: EditableHistory, hash: string, subject: string) => {
   const indexes = indexesOf(history, [hash]);

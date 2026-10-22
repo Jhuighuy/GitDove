@@ -10,6 +10,8 @@ import {
   type EditorRow,
   movePlan,
   rebaseBase,
+  reorderPlan,
+  squashOntoPlan,
   rowProblems,
   squashPlan,
 } from "./plan";
@@ -66,6 +68,37 @@ describe("quick action plans", () => {
     expect(p?.base).toBe("a");
     expect(actions(p)).toEqual(['pick b "Both"', "fixup d", "pick c"]);
     expect(squashPlan(history, ["d"], "One")).toBeNull();
+  });
+
+  it("reorders by dragging", () => {
+    // d is moved below b: c, b and d are rewritten above a.
+    expect(reorderPlan(history, ["d"], "b", "below")).toMatchObject({ base: "a" });
+    expect(actions(reorderPlan(history, ["d"], "b", "below"))).toEqual([
+      "pick d",
+      "pick b",
+      "pick c",
+    ]);
+    expect(actions(reorderPlan(history, ["a", "c"], "d", "above"))).toEqual([
+      "pick b",
+      "pick d",
+      "pick a",
+      "pick c",
+    ]);
+    // Dropped where it is: nothing to do.
+    expect(reorderPlan(history, ["c"], "d", "below")).toBeNull();
+    expect(reorderPlan(history, ["c"], "c", "below")).toBeNull();
+    expect(reorderPlan(history, ["x"], "c", "below")).toBeNull();
+  });
+
+  it("squashes onto a commit by dragging", () => {
+    const p = squashOntoPlan(history, ["d", "a"], "b", "All");
+    expect(p).toMatchObject({ base: "base", label: "Squash 3 commits" });
+    expect(actions(p)).toEqual(['pick b "All"', "fixup a", "fixup d", "pick c"]);
+    expect(actions(squashOntoPlan(history, ["c"], "b", "Both"))).toEqual([
+      'pick b "Both"',
+      "fixup c",
+      "pick d",
+    ]);
   });
 
   it("stops to edit", () => {

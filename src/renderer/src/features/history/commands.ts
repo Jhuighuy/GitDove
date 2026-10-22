@@ -14,7 +14,16 @@ import { confirm } from "../dialogs/dialogs";
 import { chooseCherryPick } from "./CherryPickDialog";
 import { editMessage } from "./MessageDialog";
 import { choosePatch } from "./PatchDialog";
-import { combinedMessage, dropPlan, editPlan, movePlan, rebaseBase, squashPlan } from "./plan";
+import {
+  combinedMessage,
+  dropPlan,
+  editPlan,
+  movePlan,
+  rebaseBase,
+  reorderPlan,
+  squashOntoPlan,
+  squashPlan,
+} from "./plan";
 
 /** A commit as the menus know it. */
 export interface CommitRef {
@@ -141,6 +150,46 @@ export const historyCommands = {
     });
     if (message === null) return;
     await rewrite(repo, squashPlan(h, hashes, message), `Squashed ${hashes.length} commits`);
+  },
+
+  /** Moves `hashes` next to `target`, as dropped there in the graph. */
+  reorder: async (
+    repo: RepoId,
+    hashes: readonly string[],
+    target: string,
+    side: "above" | "below",
+  ) => {
+    if (refuseWhileBusy(repo, "Move")) return;
+    const h = await history(repo);
+    const plan = reorderPlan(h, hashes, target, side);
+    if (!plan) return;
+    const touched = plan.steps.map((s) => s.hash);
+    if (!(await confirmPushed(h, touched, "Move"))) return;
+    await rewrite(repo, plan, `Moved ${many(hashes.length, "commit")}`);
+  },
+
+  /** Squashes `hashes` into `target`, as dropped onto it in the graph. */
+  squashOnto: async (repo: RepoId, hashes: readonly string[], target: string) => {
+    if (refuseWhileBusy(repo, "Squash")) return;
+    const h = await history(repo);
+    const all = [...hashes, target].toSorted((a, b) => h.commits.indexOf(b) - h.commits.indexOf(a));
+    const commits = await Promise.all(all.map((x) => details(repo, x)));
+    const into = commits.find((d) => d.hash === target)!;
+    const message = await editMessage({
+      title: `Squash into “${into.subject}”`,
+      description: "The commits become one, with this message, in place of the one dropped onto.",
+      confirmLabel: "Squash",
+      message: combinedMessage(commits.map(fullMessage)),
+      commits: commits.map((d) => ({ hash: d.hash, subject: d.subject })),
+      into: target,
+      ...(rewritesPushed(h, all) ? { warning: PUSHED_WARNING } : {}),
+    });
+    if (message === null) return;
+    await rewrite(
+      repo,
+      squashOntoPlan(h, hashes, target, message),
+      `Squashed ${all.length} commits`,
+    );
   },
 
   /** Squashes `hash` into the commit below it. */

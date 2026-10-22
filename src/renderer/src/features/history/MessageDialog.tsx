@@ -21,6 +21,8 @@ export interface MessageRequest {
   readonly message: string;
   /** The commits the message is for: one to reword, or several to squash (oldest first). */
   readonly commits: readonly { readonly hash: string; readonly subject: string }[];
+  /** The commit the others are squashed into; the oldest by default. */
+  readonly into?: string;
   /** E.g. that the commits were pushed already. */
   readonly warning?: string;
 }
@@ -69,9 +71,9 @@ function MessageBody({
       </DialogHeader>
       {squash ? (
         <ol className="bg-muted/40 max-h-36 overflow-y-auto rounded-lg border py-1 text-[12px]">
-          {request.commits.toReversed().map((c, i) => (
+          {request.commits.toReversed().map((c) => (
             <li key={c.hash} className="flex items-center gap-2 px-2.5 py-1">
-              {i === request.commits.length - 1 ? (
+              {c.hash === (request.into ?? request.commits[0]?.hash) ? (
                 <IconGitCommit className="text-primary size-3.5 shrink-0" />
               ) : (
                 <IconCornerLeftDown className="size-3.5 shrink-0 text-violet-500" />
