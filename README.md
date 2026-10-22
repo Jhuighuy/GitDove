@@ -37,6 +37,8 @@ robustness as the top priorities.
 ## Development
 
 Requires Node.js 24+ and `git`; `ssh` is needed for remote repositories.
+The macOS app requires macOS 26+ on Apple silicon. Packaging it also requires the full
+Xcode 26+ installation selected with `xcode-select`, including the `actool` asset compiler.
 
 ```bash
 npm install
@@ -48,6 +50,16 @@ npm run lint
 npm run format
 npm run dist       # package installers into release/ (macOS: arm64 only)
 ```
+
+The icon artwork lives in `build/icon.svg`. Run `npm run icons` after editing it to
+regenerate the committed exports, including the vector layers in `build/Fold.icon`.
+Open `build/Fold.icon` in Icon Composer to edit the background, glass materials and
+appearance variants; regeneration preserves these settings in `icon.json`. The dove's
+paper facets share one glass surface, above the separate Git branch. The branch uses
+filled outlines so the glass renderer doesn't highlight an implicit closing edge.
+Electron Builder compiles the macOS icon into `Assets.car` during packaging; Windows
+and Linux use the static exports. Icon Composer alone can preview the design, but
+compiling the app's asset catalog requires Xcode.
 
 The repository tests create throwaway repositories under `/tmp`. Set `GITDOVE_INT_SSH_HOST` to also
 run them on a remote host over SSH (CI uses an SSH server on localhost):

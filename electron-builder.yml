@@ -21,7 +21,8 @@ publish:
   repo: GitDove
   releaseType: release
 mac:
-  icon: build/icon.icns
+  icon: build/Fold.icon
+  minimumSystemVersion: "26.0"
   category: public.app-category.developer-tools
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
   # Apple silicon only. The zip is what Sparkle downloads for over-the-air updates.

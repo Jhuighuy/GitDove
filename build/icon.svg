@@ -102,7 +102,7 @@
       <stop offset="1" stop-color="#e8d2b8"/>
     </linearGradient>
   </defs>
-  <!-- Keep semantic groups separate for future layered icon exports. -->
+  <!-- Semantic groups also supply the layered macOS Icon Composer assets. -->
   <g transform="translate(100 100) scale(0.731794 0.75114) translate(-64 -79)">
     <g id="background">
       <!-- Cubic approximation of a quartic superellipse: (x/a)^4 + (y/b)^4 = 1, centered on the tile. -->
@@ -125,10 +125,16 @@
         C460.585 79.000 546.085 79.000 627.000 79.000Z" fill="url(#tile)"/>
     </g>
     <g id="git-branch" fill="#471a36">
-      <path d="M973 769V640L931 594L1057 461M973 640H1097" fill="none" stroke="#471a36" stroke-width="27" stroke-linejoin="round"/>
-      <circle cx="1057" cy="461" r="44"/>
-      <circle cx="1097" cy="641" r="44"/>
-      <circle cx="973" cy="769" r="45"/>
+      <!-- Outlined strokes prevent Icon Composer from lighting the implicit closing edge. -->
+      <path d="M986.5 769L959.5 769L959.5 640L986.5 640Z
+        M982.969554 630.897364L963.030446 649.102636L921.030446 603.102636L940.969554 584.897364Z
+        M940.800361 603.284553L921.199639 584.715447L1047.199639 451.715447L1066.800361 470.284553Z
+        M973 653.5L973 626.5L1097 626.5L1097 653.5Z
+        M986.5 640a13.5 13.5 0 1 1 -27 0a13.5 13.5 0 1 1 27 0Z
+        M944.5 594a13.5 13.5 0 1 1 -27 0a13.5 13.5 0 1 1 27 0Z
+        M1101 461a44 44 0 1 1 -88 0a44 44 0 1 1 88 0Z
+        M1141 641a44 44 0 1 1 -88 0a44 44 0 1 1 88 0Z
+        M1018 769a45 45 0 1 1 -90 0a45 45 0 1 1 90 0Z"/>
     </g>
     <g id="tail">
       <path d="M471 783L205 861Q196 863 199 872L224 943L487 881Z" fill="url(#tail-top)"/>
