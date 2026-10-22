@@ -594,7 +594,7 @@ export const parseDiff = (
     }
   }
   // Cut short at the size limit: the last hunk may be missing lines.
-  if (truncated && current && current.width === 1) {
+  if (truncated && current?.width === 1) {
     if (current.seenOld < current.ol || current.seenNew < current.nl) current = null;
   }
   flush();

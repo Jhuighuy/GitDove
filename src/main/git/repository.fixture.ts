@@ -63,10 +63,10 @@ export const useRepoFixture = (hostId: string): RepoFixture => {
     runtime.runPromise(Effect.flip(effect));
   const sh = async (script: string, cwd = state.dir) =>
     (await run(state.host.sh(script, { cwd }))).stdout.toString().trim();
-  const open = (path: string, hooks: RepositoryHooks = { onGraphProgress: () => {} }) => {
+  const open = (path: string, hooks?: RepositoryHooks) => {
     const location: RepoLocation =
       hostId === LOCAL_HOST ? { kind: "local", path } : { kind: "ssh", host: hostId, path };
-    return run(Repository.open(state.host, location, hooks));
+    return run(Repository.open(state.host, location, hooks ?? { onGraphProgress: () => {} }));
   };
 
   beforeAll(async () => {

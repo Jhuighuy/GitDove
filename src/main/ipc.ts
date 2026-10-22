@@ -374,7 +374,10 @@ export const handlers: Handlers = {
       (yield* Caller).webContents[command]();
     }),
   // Windows follow through `nativeTheme`'s "updated" event (see index.ts).
-  "app.setTheme": (theme) => Effect.sync(() => void (nativeTheme.themeSource = theme)),
+  "app.setTheme": (theme) =>
+    Effect.sync(() => {
+      nativeTheme.themeSource = theme;
+    }),
   "dialog.pickDirectory": () =>
     Effect.gen(function* () {
       // Attached to the window that asked, which need not be focused.
