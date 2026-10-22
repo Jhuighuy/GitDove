@@ -5,19 +5,25 @@ import { create } from "zustand";
 export interface Busy {
   /** What is running, e.g. "Checking out feature…". */
   readonly label: string;
-  /** Whether it can be cancelled (fetch, pull and push). */
+  /**
+   * Whether it is a network operation (fetch, pull, push), which can be cancelled right away.
+   * Others can be cancelled too once they take a while, e.g. a commit hook waiting for input.
+   */
   readonly cancellable: boolean;
+  /** When it started (`Date.now()`). */
+  readonly since: number;
 }
 
 interface BusyState {
   readonly byRepo: Readonly<Record<RepoId, Busy>>;
-  start(repo: RepoId, busy: Busy): void;
+  start(repo: RepoId, busy: Omit<Busy, "since">): void;
   finish(repo: RepoId): void;
 }
 
 export const useBusyStore = create<BusyState>()((set) => ({
   byRepo: {},
-  start: (repo, busy) => set((s) => ({ byRepo: { ...s.byRepo, [repo]: busy } })),
+  start: (repo, busy) =>
+    set((s) => ({ byRepo: { ...s.byRepo, [repo]: { ...busy, since: Date.now() } } })),
   finish: (repo) =>
     set((s) => {
       const { [repo]: _, ...rest } = s.byRepo;

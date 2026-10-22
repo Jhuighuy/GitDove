@@ -12,7 +12,10 @@ export interface RunOptions {
   readonly status?: string;
   /** Shown in the status bar once it succeeded. */
   readonly success?: string;
-  /** Lets the user cancel it from the busy indicator (network operations). */
+  /**
+   * A network operation: the user can cancel it from the busy indicator at once (other
+   * operations once they take a while), and change events are applied while it runs.
+   */
   readonly cancellable?: boolean;
   /**
    * What the action can change: refreshed before the repository stops being busy, so that write

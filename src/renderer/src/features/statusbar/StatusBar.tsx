@@ -136,18 +136,34 @@ const graphProblem = (graph: GraphInfo | undefined): string => {
   return `History incomplete at ${graph.count.toLocaleString()} commits`;
 };
 
-/** The running repository-changing operation, with a cancel button for network operations. */
+/** How long a local operation runs before it can be cancelled (it may wait for input). */
+export const LOCAL_CANCEL_MS = 3000;
+
+/**
+ * The running repository-changing operation, with a cancel button: at once for network
+ * operations, after a while for local ones (e.g. a hook or a signing prompt that hangs).
+ */
 function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
+  const [late, setLate] = useState<Busy | null>(null);
+  useEffect(() => {
+    if (busy.cancellable) return;
+    const id = setTimeout(
+      () => setLate(busy),
+      Math.max(0, busy.since + LOCAL_CANCEL_MS - Date.now()),
+    );
+    return () => clearTimeout(id);
+  }, [busy]);
+  const cancellable = busy.cancellable || late === busy;
   return (
     <output className="flex min-w-0 items-center gap-1.5" title={busy.label}>
       <Spinner className="size-3.5 shrink-0" role="presentation" aria-hidden />
       <span className="truncate">{busy.label}</span>
-      {busy.cancellable && (
+      {cancellable && (
         <Button
           variant="ghost"
           size="icon-xs"
           aria-label="Cancel"
-          title="Cancel"
+          title={busy.cancellable ? "Cancel" : "Cancel (stops the running git command)"}
           className="-my-1 size-5"
           onClick={() => commands.cancel(repo)}
         >

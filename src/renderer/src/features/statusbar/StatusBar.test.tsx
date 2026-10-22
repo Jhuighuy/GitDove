@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { keys } from "@/lib/queries";
 import { useBusyStore } from "@/stores/busy";
 import { APP, notify, useStatusStore } from "@/stores/status";
-import { StatusBar } from "./StatusBar";
+import { LOCAL_CANCEL_MS, StatusBar } from "./StatusBar";
 
 const mocks = vi.hoisted(() => ({
   api: [] as unknown[][],
@@ -175,6 +175,29 @@ it("shows the running operation, with a cancel button for network operations", a
   // Another tab's operation is not shown.
   await render(LOCAL);
   expect(text()).not.toContain("Pulling…");
+});
+
+it("offers to cancel a local operation once it takes a while", async () => {
+  await render(LOCAL);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    await act(async () =>
+      useBusyStore.getState().start(LOCAL, { label: "Committing…", cancellable: false }),
+    );
+    expect(container.querySelector("[aria-label='Cancel']")).toBeNull();
+    await act(async () => vi.advanceTimersByTime(LOCAL_CANCEL_MS));
+    await act(async () => container.querySelector<HTMLElement>("[aria-label='Cancel']")!.click());
+    expect(mocks.commands).toEqual([["cancel", LOCAL]]);
+    // The next operation starts without one again.
+    await act(async () => useBusyStore.getState().finish(LOCAL));
+    await act(async () =>
+      useBusyStore.getState().start(LOCAL, { label: "Checking out…", cancellable: false }),
+    );
+    expect(container.querySelector("[aria-label='Cancel']")).toBeNull();
+  } finally {
+    await act(async () => useBusyStore.getState().finish(LOCAL));
+    vi.useRealTimers();
+  }
 });
 
 it("shows results of the active repository and of the app", async () => {

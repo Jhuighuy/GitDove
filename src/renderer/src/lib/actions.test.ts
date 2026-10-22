@@ -160,7 +160,7 @@ it("runs one action at a time per repository, marking it busy", async () => {
   let release!: () => void;
   const fn = vi.fn(() => new Promise<string>((r) => (release = () => r("done"))));
   const first = runAction(repo, "Checkout", fn, { status: "Checking out feature…" });
-  expect(busyOf(repo)).toEqual({ label: "Checking out feature…", cancellable: false });
+  expect(busyOf(repo)).toMatchObject({ label: "Checking out feature…", cancellable: false });
 
   // Any other action in the same repository is refused, with a reason.
   const other = vi.fn(async () => "pulled");
@@ -189,7 +189,7 @@ it("labels the busy state from the status message or the label", async () => {
   let release!: () => void;
   const wait = () => new Promise<void>((r) => (release = r));
   const pull = runAction(repo, "Pull", wait, { status: "Pulling…", cancellable: true });
-  expect(busyOf(repo)).toEqual({ label: "Pulling…", cancellable: true });
+  expect(busyOf(repo)).toMatchObject({ label: "Pulling…", cancellable: true });
   release();
   await pull;
   const stage = runAction(repo, "Stage", wait);
