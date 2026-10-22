@@ -37,8 +37,8 @@ robustness as the top priorities.
 ## Development
 
 Requires Node.js 24+ and `git`; `ssh` is needed for remote repositories.
-The macOS app requires macOS 26+ on Apple silicon. Packaging it also requires the full
-Xcode 26+ installation selected with `xcode-select`, including the `actool` asset compiler.
+The macOS app requires macOS 26+ on Apple silicon. Local packaging needs Apple's Command
+Line Tools for the updater helper; a full Xcode installation is optional.
 
 ```bash
 npm install
@@ -57,9 +57,15 @@ Open `build/Fold.icon` in Icon Composer to edit the background, glass materials 
 appearance variants; regeneration preserves these settings in `icon.json`. The dove's
 paper facets share one glass surface, above the separate Git branch. The branch uses
 filled outlines so the glass renderer doesn't highlight an implicit closing edge.
-Electron Builder compiles the macOS icon into `Assets.car` during packaging; Windows
-and Linux use the static exports. Icon Composer alone can preview the design, but
-compiling the app's asset catalog requires Xcode.
+During macOS packaging, `scripts/before-pack.mjs` selects `Fold.icon` when the active
+`actool` compiler is version 26 or newer. Otherwise it uses the committed `build/icon.icns`
+fallback. Xcode 26+ is only needed to compile the Liquid Glass asset catalog (`Assets.car`);
+Icon Composer alone can preview it. CI packages with Xcode so releases keep the layered
+icon. The choice depends on the build machine: users running the packaged app need
+neither Xcode nor Icon Composer. Windows and Linux use the static exports.
+
+`npm run icons` refreshes the `.icns` fallback on macOS using the system `iconutil`
+(no Xcode needed); on other platforms it preserves the committed `.icns`.
 
 The repository tests create throwaway repositories under `/tmp`. Set `GITDOVE_INT_SSH_HOST` to also
 run them on a remote host over SSH (CI uses an SSH server on localhost):

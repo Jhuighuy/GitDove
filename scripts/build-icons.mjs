@@ -5,11 +5,15 @@
 // Outputs (committed; macOS packaging compiles Fold.icon with Xcode 26+):
 //   build/Fold.icon/Assets/*.svg  macOS vector layers; materials live in icon.json
 //   build/icon.png       1024px, macOS grid (tile with transparent margin)
+//   build/icon.icns      static macOS fallback (generation needs macOS iconutil)
 //   build/icon.ico       Windows, tile cropped to fill the canvas
 //   build/icons/NxN.png  Linux, cropped
 //   resources/icon.png   window/dock icon at runtime, cropped
 //   src/renderer/src/assets/icon.svg  in-app logo, cropped
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Resvg } from "@resvg/resvg-js";
 
 const source = readFileSync("build/icon.svg", "utf8");
@@ -59,8 +63,25 @@ write(
   layer(["tail", "rear-wing-layer", "body", "foreground-wing", "beak"]),
 );
 
-// Development Dock icon; packaged macOS builds use the compiled Fold.icon.
+// Development Dock icon and static fallback for packaging without Xcode.
 write("build/icon.png", render(source, 1024));
+if (process.platform === "darwin") {
+  const temp = mkdtempSync(join(tmpdir(), "gitdove-icon-"));
+  const iconset = join(temp, "icon.iconset");
+  try {
+    mkdirSync(iconset);
+    for (const size of [16, 32, 128, 256, 512]) {
+      writeFileSync(join(iconset, `icon_${size}x${size}.png`), render(source, size));
+      writeFileSync(join(iconset, `icon_${size}x${size}@2x.png`), render(source, size * 2));
+    }
+    execFileSync("/usr/bin/iconutil", ["-c", "icns", iconset, "-o", "build/icon.icns"]);
+    console.log("wrote build/icon.icns");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+} else {
+  console.warn("keeping committed build/icon.icns (regenerate on macOS with iconutil)");
+}
 
 // Windows: an ICO container with PNG-encoded entries (supported since Vista).
 const icoSizes = [16, 24, 32, 48, 64, 128, 256];
