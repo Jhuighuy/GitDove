@@ -17,7 +17,7 @@ import { APP, notify } from "@/stores/status";
 const refs = (repo: RepoId) => queryClient.getQueryData<RefsSnapshot>(keys.refs(repo));
 const headBranch = (repo: RepoId) => refs(repo)?.refs.find((r) => r.kind === "branch" && r.isHead);
 /** A ref (full or short name) or a commit hash for display. */
-export const refLabel = (ref: string) =>
+const refLabel = (ref: string) =>
   /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(ref)
     ? shortHash(ref)
     : ref.replace(/^refs\/(?:heads|remotes|tags)\//, "");
