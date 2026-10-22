@@ -373,6 +373,38 @@ it("waits for the history to reach where it was, while it streams in", async () 
   expect(scroller().scrollTop).toBe(4000);
 });
 
+it("does not take the user back after revealing a commit meanwhile", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 4000;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  mocks.info = { version: 2, count: 20, complete: false, maxLanes: 1 };
+  root = createRoot(container);
+  await render(null);
+  // A branch picked in the sidebar.
+  mocks.found = 5;
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c5" }, true),
+  );
+  await settle();
+  const revealed = scroller().scrollTop;
+  await act(async () => {
+    client.setQueryData(keys.graphInfo(repo), {
+      version: 2,
+      count: 200,
+      complete: true,
+      maxLanes: 1,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(scroller().scrollTop).toBe(revealed);
+  expect(revealed).toBeLessThan(4000);
+});
+
 it("does not take the user back once they scrolled themselves", async () => {
   mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
   mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };

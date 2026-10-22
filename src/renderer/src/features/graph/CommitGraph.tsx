@@ -195,6 +195,8 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
         // Handled once it got here: a lookup cut short (e.g. by a diff) runs again.
         if (cancelled) return;
         viewOf(repo).revealed = revealToken;
+        // Going to the commit replaces going back to where the graph was.
+        restore.current = 0;
         if (index >= 0) virtualizer.scrollToIndex(index + offset, { align: "center" });
       },
       () => {},
