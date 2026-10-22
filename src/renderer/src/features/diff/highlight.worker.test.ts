@@ -6,6 +6,8 @@ type Tokens = Extract<HighlightResponse, { type: "tokens" }>;
 
 const posted: HighlightResponse[] = [];
 const transfers: Transferable[][] = [];
+/** Called with each message the worker posts. */
+let onPost: ((msg: HighlightResponse) => void) | null = null;
 let handler: ((e: MessageEvent<HighlightRequest>) => void) | null = null;
 
 // The worker module talks to `self`; stand in for the worker global scope.
@@ -16,6 +18,7 @@ vi.stubGlobal("self", {
   postMessage: (msg: HighlightResponse, transfer: Transferable[]) => {
     posted.push(msg);
     transfers.push(transfer);
+    onPost?.(msg);
   },
 });
 
@@ -26,6 +29,7 @@ beforeAll(async () => {
 beforeEach(() => {
   posted.splice(0);
   transfers.splice(0);
+  onPost = null;
 });
 
 let nextDoc = 1;
@@ -197,4 +201,38 @@ it("drops closed documents and their pending requests", async () => {
   highlight(12345, 1, 0);
   await idle();
   expect(posted).toEqual([]);
+});
+
+it("highlights a long chain of chunks one at a time, newer requests first", async () => {
+  const lines = Array.from({ length: CHUNK * 31 }, (_, i) => `let x${i} = ${i};`);
+  const doc = open("a.js", [lines, lines]);
+  // The first chunk of the chain lets a newer request in before the rest of it.
+  onPost = (msg) => {
+    if (msg.type === "tokens" && msg.side === 1) {
+      onPost = null;
+      highlight(doc, 0, 3);
+    }
+  };
+  highlight(doc, 1, 30);
+  await waitFor(() => expect(tokensOf(doc).at(-1)?.chunk).toBe(30));
+  // Only the last few chunks before the requested one are highlighted for its state.
+  expect(tokensOf(doc).map((m) => `${m.side}:${m.chunk}`)).toEqual([
+    "1:20",
+    "0:0",
+    "0:1",
+    "0:2",
+    "0:3",
+    ...Array.from({ length: 10 }, (_, i) => `1:${21 + i}`),
+  ]);
+  send({ type: "close", doc });
+});
+
+it("stops a chain when its document closes", async () => {
+  const lines = Array.from({ length: CHUNK * 6 }, (_, i) => `let x${i} = ${i};`);
+  const doc = open("a.js", [[], lines]);
+  onPost = () => send({ type: "close", doc });
+  highlight(doc, 1, 5);
+  await waitFor(() => expect(tokensOf(doc)).toHaveLength(1));
+  await idle();
+  expect(tokensOf(doc)).toHaveLength(1);
 });

@@ -12,18 +12,25 @@ import { buildModel } from "./model";
 class FakeWorker {
   static instances: FakeWorker[] = [];
   readonly sent: HighlightRequest[] = [];
-  private listener: ((e: MessageEvent<HighlightResponse>) => void) | null = null;
+  terminated = false;
+  private readonly listeners = new Map<string, (e: Event) => void>();
   constructor(readonly url: URL) {
     FakeWorker.instances.push(this);
   }
-  addEventListener(_: "message", listener: (e: MessageEvent<HighlightResponse>) => void) {
-    this.listener = listener;
+  addEventListener(type: string, listener: (e: Event) => void) {
+    this.listeners.set(type, listener);
   }
   postMessage(req: HighlightRequest) {
     this.sent.push(req);
   }
+  terminate() {
+    this.terminated = true;
+  }
   reply(msg: HighlightResponse) {
-    this.listener!({ data: msg } as MessageEvent<HighlightResponse>);
+    this.listeners.get("message")!({ data: msg } as MessageEvent<HighlightResponse>);
+  }
+  crash() {
+    this.listeners.get("error")!(new Event("error", { cancelable: true }));
   }
 }
 
@@ -31,7 +38,7 @@ class FakeWorker {
 vi.stubGlobal("Worker", FakeWorker);
 afterAll(() => vi.unstubAllGlobals());
 
-const worker = () => FakeWorker.instances[0]!;
+const worker = () => FakeWorker.instances.at(-1)!;
 const sent = () => worker()?.sent ?? [];
 
 const fileDiff = (lines: number, path = "a.ts"): FileDiff => ({
@@ -209,6 +216,72 @@ it("opens a highlighter while a component shows the diff", async () => {
   expect(sent().map((m) => m.type)).toEqual(["open"]);
   await act(async () => root.unmount());
   expect(sent().map((m) => m.type)).toEqual(["open", "close"]);
+});
+
+/** Replies with one token covering each of the first `n` lines, in style `style`. */
+const replyLines = (doc: number, n: number, style: number) =>
+  worker().reply({
+    type: "tokens",
+    doc,
+    theme: "dark",
+    side: 1,
+    chunk: 0,
+    starts: Uint32Array.from({ length: n + 1 }, (_, i) => i * 2),
+    tokens: Uint32Array.from({ length: n * 2 }, (_, i) => (i % 2 ? style : 6)),
+    paletteBase: 0,
+    palette: null,
+  });
+
+it("shows the tokens of the previous version until a refreshed diff's own arrive", async () => {
+  const first = buildModel(fileDiff(3));
+  const hl = { current: null as DocHighlighter | null };
+  const root = createRoot(document.createElement("div"));
+  const show = (model: ReturnType<typeof buildModel>) =>
+    act(async () => root.render(<Probe model={model} onValue={(v) => (hl.current = v)} />));
+  await show(first);
+  replyLines((sent().at(-1) as { doc: number }).doc, 3, 7);
+  // One line fewer at the top: the same texts are at other indices now.
+  const second = buildModel({
+    ...fileDiff(3),
+    hunks: [{ ...fileDiff(3).hunks[0]!, lines: fileDiff(3).hunks[0]!.lines.slice(1) }],
+  });
+  await show(second);
+  expect([...hl.current!.tokens("dark", 1, 0)!]).toEqual([6, 7]);
+  expect(hl.current!.tokens("light", 1, 0)).toBeNull();
+  // Another file's tokens are not used.
+  await show(buildModel(fileDiff(3, "b.ts")));
+  expect(hl.current!.tokens("dark", 1, 0)).toBeNull();
+  await act(async () => root.unmount());
+});
+
+it("sends open documents and pending requests to a new worker after a crash", () => {
+  const hl = new DocHighlighter(buildModel(fileDiff(3)));
+  hl.open();
+  const first = worker();
+  const doc = (sent().at(-1) as { doc: number }).doc;
+  hl.ensure("dark", 1, 0, CHUNK + 1);
+  replyLines(doc, 3, 1);
+  first.crash();
+  expect(first.terminated).toBe(true);
+  expect(worker()).not.toBe(first);
+  // Only the chunk that did not arrive is requested again.
+  expect(sent()).toEqual([
+    expect.objectContaining({ type: "open", doc }),
+    { type: "highlight", doc, theme: "dark", side: 1, chunk: 1 },
+  ]);
+  // After a few crashes, highlighting is given up.
+  worker().crash();
+  worker().crash();
+  worker().crash();
+  const last = worker();
+  expect(last.terminated).toBe(true);
+  hl.ensure("dark", 1, 0, CHUNK * 3);
+  const other = new DocHighlighter(buildModel(fileDiff(3)));
+  other.open();
+  other.ensure("dark", 1, 0, 1);
+  expect(FakeWorker.instances.at(-1)).toBe(last);
+  hl.dispose();
+  other.dispose();
 });
 
 it("does not highlight huge diffs", async () => {

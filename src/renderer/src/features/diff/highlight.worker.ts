@@ -12,6 +12,14 @@ import { CHUNK, languageFor } from "./highlight-protocol";
 const THEMES: Record<ThemeKind, string> = { light: "github-light", dark: "github-dark" };
 /** Longer lines are left plain. */
 const MAX_LINE = 1000;
+/**
+ * How many chunks before a requested one are highlighted to carry the grammar
+ * state into it. Beyond that a chunk starts from the initial state, which is
+ * usually right and keeps a jump to the end of a huge hunk cheap.
+ */
+const MAX_CHAIN = 10;
+
+const LANGUAGES: ReadonlySet<string> = new Set(Object.keys(bundledLanguages));
 
 let highlighter: Promise<HighlighterCore> | null = null;
 const getHighlighter = () =>
@@ -19,6 +27,10 @@ const getHighlighter = () =>
     themes: [import("shiki/themes/github-light.mjs"), import("shiki/themes/github-dark.mjs")],
     langs: [],
     engine: createJavaScriptRegexEngine({ forgiving: true }),
+  }).catch((e: unknown) => {
+    // Try again for the next document.
+    highlighter = null;
+    throw e;
   }));
 
 const loaded = new Map<string, Promise<boolean>>();
@@ -29,7 +41,10 @@ const loadLanguage = (lang: string) => {
       .then((hl) => hl.loadLanguage(bundledLanguages[lang as keyof typeof bundledLanguages]!))
       .then(
         () => true,
-        () => false,
+        () => {
+          loaded.delete(lang);
+          return false;
+        },
       );
     loaded.set(lang, p);
   }
@@ -45,9 +60,16 @@ interface Doc {
   readonly states: Map<string, GrammarState | undefined>;
 }
 
+interface Request {
+  readonly doc: number;
+  readonly theme: ThemeKind;
+  readonly side: 0 | 1;
+  readonly chunk: number;
+}
+
 const docs = new Map<number, Doc>();
 /** Pending chunk requests; served last-in first-out. */
-const queue: { doc: number; theme: ThemeKind; side: 0 | 1; chunk: number }[] = [];
+const queue: Request[] = [];
 let scheduled = false;
 
 /** Interned `color|fontStyle` styles; indices are sent with tokens. */
@@ -62,7 +84,7 @@ self.addEventListener("message", (e: MessageEvent<HighlightRequest>) => {
   const msg = e.data;
   switch (msg.type) {
     case "open": {
-      const lang = languageFor(msg.path, Object.keys(bundledLanguages));
+      const lang = languageFor(msg.path, LANGUAGES);
       const doc: Doc = {
         lang,
         ready: lang ? loadLanguage(lang) : Promise.resolve(false),
@@ -97,27 +119,41 @@ const schedule = () => {
   }, 0);
 };
 
+/**
+ * Highlights one chunk: the requested one, or the first chunk it depends on
+ * that is not highlighted yet. In the latter case the request goes back to
+ * the queue, behind requests that arrived meanwhile, so a long chain never
+ * holds up the viewport and stops as soon as its document is closed.
+ */
 const step = async () => {
+  const at = queue.length - 1;
   const req = queue.pop();
   if (!req) return;
   const doc = docs.get(req.doc);
-  // The chunk may have been highlighted meanwhile as a dependency of another.
-  if (
-    doc &&
-    !doc.states.has(key(req, req.chunk)) &&
-    (await doc.ready) &&
-    docs.get(req.doc) === doc
-  ) {
+  try {
+    // The chunk may have been highlighted meanwhile as a dependency of another.
+    if (!doc || doc.states.has(key(req, req.chunk)) || !(await doc.ready)) return;
     const hl = await getHighlighter();
-    // Highlight from the closest chunk with a known starting state.
+    if (docs.get(req.doc) !== doc) return;
     let first = req.chunk;
-    while (first > 0 && !startsFresh(doc, req.side, first) && !doc.states.has(key(req, first - 1)))
+    while (
+      first > req.chunk - MAX_CHAIN &&
+      !startsFresh(doc, req.side, first) &&
+      !doc.states.has(key(req, first - 1))
+    ) {
       first--;
-    for (let c = first; c <= req.chunk; c++) {
-      if (!doc.states.has(key(req, c))) highlightChunk(hl, req.doc, doc, req.theme, req.side, c);
     }
+    highlightChunk(hl, req.doc, doc, req.theme, req.side, first);
+    if (first < req.chunk) queue.splice(Math.max(0, Math.min(at, queue.length)), 0, req);
+  } catch {
+    // Not expected (grammars fail per run, below); leave the document plain.
+    if (doc && docs.get(req.doc) === doc) {
+      docs.delete(req.doc);
+      post({ type: "plain", doc: req.doc });
+    }
+  } finally {
+    if (queue.length > 0) schedule();
   }
-  if (queue.length > 0) schedule();
 };
 
 const key = (r: { theme: ThemeKind; side: 0 | 1 }, chunk: number) =>
@@ -137,6 +173,7 @@ const highlightChunk = (
   const lines = doc.sides[side];
   const start = chunk * CHUNK;
   const end = Math.min(lines.length, start + CHUNK);
+  // Unknown when the chain was cut short: start from the initial state then.
   let state = startsFresh(doc, side, chunk)
     ? undefined
     : doc.states.get(key({ theme, side }, chunk - 1));
@@ -148,13 +185,19 @@ const highlightChunk = (
     let e = s + 1;
     while (e < end && !doc.resets[side].has(e)) e++;
     if (s !== start && doc.resets[side].has(s)) state = undefined;
-    const tokens = hl.codeToTokensBase(lines.slice(s, e).join("\n"), {
-      lang: doc.lang!,
-      theme: THEMES[theme],
-      tokenizeMaxLineLength: MAX_LINE,
-      ...(state ? { grammarState: state } : {}),
-    });
-    state = hl.getLastGrammarState(tokens);
+    let tokens: ReturnType<HighlighterCore["codeToTokensBase"]> = [];
+    try {
+      tokens = hl.codeToTokensBase(lines.slice(s, e).join("\n"), {
+        lang: doc.lang!,
+        theme: THEMES[theme],
+        tokenizeMaxLineLength: MAX_LINE,
+        ...(state ? { grammarState: state } : {}),
+      });
+      state = hl.getLastGrammarState(tokens);
+    } catch {
+      // A broken grammar: these lines stay plain, and the next run starts afresh.
+      state = undefined;
+    }
     for (let i = s; i < e; i++) {
       starts[i - start] = data.length;
       let pos = 0;
