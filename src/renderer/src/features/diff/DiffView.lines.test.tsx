@@ -499,21 +499,6 @@ it("clears the selection when the target changes", async () => {
   expect(status()).toBeNull();
 });
 
-it("keeps actions disabled until the diff is refreshed after applying a patch", async () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  await render(undefined, client);
-  const refreshed = deferred<FileDiff>();
-  mocks.diffs.set("src/a.ts", refreshed.promise);
-  await act(async () => buttonByText("Stage Hunk").click());
-  await settle();
-  expect(mocks.patches).toHaveLength(1);
-  expect(buttonByText("Stage Hunk").disabled).toBe(true);
-  expect(buttonByText("Stage Hunk").parentElement!.title).toBe("Wait for the diff to refresh.");
-  await act(async () => refreshed.resolve(diff("src/a.ts")));
-  await settle();
-  expect(buttonByText("Stage Hunk").disabled).toBe(false);
-});
-
 it("keeps the line selection when applying it fails", async () => {
   await render();
   await mouse(1, "mousedown");

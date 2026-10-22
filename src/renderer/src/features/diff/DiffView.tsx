@@ -2,14 +2,13 @@ import { buildPatch, hunkPatch } from "@shared/diff/patch";
 import { type Range, wordDiff, type WordDiff } from "@shared/diff/words";
 import type { DiffTarget, FileDiff, RepoId } from "@shared/domain";
 import { IconCode, IconLayoutColumns, IconLayoutRows, IconPhoto, IconX } from "@tabler/icons-react";
-import { useQueryClient } from "@tanstack/react-query";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import { useTheme } from "next-themes";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { basename, dirname, shortHash } from "@/lib/format";
-import { keys, useDiff } from "@/lib/queries";
+import { useDiff } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { BusyHint } from "@/components/busy";
 import { useBusy, writeProps } from "@/stores/busy";
@@ -129,7 +128,6 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   // Staging and discarding wait while another operation runs, and until the diff they act on is
   // up to date: a patch built from an outdated diff could apply to the wrong lines.
   const busy = useBusy(repo);
-  const queryClient = useQueryClient();
   const [applying, setApplying] = useState(false);
   const write =
     !busy && (applying || isFetching)
@@ -139,6 +137,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   const hunkActions = current && !readOnly ? actionsFor(target, "Hunk") : [];
   const lineActions = current && !readOnly ? actionsFor(target, "Lines") : [];
 
+  // `applyPatch` refreshes the working tree's diffs, this one included, before it returns.
   const apply = async (a: PatchAction, patch: string, onApplied?: () => void) => {
     setApplying(true);
     try {
@@ -150,7 +149,6 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
         target.path,
       );
       if (applied.ok) onApplied?.();
-      await queryClient.invalidateQueries({ queryKey: keys.diff(repo, target) });
     } finally {
       setApplying(false);
     }
