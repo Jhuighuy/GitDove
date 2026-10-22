@@ -105,9 +105,20 @@ job() {
 }
 # Writes bytes [$2, $2 + $3) of file $1: exactly $3 bytes, so the frame they are in stays
 # intact whatever else writes to the file. Fails if they are not all there anymore (the file
-# shrank); zeros stand in for them then.
+# shrank); zeros stand in for them then. dd reads (once) and pads a short read with zeros;
+# its report tells how it went. A dd that does not report has its copy measured instead.
+ds=
+case $(dd bs=1 count=1 </dev/zero 2>&1 >/dev/null) in 1+0*) ds=1 ;; esac
 body() {
   : >"$id.b"
+  if [ -z "$ds" ]; then
+    { [ "$2" -gt 0 ] && dd bs=1 skip="$2" count=0; dd bs="$3" count=1; } 2>/dev/null <"$1" >"$id.b"
+    r=$(wc -c 2>/dev/null <"$id.b") || r=0
+    cat "$id.b"
+    [ "$((r))" = "$3" ] && return 0
+    dd bs=$(($3 - r)) count=1 </dev/zero 2>/dev/null
+    return 1
+  fi
   if [ $(($2 % $3)) = 0 ]; then
     dd bs="$3" skip=$(($2 / $3)) count=1 conv=sync 2>"$id.b" <"$1"
   else
@@ -182,6 +193,8 @@ while read -r op id a b l c i; do
        n=$(wc -c 2>/dev/null <"$id.i") || n=-1
        [ "$((n))" = "$l" ] || : >"$id.z"
      fi
+     # Without head -c, the client stops a command at its limit: it needs the output early.
+     [ "$a" -gt 0 ] && [ -z "$hc" ] && b=1
      job "$id" "$a" "$b" & ;;
   K) [ -f "$id.c" ] || continue
      : >"$id.k"; p=; read -r p 2>/dev/null <"$id.p"

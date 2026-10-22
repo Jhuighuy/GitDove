@@ -145,6 +145,40 @@ export const runnerSuite = (sh: string) =>
         );
       });
 
+      it("makes do with a dd that does not report and a head without -c", async () => {
+        const bin = tmp();
+        const which = (p: string) =>
+          execFileSync("/bin/sh", ["-c", `command -v ${p}`])
+            .toString()
+            .trim();
+        writeFileSync(join(bin, "dd"), `#!/bin/sh\nexec ${which("dd")} "$@" 2>/dev/null\n`);
+        writeFileSync(
+          join(bin, "head"),
+          `#!/bin/sh\ncase $1 in -c*) exit 1 ;; esac\nexec ${which("head")} "$@"\n`,
+        );
+        chmodSync(join(bin, "dd"), 0o755);
+        chmodSync(join(bin, "head"), 0o755);
+        const runner = await Effect.runPromise(start(`PATH='${bin}':$PATH; export PATH\n`));
+        try {
+          const input = randomBytes(700 * 1024);
+          const [cat, cut, err] = await Effect.runPromise(
+            Effect.all(
+              [
+                run(runner, "cat", { stdin: input }),
+                run(runner, "while :; do echo xxxxxxxxxxxxxxx; done", { maxBytes: 100000 }),
+                run(runner, "echo oops >&2; exit 1").pipe(Effect.flip),
+              ],
+              { concurrency: "unbounded" },
+            ),
+          );
+          expect(cat.stdout.equals(input)).toBe(true);
+          expect([cut.truncated, cut.stdout.length]).toEqual([true, 100000]);
+          expect(err).toMatchObject({ _tag: "CommandError", message: "oops" });
+        } finally {
+          runner.close();
+        }
+      });
+
       it("caps stderr", async () => {
         await withRunner((runner) =>
           Effect.gen(function* () {
