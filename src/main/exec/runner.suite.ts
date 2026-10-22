@@ -179,6 +179,31 @@ export const runnerSuite = (sh: string) =>
         }
       });
 
+      it("measures what a dd that counts padded short reads as full records copied", async () => {
+        // Like BSD dd, it reports "1+0" for a short read padded by conv=sync; and its reads
+        // with conv=sync come up short, as from a file that shrank.
+        const bin = tmp();
+        const dd = execFileSync("/bin/sh", ["-c", "command -v dd"]).toString().trim();
+        writeFileSync(
+          join(bin, "dd"),
+          `#!/bin/sh
+case " $* " in
+*" conv=sync "*) head -c 1 | { ${dd} "$@" 2>&1 >&3 | sed 's/^0+1 /1+0 /' >&2; } 3>&1 ;;
+*) exec ${dd} "$@" ;;
+esac
+`,
+        );
+        chmodSync(join(bin, "dd"), 0o755);
+        const runner = await Effect.runPromise(start(`PATH='${bin}':$PATH; export PATH\n`));
+        try {
+          const input = randomBytes(300 * 1024);
+          const cat = await Effect.runPromise(run(runner, "cat", { stdin: input }));
+          expect(cat.stdout.equals(input)).toBe(true);
+        } finally {
+          runner.close();
+        }
+      });
+
       it("caps stderr", async () => {
         await withRunner((runner) =>
           Effect.gen(function* () {

@@ -107,9 +107,10 @@ job() {
 # Writes bytes [$2, $2 + $3) of file $1: exactly $3 bytes, so the frame they are in stays
 # intact whatever else writes to the file. Fails if they are not all there anymore (the file
 # shrank); zeros stand in for them then. dd reads (once) and pads a short read with zeros;
-# its report tells how it went. A dd that does not report has its copy measured instead.
+# its report tells how it went. A dd whose report does not tell (none, or BSD's, which counts
+# a padded short read as a full record) has its copy measured instead.
 ds=
-case $(dd bs=1 count=1 </dev/zero 2>&1 >/dev/null) in 1+0*) ds=1 ;; esac
+case $(printf a | dd bs=2 count=1 conv=sync 2>&1 >/dev/null) in 0+1*) ds=1 ;; esac
 body() {
   : >"$id.b"
   if [ -z "$ds" ]; then
