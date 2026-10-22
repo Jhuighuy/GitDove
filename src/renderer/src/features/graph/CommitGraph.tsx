@@ -133,6 +133,16 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     overscan: 24,
     initialOffset: () => views.get(repo)?.scroll ?? 0,
   });
+  // The virtualizer starts where the graph was, but one whose history is not loaded yet has
+  // nothing to scroll: the browser clamps it to the top. Go back there once there are rows.
+  const restore = useRef(views.get(repo)?.scroll ?? 0);
+  const loaded = (info?.count ?? 0) > 0;
+  useLayoutEffect(() => {
+    if (!loaded || restore.current === 0) return;
+    virtualizer.scrollToOffset(restore.current);
+    restore.current = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
   const items = virtualizer.getVirtualItems();
   const firstIndex = Math.max(0, (items[0]?.index ?? 0) - offset);
   const lastIndex = Math.max(0, (items.at(-1)?.index ?? 0) - offset + 1);

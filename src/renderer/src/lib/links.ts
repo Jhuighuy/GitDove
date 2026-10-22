@@ -72,14 +72,18 @@ export const referenceRepo = (remotes: readonly Remote[]): WebRepo | null => {
   return null;
 };
 
-/** The page of issue or pull request `n`; `!` is GitLab's merge request sigil. */
-const referenceUrl = (repo: WebRepo, path: string, sigil: string, n: string) => {
+/**
+ * The page of issue or pull request `n`; `!` is GitLab's merge request sigil, and `pull` says
+ * the text calls it a pull request.
+ */
+const referenceUrl = (repo: WebRepo, path: string, sigil: string, n: string, pull: boolean) => {
   const base = `${repo.origin}/${path}`;
   switch (repo.forge) {
     case "gitlab":
       return `${base}/-/${sigil === "!" ? "merge_requests" : "issues"}/${n}`;
     case "bitbucket":
-      return `${base}/pull-requests/${n}`;
+      // Bitbucket's own markup: `#12` is an issue, `pull request #12` a pull request.
+      return `${base}/${pull ? "pull-requests" : "issues"}/${n}`;
     default:
       // GitHub, Gitea and Forgejo redirect an issue URL to the pull request with that number.
       return `${base}/issues/${n}`;
@@ -149,6 +153,14 @@ const reference = (s: string, m: RegExpMatchArray, nested: boolean) => {
   return { start, end, path: qualifier || null, sigil: m[0][0]!, n: m[0].slice(1) };
 };
 
+/** Whether the reference starting at `at` follows the words "pull request". */
+const pullRequest = (s: string, at: number) =>
+  s
+    .slice(Math.max(0, at - 13), at)
+    .toLowerCase()
+    .trimEnd()
+    .endsWith("pull request");
+
 /** Splits a message into plain text and links. */
 export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
   const out: Omit<Segment, "start">[] = [];
@@ -162,7 +174,13 @@ export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
       if (ref.start > last) out.push({ text: s.slice(last, ref.start) });
       out.push({
         text: s.slice(ref.start, ref.end),
-        href: referenceUrl(repo, ref.path ?? repo.path, ref.sigil, ref.n),
+        href: referenceUrl(
+          repo,
+          ref.path ?? repo.path,
+          ref.sigil,
+          ref.n,
+          pullRequest(s, ref.start),
+        ),
       });
       last = ref.end;
     }

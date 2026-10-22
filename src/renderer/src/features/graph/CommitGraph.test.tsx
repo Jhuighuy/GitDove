@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   found: 0 as number | null,
   /** Holds `repo.findCommit` answers back until it settles. */
   gate: null as Promise<void> | null,
+  infoGate: null as Promise<void> | null,
   /** Holds `repo.graphRows` answers back until it settles. */
   rowsGate: null as Promise<void> | null,
 }));
@@ -31,6 +32,7 @@ vi.mock("@/lib/api", () => ({
     mocks.api.push([method, ...args.slice(1)]);
     switch (method) {
       case "repo.graphInfo":
+        await mocks.infoGate;
         if (mocks.infoError) throw mocks.infoError;
         return mocks.info;
       case "repo.graphRows": {
@@ -122,10 +124,19 @@ beforeEach(() => {
   mocks.refs = snapshot;
   mocks.found = 0;
   mocks.gate = null;
+  mocks.infoGate = null;
   mocks.rowsGate = null;
   repo = `local:/graph${++n}`;
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+  // happy-dom lays nothing out: the scroll container is as tall as the rows it holds.
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return (
+      Number.parseFloat((this.firstElementChild as HTMLElement | null)?.style.height ?? "0") || 0
+    );
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -306,6 +317,33 @@ it("comes back where it was after being replaced (e.g. by a diff)", async () => 
   await render(null);
   expect(scroller().scrollTop).toBe(1234);
   expect(mocks.api.filter(([m]) => m === "repo.findCommit")).toHaveLength(1);
+});
+
+it("comes back where it was once a history that was not loaded yet arrives", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 1234;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  let release = () => {};
+  mocks.infoGate = new Promise((r) => (release = r));
+  root = createRoot(container);
+  await render(null);
+  // Nothing to scroll yet: the browser keeps it at the top.
+  await act(async () => {
+    scroller().scrollTop = 0;
+  });
+  release();
+  await act(() =>
+    vi.waitFor(() => {
+      if (!container.textContent?.includes("Commit")) throw new Error("no rows");
+    }),
+  );
+  await settle();
+  expect(scroller().scrollTop).toBe(1234);
 });
 
 it("reveals a commit again when the graph went away before finding it", async () => {

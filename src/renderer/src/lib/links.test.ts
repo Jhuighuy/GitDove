@@ -81,8 +81,9 @@ it("links issue and pull request references", () => {
     ["g/sub/r#7", "https://gitlab.com/g/sub/r/-/issues/7"],
   ]);
   expect(links("g/sub/r#7", gh)).toEqual([]);
-  expect(links("(pull request #7)", "https://bitbucket.org/t/r")).toEqual([
+  expect(links("Merged in x (Pull request #7), fixes #8", "https://bitbucket.org/t/r")).toEqual([
     ["#7", "https://bitbucket.org/t/r/pull-requests/7"],
+    ["#8", "https://bitbucket.org/t/r/issues/8"],
   ]);
   // Without a web page, only URLs are links.
   expect(links("#8 at https://x.org/a#b.", null)).toEqual([

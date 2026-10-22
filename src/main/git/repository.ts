@@ -950,15 +950,24 @@ export class Repository {
         // Then drop staged and unstaged changes, deleting new files that are staged. Without
         // commits, everything in the index is new (forced: a staged file edited since differs
         // from both the index and the work tree).
-        yield* (yield* this.hasHead())
+        const hasHead = yield* this.hasHead();
+        yield* hasHead
           ? this.run(["reset", "--hard", "-q"])
           : this.run(["rm", "-r", "-q", "-f", "--ignore-unmatch", "."]);
-        // `clean` keeps untracked nested repositories (unless forced twice): say so. Files that
-        // were ignored before the reset are kept on purpose.
-        const kept = (yield* untracked).filter((p) => before.includes(p));
+        // What is left is not ours to delete without asking: say so. `clean` keeps untracked
+        // nested repositories (unless forced twice), and the reset leaves the files inside
+        // submodules alone. Files that were ignored before the reset are kept on purpose.
+        const nested = (yield* untracked).filter((p) => before.includes(p));
+        const submodules = hasHead
+          ? (yield* this.gitText(["diff", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean)
+          : [];
+        const kept = [
+          ...(nested.length > 0 ? [`nested repositories: ${nested.join(", ")}`] : []),
+          ...(submodules.length > 0 ? [`changes in submodules: ${submodules.join(", ")}`] : []),
+        ];
         if (kept.length > 0) {
           return yield* new InvalidInputError({
-            message: `Discarded the other changes, but kept nested repositories: ${kept.join(", ")}`,
+            message: `Discarded the other changes, but kept ${kept.join("; ")}`,
           });
         }
       }),

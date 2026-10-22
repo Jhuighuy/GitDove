@@ -147,6 +147,45 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
       );
     });
 
+    it(`reports submodule changes it keeps on ${name}`, async () => {
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const host = (yield* Hosts).get(hostId);
+          const dir = (yield* host.sh("mktemp -d /tmp/gitdove-test.XXXXXX")).stdout
+            .toString()
+            .trim();
+          try {
+            yield* host.sh(
+              `git init -q -b main '${dir}-sub' && echo s > '${dir}-sub/s.txt' && ` +
+                `git -C '${dir}-sub' add s.txt && ` +
+                `git -C '${dir}-sub' -c user.name=T -c user.email=t@x commit -qm s && ` +
+                "git init -q -b main . && git config user.name T && git config user.email t@x && " +
+                `git -c protocol.file.allow=always submodule add -q '${dir}-sub' sub && ` +
+                "git commit -qm sub && echo x >> sub/s.txt && echo y > top.txt",
+              { cwd: dir },
+            );
+            const location: RepoLocation =
+              hostId === LOCAL_HOST
+                ? { kind: "local", path: dir }
+                : { kind: "ssh", host: hostId, path: dir };
+            const repo = yield* Repository.open(host, location, { onGraphProgress: () => {} });
+            const kept = yield* Effect.flip(repo.discardAll());
+            expect(kept.message).toBe(
+              "Discarded the other changes, but kept changes in submodules: sub",
+            );
+            // The rest is gone; the submodule's own files are untouched.
+            const st = yield* repo.status();
+            expect(st.unstaged.map((f) => f.path)).toEqual(["sub"]);
+            expect((yield* host.sh("cat sub/s.txt", { cwd: dir })).stdout.toString()).toBe(
+              "s\nx\n",
+            );
+          } finally {
+            yield* host.sh(`rm -rf -- '${dir}' '${dir}-sub'`).pipe(Effect.ignore);
+          }
+        }),
+      );
+    });
+
     it(`discards everything in a repository without commits on ${name}`, async () => {
       await runtime.runPromise(
         Effect.gen(function* () {
