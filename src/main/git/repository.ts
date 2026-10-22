@@ -147,9 +147,10 @@ const text = (r: SpawnResult) => decoder.decode(r.stdout);
 /**
  * Reads where a repository is and what it is doing in one round trip. Exit code 3 means git
  * does not see a repository; 4, that the path is a git directory (e.g. `.git`), whose
- * repository has a work tree elsewhere.
+ * repository has a work tree elsewhere; 5, that there is no git to run.
  */
 const PROBE_SCRIPT = String.raw`
+command -v git >/dev/null 2>&1 || { echo 'git: command not found' >&2; exit 5; }
 gd=$(git rev-parse --absolute-git-dir 2>&1) || { printf '%s' "$gd" >&2; exit 3; }
 [ "$(git rev-parse --is-inside-git-dir)" = true ] && [ "$(git rev-parse --is-bare-repository)" = false ] && exit 4
 common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || printf '%s' "$gd")
@@ -191,11 +192,13 @@ const notARepository = (path: string, e: CommandError): NotARepositoryError => {
   const reason =
     e.exitCode === 4
       ? `${path} is a Git directory; open the folder that contains it`
-      : /dubious ownership/i.test(stderr)
-        ? `${path} is owned by someone else, so Git refuses to open it (see "git config safe.directory")`
-        : e.exitCode === 3
-          ? `${path} is not a Git repository`
-          : `${path} cannot be opened${stderr ? `: ${stderr.split("\n")[0]}` : ""}`;
+      : e.exitCode === 5
+        ? `Cannot open ${path}: Git is not installed, or not on the PATH`
+        : /dubious ownership/i.test(stderr)
+          ? `${path} is owned by someone else, so Git refuses to open it (see "git config safe.directory")`
+          : e.exitCode === 3
+            ? `${path} is not a Git repository`
+            : `${path} cannot be opened${stderr ? `: ${stderr.split("\n")[0]}` : ""}`;
   return new NotARepositoryError({ message: reason, path, stderr });
 };
 
@@ -204,7 +207,7 @@ const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARe
     Effect.catchTag(
       "CommandError",
       (e): Effect.Effect<never, CommandError | NotARepositoryError> =>
-        e.exitCode !== null && e.exitCode >= 1 && e.exitCode <= 4
+        e.exitCode !== null && e.exitCode >= 1 && e.exitCode <= 5
           ? Effect.fail(notARepository(path, e))
           : Effect.fail(e),
     ),

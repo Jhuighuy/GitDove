@@ -40,6 +40,20 @@ describe.skipIf(noShell).each(targets)("Repository graph on %s", (hostId) => {
     expect((e as { stderr: string }).stderr).toMatch(/not a git repository/i);
   });
 
+  it("says when there is no git to run", async () => {
+    // A host whose PATH has no git.
+    const host = {
+      ...t.host,
+      sh: (script: string, options?: Parameters<typeof t.host.sh>[1]) =>
+        t.host.sh(`PATH=/nonexistent\n${script}`, options),
+    };
+    const e = await fails(
+      Repository.open(host, { kind: "local", path: t.dir }, { onGraphProgress: () => {} }),
+    );
+    expect(e).toMatchObject({ _tag: "NotARepositoryError", path: t.dir });
+    expect(e.message).toBe(`Cannot open ${t.dir}: Git is not installed, or not on the PATH`);
+  });
+
   it("serves graph rows by version", async () => {
     let g = await run(t.repo.graphInfo());
     while (!g.complete) g = await run(t.repo.graphInfo());
