@@ -3,7 +3,7 @@
  * `GITDOVE_INT_SSH_HOST` is set) on a remote host under /tmp.
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import type { RepoLocation } from "@shared/domain";
 import { Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
 import { Repository } from "./repository";
@@ -24,6 +24,8 @@ const waitGraph = (repo: Repository, after = 0) =>
 // The local host runs scripts with /bin/sh.
 describe.skipIf(process.platform === "win32")("Repository write ops (integration)", () => {
   const runtime = ManagedRuntime.make(Layer.mergeAll(HostsLive));
+  // Closes the SSH connections, which would otherwise outlive the tests.
+  afterAll(() => runtime.dispose());
 
   for (const [name, hostId] of targets) {
     it(`round-trips edits on ${name}`, async () => {

@@ -4,6 +4,7 @@
  */
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Deferred, Effect, Exit, Fiber, ManagedRuntime, RcMap } from "effect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type ExecOptions, getOrRetry, type Host, Hosts, HostsLive, LOCAL_HOST } from "./hosts";
@@ -21,10 +22,10 @@ import { MAX_RUNNER_STDIN } from "./runner";
 const FAKE_SSH = String.raw`#!/bin/sh
 # Fake ssh: logs "<kind> <host>" and runs remote commands with the local sh.
 d=$GITDOVE_FAKE_SSH
-master=; op=; host=; remote=
+master=; op=; host=; remote=; cp=
 while [ $# -gt 0 ]; do
   case $1 in
-    -o) shift ;;
+    -o) shift; case $1 in ControlPath=*) cp=$(printf %s "$1" | sed 's/^ControlPath=//') ;; esac ;;
     -M) master=1 ;;
     -N|-T|-t) ;;
     -O) shift; op=$1 ;;
@@ -36,6 +37,7 @@ done
 count() { n=$(cat "$d/$1" 2>/dev/null || echo 0); n=$((n + 1)); echo $n >"$d/$1"; echo $n; }
 if [ -n "$master" ]; then
   echo "master $host" >>"$d/log"
+  echo "master $cp" >>"$d/paths"
   case $host in
     denied) echo "debug1: trying key" >&2; echo "Permission denied (publickey)." >&2; exit 255 ;;
     later) if [ "$(count later-masters)" = 1 ]; then
@@ -51,6 +53,7 @@ if [ "$op" = check ]; then
 fi
 if [ -n "$op" ]; then
   echo "$op $host" >>"$d/log"
+  echo "$op $cp" >>"$d/paths"
   exit 0
 fi
 case $remote in
@@ -216,6 +219,27 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
       expect(await run(() => shOut(good, "cat", { stdin: "small stdin" }))).toBe("small stdin");
       // All commands went through the runner.
       expect(log()).toEqual(["master good", "check good", "runner good"]);
+    });
+
+    it("gives every master its own control socket", async () => {
+      // Two apps (or test workers) on one host: closing one must not close the other's master.
+      const a = hostsRuntime();
+      const b = hostsRuntime();
+      await a.run((h) => h.connect("good"));
+      await b.run((h) => h.connect("good"));
+      const paths = (kind: string) =>
+        readFileSync(join(state, "paths"), "utf8")
+          .split("\n")
+          .filter((l) => l.startsWith(`${kind} `))
+          .map((l) => l.slice(kind.length + 1));
+      const [first, second] = paths("master");
+      expect(first).not.toBe(second);
+      await a.runtime.dispose();
+      expect(paths("exit")).toEqual([first]);
+      expect(existsSync(dirname(first!))).toBe(false);
+      expect(existsSync(dirname(second!))).toBe(true);
+      await b.runtime.dispose();
+      expect(existsSync(dirname(second!))).toBe(false);
     });
 
     it("keeps command semantics on the runner", async () => {

@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { Context, Data, Effect, Layer, RcMap, Schedule, Semaphore } from "effect";
@@ -55,14 +55,19 @@ interface SshMaster {
   readonly isAlive: () => boolean;
 }
 
+/**
+ * A fresh directory for one master's control socket. The socket is named after the host, and
+ * a shared one let another process (a second app, a parallel test) close our master: its own
+ * `ssh -M` could not bind the taken path, so its `-O exit` reached ours.
+ */
 const controlDir = (): string => {
   // Unix socket paths are limited to ~104 bytes, so keep this short.
-  const dir =
+  const base =
     process.platform === "win32"
       ? join(tmpdir(), "gitdove-ssh")
       : join("/tmp", `gitdove-${userInfo().uid}`);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
+  mkdirSync(base, { recursive: true, mode: 0o700 });
+  return mkdtempSync(join(base, "m"));
 };
 
 const baseSshOptions = [
@@ -87,7 +92,8 @@ const muxOptions = (controlPath: string) => [
 const acquireMaster = (host: string) =>
   Effect.acquireRelease(
     Effect.gen(function* () {
-      const controlPath = join(controlDir(), "%C");
+      const dir = controlDir();
+      const controlPath = join(dir, "%C");
       let stderr = "";
       let exited = false;
       const child: ChildProcess = nodeSpawn(
@@ -140,12 +146,17 @@ const acquireMaster = (host: string) =>
               mayHaveRun: false,
             }),
         ),
-        Effect.onError(() => Effect.sync(() => child.kill())),
+        Effect.onError(() =>
+          Effect.sync(() => {
+            child.kill();
+            rmSync(dir, { recursive: true, force: true });
+          }),
+        ),
       );
       yield* Effect.logInfo(`ssh master connected: ${host}`);
-      return { master, child };
+      return { master, child, dir };
     }),
-    ({ child, master }) =>
+    ({ child, master, dir }) =>
       Effect.gen(function* () {
         yield* Effect.logInfo(`ssh master closing: ${host}`);
         if (master.isAlive()) {
@@ -156,6 +167,7 @@ const acquireMaster = (host: string) =>
           );
         }
         child.kill();
+        rmSync(dir, { recursive: true, force: true });
       }),
   ).pipe(Effect.map(({ master }) => master));
 
