@@ -126,7 +126,6 @@ export function Sidebar({ repo }: { repo: RepoId }) {
           ? "hidden"
           : "visible";
   const contributors = vis.contributors;
-  const ownersOf = (r: Ref) => vis.ownersOf(r.name);
   const count = (names: readonly string[], hidden = vis.isHidden) => {
     const shown = names.filter((n) => !hidden(n)).length;
     return shown === names.length ? (
@@ -231,7 +230,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
           label={label}
           title={r.short}
           icon={<IconGitBranch />}
-          owners={ownersOf(r)}
+          owner={vis.ownerOf(r.name)}
           providers={providers}
           visibility={refVisibility(r)}
           onToggle={() => vis.toggle(r.name)}
@@ -273,7 +272,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
                 label={label}
                 title={r.short}
                 icon={<IconGitBranch />}
-                owners={ownersOf(r)}
+                owner={vis.ownerOf(r.name)}
                 providers={providers}
                 visibility={refVisibility(r)}
                 onToggle={() => vis.toggle(r.name)}
@@ -535,7 +534,7 @@ function Item({
 
 function VisibilityToggle({
   visibility,
-  filteredBy = "their contributors",
+  filteredBy = "its owner",
   onToggle,
 }: {
   visibility: Visibility;
@@ -586,24 +585,23 @@ function VisibilityToggle({
 function RefItem({
   refItem: r,
   label,
-  owners = [],
+  owner,
   providers = [],
   ...rest
 }: Omit<ItemProps, "label" | "active" | "trailing"> & {
   refItem: Ref;
   label?: string;
-  /** Who works on the branch, most commits first. */
-  owners?: readonly Contributor[];
+  /** Who works on the branch. */
+  owner?: Contributor;
   providers?: readonly AvatarProvider[];
 }) {
   const track = r.upstreamGone
     ? "gone"
     : [r.ahead ? r.ahead + "↑" : "", r.behind ? r.behind + "↓" : ""].join(" ").trim();
-  const owner = owners[0];
   return (
     <Item
       {...rest}
-      filteredBy={owners.map((o) => o.name).join(", ")}
+      filteredBy={owner?.name}
       label={label ?? r.short}
       active={r.isHead}
       trailing={
@@ -614,7 +612,7 @@ function RefItem({
           {owner && (
             <span
               className={cn("flex shrink-0", rest.visibility === "filtered" && "opacity-50")}
-              title={`By ${owners.map((o) => o.name).join(", ")}`}
+              title={`By ${owner.name}`}
             >
               <Avatar name={owner.name} email={owner.avatarEmail} providers={providers} size={14} />
             </span>

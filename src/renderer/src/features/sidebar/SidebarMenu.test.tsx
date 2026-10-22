@@ -86,8 +86,10 @@ const base: RefsSnapshot = {
   ],
   owners: {
     byRef: {
-      "refs/heads/feature": ["ann@x", "ann@corp"],
-      "refs/remotes/origin/feature": ["bob@x"],
+      "refs/heads/feature": "ann@x",
+      "refs/remotes/origin/feature": "bob@x",
+      // Not listed in `refs`.
+      "refs/heads/old": "ann@corp",
     },
     people: {
       "ann@x": { name: "Ann", time: 2 },

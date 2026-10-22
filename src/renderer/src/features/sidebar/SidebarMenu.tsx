@@ -75,9 +75,9 @@ function VisibilityItems({ name, vis }: { readonly name: string; readonly vis: P
     <>
       <Sep />
       {vis.isFiltered(name) ? (
-        // Only showing its contributors brings the branch back.
-        <Item onClick={() => vis.showOwners(name)}>
-          Show {possessive(vis.ownersOf(name).map((c) => c.name))} branches
+        // Only showing its owner brings the branch back.
+        <Item onClick={() => vis.showOwner(name)}>
+          Show {vis.ownerOf(name)?.name ?? "its owner"}'s branches
         </Item>
       ) : (
         <>
@@ -91,13 +91,6 @@ function VisibilityItems({ name, vis }: { readonly name: string; readonly vis: P
     </>
   );
 }
-
-/** "Ann's", "Ann and Bob's", "Ann, Bob and Cid's". */
-const possessive = (names: readonly string[]): string => {
-  const list =
-    names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names.at(-1) : (names[0] ?? "");
-  return `${list}'s`;
-};
 
 function ResetItems({ repo, hash, head }: { repo: RepoId; hash: string; head: string }) {
   return (

@@ -818,7 +818,9 @@ export class Repository {
               (n) =>
                 !/^refs\/remotes\/[^/]+\/HEAD$/.test(n) &&
                 !isHidden(hidden, n) &&
-                !(owned && isFilteredOut(hidden, n, owned)),
+                // Under the contributor filter, tags only label commits that are shown
+                // anyway: a tag on an unmerged commit would pull in someone else's branch.
+                !(owned && (n.startsWith("refs/tags/") || isFilteredOut(hidden, n, owned))),
             ),
           ...stashes.filter((s) => !isHidden(hiddenRefs, stashKey(s.hash))).map((s) => s.hash),
         ];

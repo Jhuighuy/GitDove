@@ -490,7 +490,7 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
         `${commitAs("ann", "Ann")} && ${commitAs("bob", "Bob")} && git checkout -q main`,
     );
     const { owners } = await run(repo.refs());
-    expect(owners.byRef).toEqual({ "refs/heads/ann": ["ann@x"], "refs/heads/bob": ["bob@x"] });
+    expect(owners.byRef).toEqual({ "refs/heads/ann": "ann@x", "refs/heads/bob": "bob@x" });
     expect(owners.people["ann@x"]?.name).toBe("Ann");
     expect(owners.people["bob@x"]?.name).toBe("Bob");
     expect(owners.me).toEqual({ email: "t@x", name: "T" });
@@ -511,6 +511,26 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     expect(await count()).toBe(4);
     repo.setHiddenRefs([personKey("bob")]);
     expect(await count()).toBe(4);
+    // A tag on Ann's branch does not bring it back, nor does a tag on Cid's.
+    await sh(`git tag on-ann ann && ${commitAs("cid", "Cid")} && git checkout -q main`);
+    await sh("git tag on-cid cid && git branch -q -D cid");
+    repo.setHiddenRefs([authorKey("ann@x")]);
+    expect(await count()).toBe(4);
+    repo.setHiddenRefs([]);
+    expect(await count()).toBe(6);
+    // Dan's branch on top of Bob's is Dan's alone: showing only Bob leaves it out.
+    await sh(
+      "git checkout -q -b dan bob && git -c user.name=Dan -c user.email=dan@x " +
+        "commit -q --allow-empty -m dan && git checkout -q main",
+    );
+    expect((await run(repo.refs())).owners.byRef).toMatchObject({
+      "refs/heads/bob": "bob@x",
+      "refs/heads/dan": "dan@x",
+    });
+    repo.setHiddenRefs([authorKey("ann@x"), authorKey("dan@x")]);
+    expect(await count()).toBe(4);
+    repo.setHiddenRefs([authorKey("ann@x"), authorKey("bob@x")]);
+    expect(await count()).toBe(5);
   });
 
   describe("remotes", () => {

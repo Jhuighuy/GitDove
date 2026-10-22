@@ -45,7 +45,12 @@ const snapshot = {
   ],
   stashes: [{ hash: "s1" }],
   owners: {
-    byRef: { "refs/heads/main": ["ann@x"], "refs/remotes/origin/main": ["ann@corp", "bob@x"] },
+    byRef: {
+      "refs/heads/main": "ann@x",
+      "refs/remotes/origin/main": "bob@x",
+      // Not listed in `refs`, so that it is not toggleable.
+      "refs/heads/topic": "ann@corp",
+    },
     people: {
       "ann@x": { name: "Ann Lee", time: 1 },
       "ann@corp": { name: "ann lee", time: 5 },
@@ -193,14 +198,13 @@ it("filters branches by contributor", async () => {
   expect(probe.vis.contributorVisibility(ann)).toBe("hidden");
   expect(probe.vis.isFiltered(main)).toBe(true);
   expect(probe.vis.isHidden(main)).toBe(true);
-  // A branch someone else works on too stays visible.
   expect(probe.vis.isHidden("refs/remotes/origin/main")).toBe(false);
   expect(probe.vis.anyHidden).toBe(true);
-  expect(probe.vis.ownersOf(main)).toEqual([ann]);
+  expect(probe.vis.ownerOf(main)).toEqual(ann);
   // The eye of a filtered branch does nothing; showing its owners brings it back.
   await step(() => probe.vis.toggle(main), ["person:ann lee"]);
   await step(() => probe.vis.toggleGroup([main]), ["person:ann lee"]);
-  await step(() => probe.vis.showOwners(main), []);
+  await step(() => probe.vis.showOwner(main), []);
   // Its own eye is remembered while the filter hides it.
   await step(() => probe.vis.toggle(main), [main]);
   await step(() => probe.vis.toggleContributor(ann), [main, "person:ann lee"]);
