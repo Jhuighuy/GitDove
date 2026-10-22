@@ -66,15 +66,25 @@ const GIT_CONFIG = [
   "log.showSignature=false",
 ];
 
-/**
- * Tracked files that a folder replaced in the work tree, one per line: deleted from the index
- * (`git rm`, or moved away with `git mv`, hence no renames) or only from the work tree.
- * Without commits, there is no HEAD to compare with.
- */
-const FOLDERS_FOR_FILES =
-  `{ git ${GIT_CONFIG.join(" ")} diff --no-renames --name-only --diff-filter=D HEAD 2>/dev/null; ` +
-  `git ${GIT_CONFIG.join(" ")} diff --no-renames --name-only --diff-filter=D; } | sort -u | ` +
-  `while IFS= read -r p; do if [ -d "$p" ]; then printf '%s\\n' "$p"; fi; done`;
+/** Modes of what a reset restores as a file: regular, executable, symlink (not a submodule). */
+const FILE_MODES = new Set(["100644", "100755", "120000"]);
+
+/** Paths that `git diff --raw -z --no-renames` reports as a file (in HEAD or the index) now
+ * deleted (`D`) or replaced by something else (`T`), with what replaced it if git knows. */
+const replacedFiles = (raw: string) => {
+  const out: { path: string; deleted: boolean; nowRepo: boolean }[] = [];
+  const fields = raw.split("\0");
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    // ":<old mode> <new mode> <old sha> <new sha> <status>", then the path.
+    const [oldMode = "", newMode = "", , , status = ""] = fields[i]!.slice(1).split(" ");
+    if (!FILE_MODES.has(oldMode) || (status !== "D" && status !== "T")) continue;
+    out.push({ path: fields[i + 1]!, deleted: status === "D", nowRepo: newMode === "160000" });
+  }
+  return out;
+};
+
+/** How many paths one directory check takes, to keep its script small. */
+const DIR_CHECK_BATCH = 500;
 
 /** Largest diff we render before truncating (bytes). */
 const MAX_DIFF_BYTES = 8 * 1024 * 1024;
@@ -948,10 +958,8 @@ export class Repository {
         }
         // A folder where a tracked file belongs: restoring the file would delete it, with what
         // is in it (git lists none of that as a change). Refuse before deleting anything.
-        const blocking = (yield* this.host.sh(FOLDERS_FOR_FILES, { cwd: this.workTree })).stdout
-          .toString()
-          .split("\n")
-          .filter(Boolean);
+        const hasHead = yield* this.hasHead();
+        const blocking = yield* this.foldersForFiles(hasHead);
         if (blocking.length > 0) {
           return yield* new InvalidInputError({
             message: `Folders are where tracked files belong: ${blocking.join(", ")}. Move them away first.`,
@@ -971,7 +979,6 @@ export class Repository {
         // Then drop staged and unstaged changes, deleting new files that are staged. Without
         // commits, everything in the index is new (forced: a staged file edited since differs
         // from both the index and the work tree).
-        const hasHead = yield* this.hasHead();
         // Submodules added before the first commit: their folders are not ours to delete.
         let added: string[] = [];
         if (hasHead) {
@@ -1410,6 +1417,33 @@ export class Repository {
 
   removeRemote(name: string) {
     return this.write(this.run(["remote", "remove", name]));
+  }
+
+  /**
+   * Tracked files (not submodules) that a folder replaced in the work tree, sorted: deleted
+   * from the index (`git rm`, or moved away with `git mv`, hence no renames), only from the
+   * work tree, or replaced by a repository (`git add` of one makes a type change).
+   */
+  private foldersForFiles(hasHead: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      const diff = ["diff", "--raw", "-z", "--no-renames", "--no-abbrev"];
+      const replaced = [
+        ...(hasHead ? replacedFiles(yield* this.gitText([...diff, "HEAD"])) : []),
+        ...replacedFiles(yield* this.gitText(diff)),
+      ];
+      const found = new Set(replaced.filter((r) => r.nowRepo).map((r) => r.path));
+      // Whether a deleted file's place is now a folder, git does not say: ask the file system.
+      const deleted = [...new Set(replaced.filter((r) => r.deleted).map((r) => r.path))];
+      for (let i = 0; i < deleted.length; i += DIR_CHECK_BATCH) {
+        const batch = deleted.slice(i, i + DIR_CHECK_BATCH);
+        const script =
+          `for p in ${batch.map(shellQuote).join(" ")}; do ` +
+          `if [ -d "$p" ]; then printf '%s\\000' "$p"; fi; done`;
+        const dirs = (yield* this.host.sh(script, { cwd: this.workTree })).stdout.toString();
+        for (const p of dirs.split("\0")) if (p) found.add(p);
+      }
+      return [...found].toSorted();
+    });
   }
 
   private hasHead() {
