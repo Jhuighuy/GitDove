@@ -3,7 +3,7 @@ import type { RepoChangeScope } from "@shared/ipc";
 import { Context, Effect, Exit, Layer, ManagedRuntime, RcMap } from "effect";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { InvalidInputError, NotARepositoryError, RepoNotOpenError } from "./exec/errors";
-import { type Host, Hosts } from "./exec/hosts";
+import { type Host, Hosts, LOCAL_HOST } from "./exec/hosts";
 import type { Repository } from "./git/repository";
 import { LoggerLive, Notifier, RepoSettings, Repos, ReposLive } from "./services";
 
@@ -67,7 +67,7 @@ const setup = () => {
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(Hosts, {
-          get: (id: string) => ({ id, kind: id === "local" ? "local" : "ssh" }) as Host,
+          get: (id: string) => ({ id, kind: id === LOCAL_HOST ? "local" : "ssh" }) as Host,
           configuredSshHosts: Effect.succeed([]),
           connect: () => Effect.void,
         }),
@@ -105,7 +105,7 @@ describe("Repos", () => {
     expect(a).toBe(b);
     expect(a.id).toBe("local:/repo");
     expect(fake.open).toHaveBeenCalledTimes(1);
-    expect(fake.open.mock.calls[0]![0]).toMatchObject({ id: "local" });
+    expect(fake.open.mock.calls[0]![0]).toMatchObject({ id: LOCAL_HOST });
     expect(a.setHiddenRefs).toHaveBeenCalledWith(["refs/heads/secret"]);
     expect(fake.watchers.map((w) => w.repo)).toEqual([a]);
   });

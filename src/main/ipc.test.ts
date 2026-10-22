@@ -8,7 +8,7 @@ import type { WebContents } from "electron";
 import { Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandError, InvalidInputError, StaleGraphError } from "./exec/errors";
-import { type Host, Hosts } from "./exec/hosts";
+import { type Host, Hosts, LOCAL_HOST } from "./exec/hosts";
 import { spawn } from "./exec/spawn";
 import type { Repository } from "./git/repository";
 import { RepoSettings, Repos } from "./services";
@@ -120,7 +120,7 @@ const shellHost = (id: string) => {
   const shOptions: unknown[] = [];
   const host: Host = {
     id,
-    kind: id === "local" ? "local" : "ssh",
+    kind: id === LOCAL_HOST ? "local" : "ssh",
     exec: (program, args) => {
       execs.push([program, args]);
       return Effect.succeed({ stdout: Buffer.alloc(0), stderr: "", exitCode: 0, truncated: false });
@@ -474,7 +474,7 @@ describe("repository lifecycle handlers", () => {
     expect((services.hosts.get("fedora") as ReturnType<typeof shellHost>).execs).toEqual([
       ["git", ["init", "--", "/srv/new"]],
     ]);
-    expect((services.hosts.get("local") as ReturnType<typeof shellHost>).execs).toEqual([
+    expect((services.hosts.get(LOCAL_HOST) as ReturnType<typeof shellHost>).execs).toEqual([
       ["git", ["init", "--", "/tmp/new"]],
     ]);
   });
@@ -493,15 +493,15 @@ describe("repository lifecycle handlers", () => {
         [...safe, "clone", "--no-recurse-submodules", "--", "git@github.com:a/b.git", "/srv/b"],
       ],
     ]);
-    expect((services.hosts.get("local") as ReturnType<typeof shellHost>).execs).toEqual([
+    expect((services.hosts.get(LOCAL_HOST) as ReturnType<typeof shellHost>).execs).toEqual([
       ["git", [...safe, "clone", "--no-recurse-submodules", "--", "https://x/c.git", "/tmp/c"]],
     ]);
     for (const url of ["--upload-pack=evil", "ext::sh -c touch% /tmp/pwned", "FD::17", ""]) {
       const exit = await callExit("repo.clone", url, { kind: "local", path: "/tmp/d" });
       expect(exit).toEqual(Exit.fail(new InvalidInputError({ message: "Invalid URL" })));
     }
-    expect(services.hosts.get("local")).toBeDefined();
-    expect((services.hosts.get("local") as ReturnType<typeof shellHost>).execs).toHaveLength(1);
+    expect(services.hosts.get(LOCAL_HOST)).toBeDefined();
+    expect((services.hosts.get(LOCAL_HOST) as ReturnType<typeof shellHost>).execs).toHaveLength(1);
   });
 });
 
@@ -601,6 +601,9 @@ describe("registerIpc", () => {
       ["repo.open", [{ kind: "ssh", host: "-oProxyCommand=x", path: "/srv" }]],
       ["repo.open", [{ kind: "ssh", host: "box", path: "" }]],
       ["repo.open", [{ kind: "nfs", path: "/srv" }]],
+      // The local host is not an SSH host, whatever its id.
+      ["repo.open", [{ kind: "ssh", host: LOCAL_HOST, path: "/srv" }]],
+      ["ssh.listDir", [LOCAL_HOST, null]],
       ["ssh.listDir", ["fedora --", null]],
       ["app.setState", [{ tabs: "x", activeTab: null, recent: [] }]],
       ["repo.graphRows", [id, 1, 0, 4097]],
