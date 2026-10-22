@@ -285,10 +285,22 @@ export const runnerSuite = (sh: string) =>
             const fiber = yield* Effect.forkChild(
               run(runner, `sh -c 'echo $$ > "${pidFile}"; exec sleep 30' & wait`),
             );
-            while (!existsSync(pidFile)) yield* Effect.sleep("20 millis");
+            // The file exists before the shell has written its pid into it.
+            const pidOf = () => (existsSync(pidFile) ? readFileSync(pidFile, "utf8") : "");
+            while (!/^\d+\n$/.test(pidOf())) yield* Effect.sleep("20 millis");
+            const pid = Number(pidOf());
             yield* Fiber.interrupt(fiber);
-            const pid = Number(readFileSync(pidFile, "utf8"));
-            expect(() => process.kill(pid, 0)).toThrow();
+            const alive = () => {
+              try {
+                process.kill(pid, 0);
+                return true;
+              } catch {
+                return false;
+              }
+            };
+            // A killed process may take a moment to be reaped.
+            for (let i = 0; i < 50 && alive(); i++) yield* Effect.sleep("20 millis");
+            expect(alive()).toBe(false);
             expect((yield* run(runner, "echo ok")).stdout.toString()).toBe("ok\n");
           }),
         );
