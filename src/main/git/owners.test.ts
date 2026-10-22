@@ -177,4 +177,20 @@ describe("branchOwners", () => {
     );
     expect(o.byRef["refs/heads/b"]).toBe("ann@x");
   });
+
+  it("owns a branch with only merges of other branches by its tip", () => {
+    // An integration branch tracking main that merged Ann's topic.
+    const o = branchOwners(
+      [
+        ref("refs/heads/integration", "merge", { upstream: "refs/remotes/origin/main" }),
+        ref("refs/heads/topic", "c0"),
+      ].join("\n"),
+      {
+        commits: [commit("merge", "m1 c0", "Bob", "bob@x", 200), linear(["ann"])].join("\n"),
+        tips: commit("merge", "", "Bob", "bob@x", 200),
+      },
+      "",
+    );
+    expect(o.byRef["refs/heads/integration"]).toBe("bob@x");
+  });
 });

@@ -187,10 +187,12 @@ export const branchOwners = (refsOut: string, logs: OwnerLogs, userOut: string):
     }
     let owner = [...weights].toSorted((a, b) => b[1] - a[1])[0]?.[0];
     if (owner === undefined) {
-      // Without commits of its own, a branch is merged, or a local copy of a default branch.
+      // Without commits of its own (its tip is one when it is in the log), a branch is merged,
+      // or a local copy of a default branch. With merges only, its tip author owns it.
       const copy =
-        (tip.upstream && isDefault(tip.upstream)) ||
-        (tip.name.startsWith("refs/heads/") && headNames.has(name));
+        start === undefined &&
+        ((tip.upstream && isDefault(tip.upstream)) ||
+          (tip.name.startsWith("refs/heads/") && headNames.has(name)));
       owner = tipEmails.get(tip.hash);
       if (copy || !owner) continue;
     }
