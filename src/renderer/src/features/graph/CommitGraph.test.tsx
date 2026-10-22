@@ -62,6 +62,11 @@ vi.mock("@/lib/api", () => ({
       case "repo.findCommit":
         await mocks.gate;
         return mocks.found ?? mocks.rows.findIndex((r) => (r as GraphRow).hash === args[2]);
+      case "repo.findCommits":
+        await mocks.gate;
+        return (args[2] as string[]).map((h) =>
+          mocks.rows.findIndex((r) => (r as GraphRow).hash === h),
+        );
     }
     throw new Error(`unexpected ${method}`);
   },
@@ -280,7 +285,7 @@ it("opens a commit menu that selects the commit", async () => {
 it("opens stash actions on a stash commit", async () => {
   await render();
   await mouse(rowOf("Commit 3"), "contextmenu");
-  expect(menuItems()).toEqual(["Apply stash", "Pop stash", "Delete stash"]);
+  expect(menuItems()).toEqual(["Apply stash", "Pop stash", "Create branch here…", "Delete stash"]);
 });
 
 it("scrolls to a commit revealed elsewhere", async () => {
@@ -553,6 +558,58 @@ it("finds commits picked before the graph reloaded where they are now", async ()
   });
 });
 
+it("looks up picked commits that are not loaded in one request after a reload", async () => {
+  mocks.rows = Array.from({ length: 1000 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 1000, complete: true, maxLanes: 1 };
+  await render();
+  const stale = (i: number) => ({ index: i - 1, row: commit(i) });
+  act(() =>
+    useRepoUiStore.getState().select(repo, {
+      kind: "commits",
+      commits: [stale(1), stale(800), stale(801)],
+      anchor: "c1",
+      version: 0,
+    }),
+  );
+  await act(async () => {
+    rowOf("Commit 0").dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0, metaKey: true }),
+    );
+  });
+  await settle();
+  // Loaded rows are looked up here, the others all at once.
+  expect(mocks.api.filter(([m]) => m === "repo.findCommit")).toEqual([]);
+  expect(mocks.api.filter(([m]) => m === "repo.findCommits")).toEqual([
+    ["repo.findCommits", 1, ["c800", "c801"]],
+  ]);
+  const s = selection();
+  expect(s?.kind === "commits" && s.commits.map((c) => [c.index, c.row.hash])).toEqual([
+    [0, "c0"],
+    [1, "c1"],
+    [800, "c800"],
+    [801, "c801"],
+  ]);
+});
+
+it("fetches only the rows of a range that are not loaded", async () => {
+  mocks.rows = Array.from({ length: 1000 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 1000, complete: true, maxLanes: 1 };
+  await render();
+  await mouse(rowOf("Commit 0"), "mousedown");
+  await act(async () => {
+    scroller().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "End", shiftKey: true, bubbles: true }),
+    );
+  });
+  await settle();
+  const fetched = mocks.api.filter(([m]) => m === "repo.graphRows").map(([, , a, b]) => [a, b]);
+  // The first page is loaded for the view; the range asks only for rows after it.
+  expect(fetched[0]).toEqual([0, 256]);
+  expect(fetched.slice(1).every(([a]) => (a as number) >= 256)).toBe(true);
+  const s = selection();
+  expect(s?.kind === "commits" && s.commits.length).toBe(1000);
+});
+
 it("does not take indexes from rows of the graph before it reloaded", async () => {
   await render();
   const at = (...hashes: string[]) =>
@@ -637,7 +694,7 @@ it("keeps a multi-selection that is right-clicked, for actions on all of it", as
   await settle();
   await mouse(rowOf("Commit 2"), "contextmenu");
   expect(selection()).toMatchObject({ kind: "commits", anchor: "c1" });
-  expect(menuItems()).toEqual(["Copy 2 commit SHAs"]);
+  expect(menuItems()).toEqual(["Cherry-pick 2 commits", "Revert 2 commits", "Copy 2 commit SHAs"]);
   // Outside the selection, a right-click selects the one commit.
   await mouse(rowOf("Commit 4"), "contextmenu");
   expect(selection()).toEqual({ kind: "commit", hash: "c4" });

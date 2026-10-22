@@ -1,4 +1,5 @@
 import type { GraphRow, Ref, RepoId } from "@shared/domain";
+import { MAX_GRAPH_ROWS } from "@shared/ipc";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   memo,
@@ -277,20 +278,27 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
     q.tail = result.catch(() => {}).finally(() => q.pending--);
   };
 
-  /** The rows from `from` to `to` (inclusive) of graph `version`, fetched when not loaded. */
+  /**
+   * The rows from `from` to `to` (inclusive) of graph `version`: those not loaded are fetched,
+   * in runs of at most {@link MAX_GRAPH_ROWS}.
+   */
   const rowsIn = async (version: number, from: number, to: number) => {
     const out = new Map<number, GraphRow>();
     const loaded = latest.current.info?.version === version ? latest.current.current : null;
-    let missing = false;
+    const missing: [number, number][] = [];
     for (let i = from; i <= to; i++) {
       const r = loaded?.get(i);
       if (r) out.set(i, r);
-      else missing = true;
+      else {
+        const last = missing.at(-1);
+        if (last && last[1] === i && last[1] - last[0] < MAX_GRAPH_ROWS) last[1] = i + 1;
+        else missing.push([i, i + 1]);
+      }
     }
-    if (missing) {
-      const fetched = await api("repo.graphRows", repo, version, from, to + 1);
-      fetched.forEach((r, j) => out.set(from + j, r));
-    }
+    const fetched = await Promise.all(
+      missing.map(([start, end]) => api("repo.graphRows", repo, version, start, end)),
+    );
+    fetched.forEach((run, k) => run.forEach((r, j) => out.set(missing[k]![0] + j, r)));
     return out;
   };
   /** Where a commit is in graph `version` (-1 when not in it), looked up when not loaded. */
@@ -300,6 +308,18 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
     const seen = seenAt.current;
     if (seen?.hash === hash && seen.version === version) return seen.index;
     return api("repo.findCommit", repo, version, hash);
+  };
+  /** Where several commits are in graph `version` (-1 when not), in one lookup at most. */
+  const indexesOf = async (version: number, wanted: readonly string[]): Promise<number[]> => {
+    const { info: i, current: loaded } = latest.current;
+    const known = new Map<string, number>();
+    if (i?.version === version) for (const [index, r] of loaded) known.set(r.hash, index);
+    const unknown = wanted.filter((h) => !known.has(h));
+    if (unknown.length > 0) {
+      const found = await api("repo.findCommits", repo, version, unknown);
+      unknown.forEach((h, k) => known.set(h, found[k] ?? -1));
+    }
+    return wanted.map((h) => known.get(h)!);
   };
 
   /** The selection `base` becomes with the commit at `index` toggled, or the range up to it. */
@@ -316,10 +336,11 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
     const v = i.version;
     // After a reload, commits picked before may have moved, or gone.
     const reindexed = async (picked: readonly PickedCommit[]) => {
-      const moved = await Promise.all(
-        picked.map(async (p) => ({ ...p, index: await indexOf(v, p.row.hash) })),
+      const indexes = await indexesOf(
+        v,
+        picked.map((p) => p.row.hash),
       );
-      return moved.filter((p) => p.index >= 0);
+      return picked.map((p, k) => ({ ...p, index: indexes[k]! })).filter((p) => p.index >= 0);
     };
     try {
       // Only rows loaded for this graph version are where they show: rows of a previous
