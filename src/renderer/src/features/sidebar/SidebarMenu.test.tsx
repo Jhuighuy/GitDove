@@ -303,10 +303,11 @@ it("runs stash actions", async () => {
   for (const label of ["Apply stash", "Pop stash", "Create branch here…", "Delete stash"])
     await menu(row(title), label);
   expect(mocks.commands).toEqual([
-    ["applyStash", 0],
-    ["pop", 0],
-    ["createBranch", "stash-hash", "stash@{0}"],
-    ["dropStash", 0],
+    // By index and hash, so that a stash pushed meanwhile is not taken for this one.
+    ["applyStash", stash],
+    ["pop", stash],
+    ["stashBranch", stash],
+    ["dropStash", stash],
   ]);
   await menu(row(title), "Hide from graph");
   expect(mocks.setHidden.at(-1)).toEqual([stashKey("stash-hash")]);
@@ -436,7 +437,7 @@ it("opens items by double-clicking them", async () => {
   expect(mocks.commands).toEqual([
     ["openSibling", "/wt/feature"],
     ["openSibling", "libs/b"],
-    ["applyStash", 0],
+    ["applyStash", stash],
     ["checkoutRef", tag],
   ]);
   mocks.commands = [];

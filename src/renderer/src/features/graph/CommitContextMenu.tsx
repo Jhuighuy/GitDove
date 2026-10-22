@@ -15,7 +15,6 @@ import type { PickedCommit } from "@/stores/repo-ui";
 import { commands } from "../commands";
 import { useVisibility } from "../sidebar/visibility";
 import { api } from "@/lib/api";
-import { runAction } from "@/lib/actions";
 
 export type MenuTarget =
   | { readonly kind: "wip" }
@@ -39,8 +38,21 @@ export function CommitContextMenu({
 
   if (target.kind === "commits") {
     const hashes = target.commits.map((c) => c.row.hash);
+    // Stashes are not commits to apply elsewhere.
+    const commitsOnly = !hashes.some((h) => stashes.some((s) => s.hash === h));
     return (
       <ContextMenuContent className="min-w-56">
+        {commitsOnly && (
+          <>
+            <WriteMenuItem repo={repo} onClick={() => void commands.cherryPick(repo, hashes)}>
+              Cherry-pick {hashes.length} commits
+            </WriteMenuItem>
+            <WriteMenuItem repo={repo} onClick={() => void commands.revert(repo, hashes)}>
+              Revert {hashes.length} commits
+            </WriteMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         <ContextMenuItem
           onClick={() => commands.copy(hashes.join("\n"), `${hashes.length} commit SHAs copied`)}
         >
@@ -53,10 +65,7 @@ export function CommitContextMenu({
   if (target.kind === "wip") {
     return (
       <ContextMenuContent className="min-w-56">
-        <WriteMenuItem
-          repo={repo}
-          onClick={() => void runAction(repo, "Stage all", () => api("repo.stageAll", repo))}
-        >
+        <WriteMenuItem repo={repo} onClick={() => void commands.stageAll(repo)}>
           Stage all changes
         </WriteMenuItem>
         <WriteMenuItem repo={repo} onClick={() => void commands.stash(repo)}>
@@ -76,17 +85,20 @@ export function CommitContextMenu({
   if (stash) {
     return (
       <ContextMenuContent className="min-w-56">
-        <WriteMenuItem repo={repo} onClick={() => void commands.applyStash(repo, stash.index)}>
+        <WriteMenuItem repo={repo} onClick={() => void commands.applyStash(repo, stash)}>
           Apply stash
         </WriteMenuItem>
-        <WriteMenuItem repo={repo} onClick={() => void commands.pop(repo, stash.index)}>
+        <WriteMenuItem repo={repo} onClick={() => void commands.pop(repo, stash)}>
           Pop stash
+        </WriteMenuItem>
+        <WriteMenuItem repo={repo} onClick={() => void commands.stashBranch(repo, stash)}>
+          Create branch here…
         </WriteMenuItem>
         <ContextMenuSeparator />
         <WriteMenuItem
           repo={repo}
           variant="destructive"
-          onClick={() => void commands.dropStash(repo, stash.index)}
+          onClick={() => void commands.dropStash(repo, stash)}
         >
           Delete stash
         </WriteMenuItem>
@@ -179,10 +191,10 @@ export function CommitContextMenu({
         Create tag here…
       </WriteMenuItem>
       <ContextMenuSeparator />
-      <WriteMenuItem repo={repo} onClick={() => void commands.cherryPick(repo, hash)}>
+      <WriteMenuItem repo={repo} onClick={() => void commands.cherryPick(repo, [hash])}>
         Cherry-pick commit
       </WriteMenuItem>
-      <WriteMenuItem repo={repo} onClick={() => void commands.revert(repo, hash)}>
+      <WriteMenuItem repo={repo} onClick={() => void commands.revert(repo, [hash])}>
         Revert commit
       </WriteMenuItem>
       <ContextMenuSub>

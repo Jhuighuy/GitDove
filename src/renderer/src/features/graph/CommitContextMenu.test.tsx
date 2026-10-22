@@ -158,36 +158,53 @@ const sub = async (label: string) => {
   await act(async () => new Promise((r) => setTimeout(r, 0)));
 };
 
-it("copies the hashes of a multi-selection", async () => {
+it("acts on a multi-selection at once", async () => {
   const commits = [0, 1].map((i) => ({ index: i, row: { ...row, hash: `h${i}` } }));
-  await open({ kind: "commits", commits });
+  const labels = ["Cherry-pick 2 commits", "Revert 2 commits", "Copy 2 commit SHAs"];
+  for (const label of labels) {
+    await open({ kind: "commits", commits });
+    expect(items()).toEqual(labels);
+    await click(label);
+  }
+  // In graph order, newest first: the main process orders them for git.
+  expect(mocks.calls).toEqual([
+    ["cherryPick", ["h0", "h1"]],
+    ["revert", ["h0", "h1"]],
+    ["copy", "h0\nh1", "2 commit SHAs copied"],
+  ]);
+});
+
+it("does not cherry-pick or revert a multi-selection with stashes", async () => {
+  const commits = [0, 1].map((i) => ({ index: i, row: { ...row, hash: `h${i}` } }));
+  const stash: Stash = { index: 0, name: "stash@{0}", hash: "h1", message: "WIP", time: 0 };
+  await open({ kind: "commits", commits }, [stash]);
   expect(items()).toEqual(["Copy 2 commit SHAs"]);
-  await click("Copy 2 commit SHAs");
-  expect(mocks.calls).toEqual([["copy", "h0\nh1", "2 commit SHAs copied"]]);
 });
 
 it("stages or stashes everything from the WIP row", async () => {
   await open({ kind: "wip" });
   expect(items()).toEqual(["Stage all changes", "Stash all changes"]);
   await click("Stage all changes");
-  await act(() => vi.waitFor(() => expect(mocks.api.at(-1)).toEqual(["repo.stageAll"])));
   await open({ kind: "wip" });
   await click("Stash all changes");
-  expect(mocks.calls).toEqual([["stash"]]);
+  expect(mocks.calls).toEqual([["stageAll"], ["stash"]]);
 });
 
 it("offers stash actions on stash commits", async () => {
   const stash: Stash = { index: 2, name: "stash@{2}", hash: HASH, message: "WIP", time: 0 };
   const target: MenuTarget = { kind: "commit", row, refs: [] };
-  for (const label of ["Apply stash", "Pop stash", "Delete stash"]) {
+  const labels = ["Apply stash", "Pop stash", "Create branch here…", "Delete stash"];
+  for (const label of labels) {
     await open(target, [stash]);
-    expect(items()).toEqual(["Apply stash", "Pop stash", "Delete stash"]);
+    expect(items()).toEqual(labels);
     await click(label);
   }
+  // By index and hash, so that a stash pushed meanwhile is not taken for this one.
   expect(mocks.calls).toEqual([
-    ["applyStash", 2],
-    ["pop", 2],
-    ["dropStash", 2],
+    ["applyStash", stash],
+    ["pop", stash],
+    ["stashBranch", stash],
+    ["dropStash", stash],
   ]);
 });
 
@@ -244,8 +261,8 @@ it("offers commit actions", async () => {
     ["checkout", HASH],
     ["createBranch", HASH, "0123456"],
     ["createTag", HASH],
-    ["cherryPick", HASH],
-    ["revert", HASH],
+    ["cherryPick", [HASH]],
+    ["revert", [HASH]],
     ["copy", HASH, "Commit SHA copied"],
     // The whole message, not just the subject the graph has.
     ["copy", "Fix the thing\n\nBecause it was broken.", "Message copied"],

@@ -578,7 +578,7 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
           if (!row.current) commands.openSibling(repo, row.worktree.path);
           return;
         case "stash":
-          return void commands.applyStash(repo, row.stash.index);
+          return void commands.applyStash(repo, row.stash);
         case "submodule":
           return commands.openSibling(repo, row.submodule.path);
       }

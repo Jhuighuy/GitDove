@@ -8,14 +8,13 @@ import { useTheme } from "next-themes";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { runAction } from "@/lib/actions";
-import { api } from "@/lib/api";
 import { basename, dirname, shortHash } from "@/lib/format";
 import { keys, useDiff } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { BusyHint } from "@/components/busy";
 import { useBusy, writeProps } from "@/stores/busy";
 import { type DiffMode, useLayout, useRepoUiStore } from "@/stores/repo-ui";
+import { commands } from "../commands";
 import type { ThemeKind } from "./highlight-protocol";
 import { type DocHighlighter, tokenStyle, useHighlighter } from "./highlight";
 import { copiedText, type TextPoint } from "./copy";
@@ -143,11 +142,14 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   const apply = async (a: PatchAction, patch: string, onApplied?: () => void) => {
     setApplying(true);
     try {
-      const applied = await runAction(repo, a.label, async () => {
-        await api("repo.applyPatch", repo, patch, { cached: a.cached, reverse: a.reverse });
-        return true;
-      });
-      if (applied) onApplied?.();
+      const applied = await commands.applyPatch(
+        repo,
+        a.label,
+        patch,
+        { cached: a.cached, reverse: a.reverse },
+        target.path,
+      );
+      if (applied.ok) onApplied?.();
       await queryClient.invalidateQueries({ queryKey: keys.diff(repo, target) });
     } finally {
       setApplying(false);

@@ -7,13 +7,13 @@ const mocks = vi.hoisted(() => ({
   prompt: vi.fn(),
   confirm: vi.fn(),
   openLocation: vi.fn(),
-  toast: {
+  toast: Object.assign(vi.fn(), {
     loading: vi.fn(() => "t"),
     success: vi.fn(),
     error: vi.fn(),
     dismiss: vi.fn(),
     warning: vi.fn(),
-  },
+  }),
 }));
 vi.mock("@/lib/api", () => ({
   api: mocks.api,
@@ -128,12 +128,16 @@ it("runs simple commands with their api calls", async () => {
     [() => commands.pull(repo), "repo.pull", [repo, "ff-only"]],
     [() => commands.pull(repo, "rebase"), "repo.pull", [repo, "rebase"]],
     [() => commands.stash(repo), "repo.stash", [repo, null, true]],
-    [() => commands.pop(repo), "repo.stashPop", [repo, 0]],
-    [() => commands.pop(repo, 2), "repo.stashPop", [repo, 2]],
-    [() => commands.applyStash(repo, 1), "repo.stashApply", [repo, 1]],
+    // The latest stash, whichever it is, or a given one, checked by its hash.
+    [() => commands.pop(repo), "repo.stashPop", [repo, 0, undefined]],
+    [() => commands.pop(repo, { index: 2, hash: "s2" }), "repo.stashPop", [repo, 2, "s2"]],
+    [() => commands.applyStash(repo, { index: 1, hash: "s1" }), "repo.stashApply", [repo, 1, "s1"]],
     [() => commands.checkout(repo, "topic"), "repo.checkout", [repo, "topic"]],
-    [() => commands.cherryPick(repo, "0123456789"), "repo.cherryPick", [repo, "0123456789"]],
-    [() => commands.revert(repo, "0123456789"), "repo.revert", [repo, "0123456789"]],
+    [() => commands.cherryPick(repo, ["0123456789"]), "repo.cherryPick", [repo, ["0123456789"]]],
+    [() => commands.revert(repo, ["0123456789"]), "repo.revert", [repo, ["0123456789"]]],
+    [() => commands.cherryPick(repo, ["c2", "c1"]), "repo.cherryPick", [repo, ["c2", "c1"]]],
+    [() => commands.revert(repo, ["c2", "c1"]), "repo.revert", [repo, ["c2", "c1"]]],
+    [() => commands.stageAll(repo), "repo.stageAll", [repo]],
     [() => commands.abort(repo), "repo.abortOperation", [repo]],
     [() => commands.continue(repo), "repo.continueOperation", [repo]],
     [() => commands.pruneWorktrees(repo), "repo.pruneWorktrees", [repo]],
@@ -150,10 +154,14 @@ it("runs simple commands with their api calls", async () => {
 it("reports results in the status bar, not in toasts", async () => {
   await commands.fetch(repo);
   expect(noticeText()).toBeUndefined();
-  await commands.cherryPick(repo, "0123456789");
+  await commands.cherryPick(repo, ["0123456789"]);
   expect(noticeText()).toBe("Cherry-picked 0123456");
-  await commands.revert(repo, "abcdef0123");
+  await commands.revert(repo, ["abcdef0123"]);
   expect(noticeText()).toBe("Reverted abcdef0");
+  await commands.cherryPick(repo, ["c3", "c2", "c1"]);
+  expect(noticeText()).toBe("Cherry-picked 3 commits");
+  await commands.revert(repo, ["c2", "c1"]);
+  expect(noticeText()).toBe("Reverted 2 commits");
   await commands.stash(repo);
   expect(noticeText()).toBe("Changes stashed");
   await commands.updateSubmodule(repo, "lib/x");
@@ -226,7 +234,18 @@ it("labels the busy state with the operation and its target", async () => {
   await commands.checkout(repo, "topic");
   await commands.checkout(repo, "0123456789abcdef0123456789abcdef01234567");
   await commands.merge(repo, "topic");
-  expect(labels).toEqual(["Checking out topic…", "Checking out 0123456…", "Merging topic…"]);
+  await commands.checkout(repo, "refs/tags/v1");
+  await commands.merge(repo, "refs/remotes/origin/main");
+  await commands.rebase(repo, "refs/heads/topic");
+  expect(labels).toEqual([
+    "Checking out topic…",
+    "Checking out 0123456…",
+    "Merging topic…",
+    // Full ref names are shown short.
+    "Checking out v1…",
+    "Merging origin/main…",
+    "Rebasing onto topic…",
+  ]);
 });
 
 it("pushes the current branch", async () => {
@@ -314,13 +333,25 @@ it("pushes and pulls other branches without checking them out", async () => {
 
 it("confirms dropping a stash", async () => {
   mocks.confirm.mockResolvedValueOnce(false);
-  await commands.dropStash(repo, 3);
+  await commands.dropStash(repo, { index: 3, hash: "s3" });
   expect(mocks.confirm).toHaveBeenCalledWith(
     expect.objectContaining({ title: "Delete stash@{3}?", destructive: true }),
   );
   expect(methods()).toEqual([]);
-  await commands.dropStash(repo, 3);
-  expect(apiCalls("repo.stashDrop")).toEqual([[repo, 3]]);
+  await commands.dropStash(repo, { index: 3, hash: "s3" });
+  expect(apiCalls("repo.stashDrop")).toEqual([[repo, 3, "s3"]]);
+});
+
+it("creates a branch from a stash", async () => {
+  mocks.prompt.mockResolvedValueOnce(null);
+  await commands.stashBranch(repo, { index: 1, hash: "s1" });
+  expect(mocks.prompt).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Create branch from stash" }),
+  );
+  expect(methods()).toEqual([]);
+  mocks.prompt.mockResolvedValueOnce({ value: "rescued" });
+  await commands.stashBranch(repo, { index: 1, hash: "s1" });
+  expect(apiCalls("repo.stashBranch")).toEqual([[repo, "rescued", 1, "s1"]]);
 });
 
 it("checks out refs of every kind", async () => {
@@ -427,6 +458,21 @@ it("confirms merges and rebases, naming the current branch", async () => {
   );
   expect(apiCalls("repo.rebase")).toEqual([[repo, "origin/main"]]);
 
+  // Full ref names are passed on as they are, and shown short.
+  await commands.merge(repo, "refs/heads/topic");
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({ title: "Merge topic?", description: "Merge “topic” into “main”." }),
+  );
+  await commands.rebase(repo, "refs/remotes/origin/main");
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      title: "Rebase onto origin/main?",
+      description: "Rebase “main” onto “origin/main”. This rewrites history.",
+    }),
+  );
+  expect(apiCalls("repo.merge").at(-1)).toEqual([repo, "refs/heads/topic", {}]);
+  expect(apiCalls("repo.rebase").at(-1)).toEqual([repo, "refs/remotes/origin/main"]);
+
   setRefs([]);
   mocks.confirm.mockResolvedValue(false);
   mocks.api.mockClear();
@@ -491,6 +537,38 @@ it("confirms discarding changes", async () => {
   mocks.api.mockClear();
   await commands.discard(repo, ["a.ts"], []);
   expect(methods()).toEqual([]);
+});
+
+it("applies patches, offering to undo a discard", async () => {
+  await commands.applyPatch(repo, "Stage Hunk", "P", { cached: true, reverse: false });
+  await commands.applyPatch(repo, "Unstage Hunk", "P", { cached: true, reverse: true });
+  expect(mocks.toast).not.toHaveBeenCalled();
+  await commands.applyPatch(repo, "Discard Lines", "P", { cached: false, reverse: true }, "a.ts");
+  expect(apiCalls("repo.applyPatch")).toEqual([
+    [repo, "P", { cached: true, reverse: false }],
+    [repo, "P", { cached: true, reverse: true }],
+    [repo, "P", { cached: false, reverse: true }],
+  ]);
+  expect(mocks.toast).toHaveBeenCalledWith(
+    "Changes discarded",
+    expect.objectContaining({ description: "a.ts", action: expect.anything() }),
+  );
+  // Undo applies the same patch forward to the working tree.
+  mocks.api.mockClear();
+  const undo = mocks.toast.mock.calls[0]![1].action.onClick as () => void;
+  undo();
+  await vi.waitFor(() => expect(noticeText()).toBe("Discarded changes restored"));
+  expect(apiCalls("repo.applyPatch")).toEqual([[repo, "P", { cached: false, reverse: false }]]);
+
+  // A failed discard has nothing to undo.
+  mocks.toast.mockClear();
+  mocks.api.mockRejectedValueOnce(new Error("patch does not apply"));
+  const result = await commands.applyPatch(repo, "Discard Hunk", "P", {
+    cached: false,
+    reverse: true,
+  });
+  expect(result).toEqual({ ok: false });
+  expect(mocks.toast).not.toHaveBeenCalled();
 });
 
 it("sets upstreams, defaulting to the branch on origin", async () => {

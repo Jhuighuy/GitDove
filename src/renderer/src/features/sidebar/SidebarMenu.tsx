@@ -399,23 +399,20 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       const s = target.stash;
       return (
         <Menu>
-          <WriteMenuItem repo={repo} onClick={() => void commands.applyStash(repo, s.index)}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.applyStash(repo, s)}>
             Apply stash
           </WriteMenuItem>
-          <WriteMenuItem repo={repo} onClick={() => void commands.pop(repo, s.index)}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.pop(repo, s)}>
             Pop stash
           </WriteMenuItem>
-          <WriteMenuItem
-            repo={repo}
-            onClick={() => void commands.createBranch(repo, s.hash, s.name)}
-          >
+          <WriteMenuItem repo={repo} onClick={() => void commands.stashBranch(repo, s)}>
             Create branch here…
           </WriteMenuItem>
           <Sep />
           <WriteMenuItem
             repo={repo}
             variant="destructive"
-            onClick={() => void commands.dropStash(repo, s.index)}
+            onClick={() => void commands.dropStash(repo, s)}
           >
             Delete stash
           </WriteMenuItem>
