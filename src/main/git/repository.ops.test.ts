@@ -511,6 +511,13 @@ describe.skipIf(process.platform === "win32").each(targets)("Repository ops on %
     expect(await count()).toBe(4);
     repo.setHiddenRefs([personKey("bob")]);
     expect(await count()).toBe(4);
+    // A tag on Ann's branch does not bring it back, nor does a tag on Cid's.
+    await sh(`git tag on-ann ann && ${commitAs("cid", "Cid")} && git checkout -q main`);
+    await sh("git tag on-cid cid && git branch -q -D cid");
+    repo.setHiddenRefs([authorKey("ann@x")]);
+    expect(await count()).toBe(4);
+    repo.setHiddenRefs([]);
+    expect(await count()).toBe(6);
   });
 
   describe("remotes", () => {
