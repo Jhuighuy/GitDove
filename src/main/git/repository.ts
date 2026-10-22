@@ -68,11 +68,12 @@ const GIT_CONFIG = [
 
 /**
  * Tracked files that a folder replaced in the work tree, one per line: deleted from the index
- * (`git rm`) or only from the work tree. Without commits, there is no HEAD to compare with.
+ * (`git rm`, or moved away with `git mv`, hence no renames) or only from the work tree.
+ * Without commits, there is no HEAD to compare with.
  */
 const FOLDERS_FOR_FILES =
-  `{ git ${GIT_CONFIG.join(" ")} diff --name-only --diff-filter=D HEAD 2>/dev/null; ` +
-  `git ${GIT_CONFIG.join(" ")} diff --name-only --diff-filter=D; } | sort -u | ` +
+  `{ git ${GIT_CONFIG.join(" ")} diff --no-renames --name-only --diff-filter=D HEAD 2>/dev/null; ` +
+  `git ${GIT_CONFIG.join(" ")} diff --no-renames --name-only --diff-filter=D; } | sort -u | ` +
   `while IFS= read -r p; do if [ -d "$p" ]; then printf '%s\\n' "$p"; fi; done`;
 
 /** Largest diff we render before truncating (bytes). */
