@@ -212,6 +212,24 @@ it("offers to cancel a local operation once it takes a while", async () => {
   }
 });
 
+it("offers no cancel while only the refresh after an operation runs", async () => {
+  await render(LOCAL);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    await act(async () =>
+      useBusyStore.getState().start(LOCAL, { label: "Pushing…", cancellable: true }),
+    );
+    expect(container.querySelector("[aria-label='Cancel']")).not.toBeNull();
+    await act(async () => useBusyStore.getState().refreshing(LOCAL));
+    await act(async () => vi.advanceTimersByTime(LOCAL_CANCEL_MS));
+    expect(container.querySelector("output")?.textContent).toBe("Refreshing…");
+    expect(container.querySelector("[aria-label='Cancel']")).toBeNull();
+  } finally {
+    await act(async () => useBusyStore.getState().finish(LOCAL));
+    vi.useRealTimers();
+  }
+});
+
 it("shows results of the active repository and of the app", async () => {
   await render(LOCAL);
   await act(async () => notify(LOCAL, "Pushed main"));

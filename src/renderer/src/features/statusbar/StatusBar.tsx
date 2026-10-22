@@ -15,7 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { api, useEvent } from "@/lib/api";
 import { keys } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { type Busy, useBusy } from "@/stores/busy";
+import { type Busy, busyLabel, useBusy } from "@/stores/busy";
 import { APP, type Notice, useActivity, useNotice } from "@/stores/status";
 import { commands } from "../commands";
 
@@ -185,18 +185,20 @@ export const LOCAL_CANCEL_MS = 3000;
 function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
   const [late, setLate] = useState<Busy | null>(null);
   useEffect(() => {
-    if (busy.cancellable) return;
+    if (busy.cancellable || busy.refreshing) return;
     const id = setTimeout(
       () => setLate(busy),
       Math.max(0, busy.since + LOCAL_CANCEL_MS - Date.now()),
     );
     return () => clearTimeout(id);
   }, [busy]);
-  const cancellable = busy.cancellable || late === busy;
+  // The refresh after the operation runs only queries: cancelling stops nothing.
+  const cancellable = !busy.refreshing && (busy.cancellable || late === busy);
+  const label = busyLabel(busy);
   return (
-    <output className="flex min-w-0 items-center gap-1.5" title={busy.label}>
+    <output className="flex min-w-0 items-center gap-1.5" title={label}>
       <Spinner className="size-3.5 shrink-0" role="presentation" aria-hidden />
-      <span className="truncate">{busy.label}</span>
+      <span className="truncate">{label}</span>
       {cancellable && (
         <Button
           variant="ghost"

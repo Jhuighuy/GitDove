@@ -109,6 +109,7 @@ export const runAction = async <A>(
     // Watchers pick up changes too, but later (seconds over SSH), and change events that
     // arrived meanwhile were held back (see `useRepoEvents`).
     // A refresh that hangs (a stalled connection) must not keep the repository busy for good.
+    busy.refreshing(repo);
     const refreshed = refreshRepo(repo, [
       ...(options.invalidates ?? REPOSITORY),
       ...takeHeldChanges(repo),

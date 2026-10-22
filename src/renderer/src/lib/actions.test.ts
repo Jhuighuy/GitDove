@@ -76,8 +76,8 @@ it("refreshes only what an action declares, and stays busy until that is on scre
   await vi.waitFor(() =>
     expect(invalidated).toEqual([[...keys.status(repo)], [...keys.diffs(repo)]]),
   );
-  // Write controls stay disabled until fresh data is on screen.
-  expect(busyOf(repo)).not.toBeNull();
+  // Write controls stay disabled until fresh data is on screen; the action itself is done.
+  expect(busyOf(repo)).toMatchObject({ label: "Stage…", refreshing: true });
   refetched();
   await expect(result).resolves.toEqual({ ok: true, value: undefined });
   expect(busyOf(repo)).toBeNull();
