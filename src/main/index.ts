@@ -18,6 +18,7 @@ import { activity } from "./activity";
 import { handleAvatarProtocol, pruneAvatarCache, registerAvatarScheme } from "./avatars";
 import { loadEnvironment } from "./exec/environment";
 import { HostsLive } from "./exec/hosts";
+import { killUnlessGone } from "./exec/terminate";
 import { isWebUrl, registerIpc } from "./ipc";
 import { LoggerLive, Notifier, RepoSettings, ReposLive } from "./services";
 import { flushState, repoSettings, updateRepoSettings } from "./state";
@@ -337,6 +338,20 @@ app.on("window-all-closed", () => {
 
 /** Longest wait for cleanup on quit, e.g. for an unresponsive SSH host. */
 const QUIT_TIMEOUT = 5000;
+/**
+ * Longest wait for Chromium to shut down after cleanup. It can wait forever for a helper
+ * process that hangs (seen with the network service), and then ignores SIGTERM too.
+ */
+const EXIT_TIMEOUT = 3000;
+
+let exiting = false;
+const exit = () => {
+  if (exiting) return;
+  exiting = true;
+  const helpers = app.getAppMetrics().flatMap((m) => (m.pid === process.pid ? [] : [m.pid]));
+  killUnlessGone([process.pid, ...helpers], EXIT_TIMEOUT);
+  app.exit(0);
+};
 
 let disposing = false;
 app.on("will-quit", (e) => {
@@ -347,13 +362,13 @@ app.on("will-quit", (e) => {
   flushState();
   setTimeout(() => {
     log.warn("Cleanup on quit timed out");
-    app.exit(0);
+    exit();
   }, QUIT_TIMEOUT).unref();
   // Close SSH masters and file watchers before exiting.
   void runtime
     .dispose()
     .catch((err: unknown) => log.error("dispose failed", err))
-    .finally(() => app.exit(0));
+    .finally(exit);
 });
 
 void main();

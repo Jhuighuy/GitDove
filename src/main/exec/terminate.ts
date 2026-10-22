@@ -101,3 +101,22 @@ export const terminateTree = (child: ChildProcess): Effect.Effect<void> =>
       Effect.asVoid,
     );
   });
+
+/**
+ * Kills `pids` (SIGKILL) after `ms`, if the first one still runs then. A detached shell does it,
+ * so it works even when the caller's own thread no longer runs code (e.g. a process stuck
+ * exiting). POSIX only.
+ */
+export const killUnlessGone = (pids: readonly number[], ms: number): void => {
+  if (!OWN_PROCESS_GROUP || pids.length === 0) return;
+  const script =
+    `sleep ${Math.ceil(ms / 1000)}; ` +
+    `kill -0 ${pids[0]} 2>/dev/null && kill -9 ${pids.join(" ")} 2>/dev/null`;
+  try {
+    const shell = nodeSpawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" });
+    shell.on("error", () => {});
+    shell.unref();
+  } catch {
+    // Nothing to do without a shell.
+  }
+};
