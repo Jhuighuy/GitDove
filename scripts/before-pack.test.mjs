@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import beforePack from "./before-pack.mjs";
 
 vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
@@ -17,10 +17,7 @@ const context = (platform = "darwin", icon = "build/Fold.icon") => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
-afterEach(() => vi.restoreAllMocks());
 
 describe("macOS icon selection", () => {
   it.each(["26.0", "26.2.1", "27.0"])("keeps the layered icon with actool %s", (version) => {

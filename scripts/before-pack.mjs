@@ -23,10 +23,7 @@ export default function beforePack({ electronPlatformName, packager }) {
   // Preserve explicit icon overrides and leave other platforms alone.
   if (electronPlatformName !== "darwin" || options.icon !== "build/Fold.icon") return;
 
-  if (hasIconCompiler()) {
-    console.log("macOS icon: Fold.icon (Liquid Glass, actool 26+)");
-  } else {
+  if (!hasIconCompiler()) {
     options.icon = "build/icon.icns";
-    console.warn("macOS icon: icon.icns (static fallback; Xcode 26+ actool is unavailable)");
   }
 }

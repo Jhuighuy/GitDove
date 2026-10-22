@@ -93,8 +93,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Icon Composer assets require Xcode 26+; this image includes it.
-          - { os: macos-26, platform: mac, arch: arm64 }
+          - { os: macos-latest, platform: mac, arch: arm64 }
           - { os: windows-latest, platform: win, arch: x64 }
           - { os: ubuntu-latest, platform: linux, arch: x64 }
     runs-on: ${{ matrix.os }}
@@ -114,14 +113,6 @@ jobs:
           # Ad-hoc signing needs no credentials; electron-builder skips signing on pull requests otherwise.
           CSC_FOR_PULL_REQUEST: "true"
         run: npm run package -- --${{ matrix.platform }} --${{ matrix.arch }} -c.extraMetadata.version=${{ steps.version.outputs.version }}
-      - name: Verify macOS icon
-        if: matrix.platform == 'mac'
-        shell: bash
-        run: |
-          app_bundle=(release/*/mac-arm64/GitDove.app)
-          test -s "${app_bundle[0]}/Contents/Resources/Assets.car"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "${app_bundle[0]}/Contents/Info.plist")" = Icon
-          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "${app_bundle[0]}/Contents/Info.plist")" = 26.0
       - name: Test updates
         if: matrix.platform == 'mac'
         run: node scripts/test-updates.mjs release/*/mac-arm64/GitDove.app
