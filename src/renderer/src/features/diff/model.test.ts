@@ -1,6 +1,6 @@
 import type { DiffLine, FileDiff } from "@shared/domain";
 import { expect, it } from "vitest";
-import { buildModel, isChange } from "./model";
+import { buildModel, capLines, displayWidth, isChange } from "./model";
 
 const ctx = (oldNo: number, newNo: number, text: string): DiffLine => ({
   kind: "context",
@@ -118,6 +118,33 @@ it("records where each hunk starts, for highlighting resets", () => {
   expect(m.lines[2]).toMatchObject({ hunk: 1, index: 0 });
   // Line numbers go up to 123, three digits.
   expect(m.gutter).toBe(3);
+});
+
+it("measures lines in columns, expanding tabs and counting wide characters twice", () => {
+  expect(displayWidth("ab")).toBe(2);
+  expect(displayWidth("\tx")).toBe(5);
+  expect(displayWidth("ab\tx")).toBe(5);
+  expect(displayWidth("日本語")).toBe(6);
+  expect(displayWidth("é")).toBe(1);
+  expect(displayWidth("😀")).toBe(2);
+  expect(displayWidth("x".repeat(20_000))).toBe(10_000);
+  const m = buildModel(diff({ start: [1, 1], lines: [ctx(1, 1, "abcdef"), add(2, "\t\tx")] }));
+  expect(m.width).toBe(9);
+});
+
+it("cuts huge diffs short", () => {
+  const big = diff(
+    { start: [1, 1], lines: [add(1, "a"), add(2, "b")] },
+    { start: [10, 11], lines: [add(11, "c"), add(12, "d"), add(13, "e")] },
+    { start: [20, 22], lines: [add(22, "f")] },
+  );
+  expect(capLines(big, 6)).toBe(big);
+  const cut = capLines(big, 4);
+  expect(cut.truncated).toBe(true);
+  expect(cut.hunks.map((h) => h.lines.map((l) => l.text))).toEqual([
+    ["a", "b"],
+    ["c", "d"],
+  ]);
 });
 
 it("handles an empty diff", () => {

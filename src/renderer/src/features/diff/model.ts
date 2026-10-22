@@ -24,7 +24,15 @@ export type Row =
   /** A split view row; -1 marks an empty cell. */
   | { readonly type: "split"; readonly left: number; readonly right: number };
 
+/** Most lines shown: beyond about 1.6M rows the view would exceed the browser's height limit. */
+export const MAX_LINES = 1_000_000;
+/** Lines are shown up to this many characters. */
+export const MAX_TEXT = 10_000;
+/** Columns a tab advances to a multiple of; the view sets the same `tab-size`. */
+export const TAB_SIZE = 4;
+
 export interface DiffModel {
+  /** The diff shown; cut short (and marked truncated) beyond `MAX_LINES`. */
   readonly diff: FileDiff;
   readonly lines: readonly Line[];
   /** Id of each hunk's first line. */
@@ -35,13 +43,60 @@ export interface DiffModel {
   readonly sides: readonly [string[], string[]];
   /** Side indices where a hunk starts, i.e. where highlighting state resets. */
   readonly resets: readonly [number[], number[]];
-  /** Longest line, in characters. */
+  /** Widest line, in columns (`ch`), up to about `MAX_TEXT`. */
   readonly width: number;
   /** Widest line number, in digits. */
   readonly gutter: number;
 }
 
-export const buildModel = (diff: FileDiff): DiffModel => {
+/** Columns a code point takes in a monospace font: wide East Asian characters take two. */
+const columns = (cp: number) =>
+  cp >= 0x300 && cp < 0x370
+    ? 0
+    : (cp >= 0x1100 && cp <= 0x115f) ||
+        (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+        (cp >= 0xac00 && cp <= 0xd7a3) ||
+        (cp >= 0xf900 && cp <= 0xfaff) ||
+        (cp >= 0xfe30 && cp <= 0xfe4f) ||
+        (cp >= 0xff00 && cp <= 0xff60) ||
+        (cp >= 0xffe0 && cp <= 0xffe6) ||
+        (cp >= 0x1f300 && cp <= 0x1f64f) ||
+        (cp >= 0x1f900 && cp <= 0x1f9ff) ||
+        (cp >= 0x20000 && cp <= 0x3fffd)
+      ? 2
+      : 1;
+
+/** Width of a line's shown text, in columns, expanding tabs. */
+export const displayWidth = (text: string): number => {
+  let width = 0;
+  const end = Math.min(text.length, MAX_TEXT);
+  for (let i = 0; i < end; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 9) width += TAB_SIZE - (width % TAB_SIZE);
+    else if (c < 0x300) width++;
+    else {
+      const cp = text.codePointAt(i)!;
+      if (cp > 0xffff) i++;
+      width += columns(cp);
+    }
+  }
+  return width;
+};
+
+/** `diff` with its hunks cut after `max` lines in total. */
+export const capLines = (diff: FileDiff, max = MAX_LINES): FileDiff => {
+  let left = max;
+  const hunks = [];
+  for (const hunk of diff.hunks) {
+    if (left <= 0) break;
+    hunks.push(hunk.lines.length <= left ? hunk : { ...hunk, lines: hunk.lines.slice(0, left) });
+    left -= hunk.lines.length;
+  }
+  return left >= 0 ? diff : { ...diff, hunks, truncated: true };
+};
+
+export const buildModel = (full: FileDiff): DiffModel => {
+  const diff = capLines(full);
   const lines: Line[] = [];
   const hunkStart: number[] = [];
   const unified: Row[] = [];
@@ -91,7 +146,8 @@ export const buildModel = (diff: FileDiff): DiffModel => {
       }
       lines.push({ id, hunk: h, index, ...l, pair: -1, side, sideIndex });
       unified.push({ type: "line", id });
-      if (l.text.length > width) width = l.text.length;
+      // A line is at most TAB_SIZE columns per character wide.
+      if (l.text.length * TAB_SIZE > width) width = Math.max(width, displayWidth(l.text));
 
       if (l.kind === "context") {
         flushBlock();

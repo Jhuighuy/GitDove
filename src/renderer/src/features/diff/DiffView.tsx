@@ -1,16 +1,17 @@
 import { buildPatch, hunkPatch } from "@shared/diff/patch";
 import { type Range, wordDiff, type WordDiff } from "@shared/diff/words";
-import type { DiffTarget, RepoId } from "@shared/domain";
+import type { DiffTarget, FileDiff, RepoId } from "@shared/domain";
 import { IconCode, IconLayoutColumns, IconLayoutRows, IconPhoto, IconX } from "@tabler/icons-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import { useTheme } from "next-themes";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { runAction } from "@/lib/actions";
 import { api } from "@/lib/api";
 import { basename, dirname, shortHash } from "@/lib/format";
-import { useDiff } from "@/lib/queries";
+import { keys, useDiff } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { BusyHint } from "@/components/busy";
 import { useBusy, writeProps } from "@/stores/busy";
@@ -20,7 +21,7 @@ import { type DocHighlighter, tokenStyle, useHighlighter } from "./highlight";
 import { copiedText, type TextPoint } from "./copy";
 import { ImageDiff } from "./ImageDiff";
 import { stepTarget, useSiblingFiles } from "./targets";
-import { buildModel, type DiffModel, isChange, type Line } from "./model";
+import { buildModel, type DiffModel, isChange, type Line, MAX_TEXT } from "./model";
 import { type DiffViewId, fileKind, viewFor } from "./views";
 
 const LINE_HEIGHT = 20;
@@ -64,20 +65,33 @@ const ownsArrows = (el: EventTarget | null) =>
   el instanceof HTMLInputElement ||
   (el instanceof Element && el.closest("[role=menu],[role=dialog],[role=listbox]") !== null);
 
+/** Why the hunks and lines of a diff cannot be staged, unstaged or discarded. */
+const READ_ONLY: Record<NonNullable<FileDiff["readOnly"]>, string> = {
+  conflict: "Resolve the conflict, then stage the file as a whole.",
+  submodule: "Submodule changes are staged as a whole.",
+  encoding: "The file is not UTF-8 text: stage or discard it as a whole.",
+};
+
 export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget }) {
   const kind = useMemo(() => fileKind(target.path), [target.path]);
   const view = useLayout((s) => viewFor(kind, s.diffViews));
   const setView = useLayout((s) => s.setDiffView);
   const textual = view === "diff";
-  const { data, error, isPending, isPlaceholderData } = useDiff(repo, textual ? target : null);
+  const { data, error, isPending, isPlaceholderData, isFetching } = useDiff(
+    repo,
+    textual ? target : null,
+  );
   const model = useMemo(() => (data ? buildModel(data) : null), [data]);
   const mode = useLayout((s) => s.diffMode);
   const setMode = useLayout((s) => s.setDiffMode);
   const close = () => useRepoUiStore.getState().openDiff(repo, null);
+  const targetKey = JSON.stringify(target);
+  // While another target's diff loads, the previous one stays on screen: nothing may act on it.
+  const current = !!data && !isPlaceholderData && data.path === target.path;
 
   // Selected line ids, for line-level staging. A new diff, or another view, starts afresh.
   const [selection, setSelection] = useState(EMPTY_SELECTION);
-  useEffect(() => setSelection(EMPTY_SELECTION), [model, textual]);
+  useEffect(() => setSelection(EMPTY_SELECTION), [model, textual, targetKey]);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
@@ -113,33 +127,47 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo]);
 
-  // Staging and discarding wait while another operation runs.
-  const write = writeProps(useBusy(repo));
-  const hunkActions = actionsFor(target, "Hunk");
-  const lineActions = actionsFor(target, "Lines");
+  // Staging and discarding wait while another operation runs, and until the diff they act on is
+  // up to date: a patch built from an outdated diff could apply to the wrong lines.
+  const busy = useBusy(repo);
+  const queryClient = useQueryClient();
+  const [applying, setApplying] = useState(false);
+  const write =
+    !busy && (applying || isFetching)
+      ? { disabled: true, title: "Wait for the diff to refresh." }
+      : writeProps(busy);
+  const readOnly = current ? data.readOnly : undefined;
+  const hunkActions = current && !readOnly ? actionsFor(target, "Hunk") : [];
+  const lineActions = current && !readOnly ? actionsFor(target, "Lines") : [];
+
+  const apply = async (a: PatchAction, patch: string, onApplied?: () => void) => {
+    setApplying(true);
+    try {
+      const applied = await runAction(repo, a.label, async () => {
+        await api("repo.applyPatch", repo, patch, { cached: a.cached, reverse: a.reverse });
+        return true;
+      });
+      if (applied) onApplied?.();
+      await queryClient.invalidateQueries({ queryKey: keys.diff(repo, target) });
+    } finally {
+      setApplying(false);
+    }
+  };
 
   const applyHunk = (hunk: number, a: PatchAction) => {
-    if (!data) return;
-    void runAction(repo, a.label, () =>
-      api("repo.applyPatch", repo, hunkPatch(data, hunk, a.reverse), {
-        cached: a.cached,
-        reverse: a.reverse,
-      }),
-    );
+    if (!model || !current) return;
+    void apply(a, hunkPatch(model.diff, hunk, a.reverse));
   };
 
   const applyLines = (a: PatchAction) => {
-    if (!model) return;
+    if (!model || !current) return;
     const patch = buildPatch(
       model.diff,
       (h, i) => selection.has(model.hunkStart[h]! + i),
       a.reverse,
     );
-    if (!patch) return;
-    setSelection(EMPTY_SELECTION);
-    void runAction(repo, a.label, () =>
-      api("repo.applyPatch", repo, patch, { cached: a.cached, reverse: a.reverse }),
-    );
+    // The selection stays until the patch applied, so that a failure does not lose it.
+    if (patch) void apply(a, patch, () => setSelection(EMPTY_SELECTION));
   };
 
   return (
@@ -159,6 +187,11 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
               : `${shortHash(target.base)}..${shortHash(target.hash)}`}
         </span>
         {textual && (isPending || isPlaceholderData) && <Spinner className="size-3.5" />}
+        {textual && readOnly && (
+          <span className="text-muted-foreground shrink-0 text-[11px]" title={READ_ONLY[readOnly]}>
+            Read-only
+          </span>
+        )}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {textual && selection.size > 0 && (
             <SelectionBar
@@ -181,6 +214,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
         <TextDiff
           error={error}
           model={model}
+          targetKey={current ? targetKey : null}
           mode={mode}
           actions={hunkActions}
           onAction={applyHunk}
@@ -235,6 +269,9 @@ function SelectionBar({
 
 type DiffBodyProps = Parameters<typeof DiffBody>[0];
 
+/** Where a drag over line numbers started, and the selection it adds to. */
+type Drag = { readonly anchor: number; readonly base: ReadonlySet<number> } | null;
+
 function TextDiff({
   error,
   model,
@@ -245,9 +282,18 @@ function TextDiff({
   if (model.diff.binary)
     return <div className="text-muted-foreground p-6 text-sm">Binary file — no textual diff.</div>;
   if (model.diff.hunks.length === 0)
-    return <div className="text-muted-foreground p-6 text-sm">No changes.</div>;
+    return <div className="text-muted-foreground p-6 text-sm">{emptyMessage(model.diff)}</div>;
   return <DiffBody model={model} {...body} />;
 }
+
+const emptyMessage = (diff: FileDiff) =>
+  diff.created
+    ? "Empty file added."
+    : diff.deleted
+      ? "Empty file deleted."
+      : diff.oldPath !== null && diff.oldPath !== diff.path
+        ? "Renamed without changes."
+        : "No changes.";
 
 const VIEWS: Record<DiffViewId, { title: string; icon: React.ReactNode }> = {
   diff: { title: "Text diff", icon: <IconCode /> },
@@ -328,15 +374,18 @@ function ModeToggle({
 
 function DiffBody({
   model,
+  targetKey,
   mode,
   actions,
   onAction,
   write,
-  selectable,
+  selectable: canSelect,
   selection,
   setSelection,
 }: {
   model: DiffModel;
+  /** Key of the target `model` is the diff of, or null while it is another target's. */
+  targetKey: string | null;
   mode: DiffMode;
   actions: PatchAction[];
   onAction: (hunk: number, a: PatchAction) => void;
@@ -347,6 +396,25 @@ function DiffBody({
 }) {
   const rows = mode === "split" ? model.split : model.unified;
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The last hunk of a truncated diff may be incomplete: it gets no actions.
+  const lockedHunk = model.diff.truncated ? model.diff.hunks.length - 1 : -1;
+  const hunkActions = (hunk: number) => (hunk === lockedHunk ? [] : actions);
+  const selectable = (l: Line) => canSelect && isChange(l) && l.hunk !== lockedHunk;
+
+  // Another file's diff starts at the top left.
+  const shownTarget = useRef(targetKey);
+  useLayoutEffect(() => {
+    if (targetKey === null || targetKey === shownTarget.current) return;
+    shownTarget.current = targetKey;
+    const scroller = scrollRef.current;
+    if (scroller) {
+      scroller.scrollTop = 0;
+      scroller.scrollLeft = 0;
+      scroller.style.removeProperty("--sx");
+    }
+    for (const bar of barRefs) if (bar.current) bar.current.scrollLeft = 0;
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetKey]);
   // The rows a text selection starts and ends in stay mounted while they scroll away: the
   // selection would lose an end if its row were removed.
   const keptRows = useRef<readonly (number | null)[]>([]);
@@ -375,9 +443,24 @@ function DiffBody({
     document.addEventListener("selectionchange", onChange);
     return () => document.removeEventListener("selectionchange", onChange);
   }, []);
+  // Keys name what a row shows. The virtualizer recomputes sizes when this function changes, but
+  // not when only `estimateSize` does: rows of the same count with hunks elsewhere would keep
+  // stale heights.
+  const getItemKey = useCallback(
+    (i: number) => {
+      const row = rows[i]!;
+      return row.type === "hunk"
+        ? `h${row.hunk}`
+        : row.type === "line"
+          ? row.id
+          : `${row.left}:${row.right}`;
+    },
+    [rows],
+  );
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
+    getItemKey,
     estimateSize: (i) => (rows[i]!.type === "hunk" ? HUNK_HEIGHT : LINE_HEIGHT),
     overscan: OVERSCAN,
     rangeExtractor: (range) => {
@@ -437,7 +520,15 @@ function DiffBody({
   }, [model]);
 
   const ctx: CellContext = { model, hl, theme, words, selection, selectable };
-  const dragRef = useRef<{ anchor: number; base: ReadonlySet<number> } | null>(null);
+  const dragRef = useRef<Drag>(null);
+  /** The last click that selected a line from its text, and what it replaced. */
+  const lastClick = useRef<{ id: number; selection: ReadonlySet<number>; drag: Drag } | null>(null);
+  // Line ids mean other lines in a new diff.
+  useEffect(() => {
+    dragRef.current = null;
+    pending.current = null;
+    lastClick.current = null;
+  }, [model]);
 
   const lineAt = (e: React.MouseEvent): number | null => {
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-line]");
@@ -449,7 +540,7 @@ function DiffBody({
     for (let i = Math.min(anchor, id); i <= Math.max(anchor, id); i++) {
       const l = model.lines[i]!;
       // In split view a drag stays within its column.
-      if (isChange(l) && (mode === "unified" || l.kind === kind)) next.add(i);
+      if (selectable(l) && (mode === "unified" || l.kind === kind)) next.add(i);
     }
     return next;
   };
@@ -484,9 +575,17 @@ function DiffBody({
     else scrollRef.current?.removeAttribute("data-select-side");
 
     pending.current = null;
-    if (!selectable) return;
+    if (!canSelect) return;
     const id = lineAt(e);
-    if (id === null || !isChange(model.lines[id]!)) {
+    // The first click of a double click on text selected the line; the word is what is meant.
+    const click = lastClick.current;
+    lastClick.current = null;
+    if (e.detail === 2 && click && click.id === id) {
+      setSelection(click.selection);
+      dragRef.current = click.drag;
+      return;
+    }
+    if (id === null || !selectable(model.lines[id]!)) {
       if (id !== null) setSelection(EMPTY_SELECTION);
       return;
     }
@@ -504,7 +603,9 @@ function DiffBody({
     pending.current = null;
     if (e.button !== 0 || e.detail !== 1 || !press) return;
     const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
-    if (lineAt(e) === press.id && moved < CLICK_SLOP) pressLine(e, press.id);
+    if (lineAt(e) !== press.id || moved >= CLICK_SLOP) return;
+    lastClick.current = { id: press.id, selection, drag: dragRef.current };
+    pressLine(e, press.id);
   };
   const dragging = useRef(false);
   useEffect(() => {
@@ -564,7 +665,7 @@ function DiffBody({
       <div
         ref={scrollRef}
         className={cn(
-          "min-h-0 flex-1 font-mono text-[12px] [contain:strict]",
+          "min-h-0 flex-1 font-mono text-[12px] [tab-size:4] [contain:strict]",
           // The other column's text is unselectable; these outrank its own `select-text`.
           "[&[data-select-side='0']_[data-side='1']_[data-text]]:select-none",
           "[&[data-select-side='1']_[data-side='0']_[data-text]]:select-none",
@@ -596,7 +697,7 @@ function DiffBody({
                 >
                   <span className="truncate">{model.diff.hunks[row.hunk]!.header}</span>
                   <span className="sticky right-2 ml-auto flex gap-1" title={write.title}>
-                    {actions.map((a) => (
+                    {hunkActions(row.hunk).map((a) => (
                       <Button
                         key={a.label}
                         size="xs"
@@ -659,7 +760,7 @@ interface CellContext {
   readonly theme: ThemeKind;
   readonly words: (l: Line) => readonly Range[] | null;
   readonly selection: ReadonlySet<number>;
-  readonly selectable: boolean;
+  readonly selectable: (l: Line) => boolean;
 }
 
 const GUTTER = "text-muted-foreground/70 shrink-0 pr-2 text-right select-none";
@@ -701,7 +802,7 @@ function Sign({ l, selected, selectable }: { l: Line; selected: boolean; selecta
         l.kind === "add" && "text-emerald-500",
         l.kind === "del" && "text-red-500",
         selected && "bg-sky-500 text-white",
-        selectable && isChange(l) && !selected && "group-hover/line:bg-sky-500/30",
+        selectable && !selected && "group-hover/line:bg-sky-500/30",
       )}
     >
       {l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}
@@ -713,7 +814,23 @@ function Text({ l, ctx }: { l: Line; ctx: CellContext }) {
   if (l.kind === "meta") return <span className="text-muted-foreground italic">{l.text}</span>;
   const tokens = ctx.hl?.tokens(ctx.theme, l.side, l.sideIndex) ?? null;
   const emph = ctx.words(l);
-  return <LineText text={l.text} tokens={tokens} emph={emph} emphClass={emphasisClass(l)} />;
+  if (l.text.length <= MAX_TEXT) {
+    return <LineText text={l.text} tokens={tokens} emph={emph} emphClass={emphasisClass(l)} />;
+  }
+  // Rendering megabytes of a minified line would freeze the view.
+  return (
+    <>
+      <LineText
+        text={l.text.slice(0, MAX_TEXT)}
+        tokens={tokens}
+        emph={emph}
+        emphClass={emphasisClass(l)}
+      />
+      <span className="text-muted-foreground font-sans italic select-none">
+        {` … ${(l.text.length - MAX_TEXT).toLocaleString()} more characters`}
+      </span>
+    </>
+  );
 }
 
 function UnifiedLine({
@@ -738,7 +855,7 @@ function UnifiedLine({
       className={cn(
         "group/line absolute top-0 left-0 flex w-full items-center leading-5 whitespace-pre",
         lineBg(l, selected),
-        ctx.selectable && isChange(l) && "cursor-pointer",
+        ctx.selectable(l) && "cursor-pointer",
       )}
     >
       <span data-gutter className={GUTTER} style={gutter}>
@@ -747,7 +864,7 @@ function UnifiedLine({
       <span data-gutter className={GUTTER} style={gutter}>
         {l.newNo ?? ""}
       </span>
-      <Sign l={l} selected={selected} selectable={ctx.selectable} />
+      <Sign l={l} selected={selected} selectable={ctx.selectable(l)} />
       <span data-text className="pr-4 select-text">
         <Text l={l} ctx={ctx} />
       </span>
@@ -767,13 +884,13 @@ function SplitCell({ id, side, ctx }: { id: number; side: 0 | 1; ctx: CellContex
       className={cn(
         "group/line flex min-w-0 flex-1 items-center leading-5 whitespace-pre",
         lineBg(l, selected),
-        ctx.selectable && isChange(l) && "cursor-pointer",
+        ctx.selectable(l) && "cursor-pointer",
       )}
     >
       <span data-gutter className={GUTTER} style={{ width: `${ctx.model.gutter + 2}ch` }}>
         {no ?? ""}
       </span>
-      <Sign l={l} selected={selected} selectable={ctx.selectable} />
+      <Sign l={l} selected={selected} selectable={ctx.selectable(l)} />
       <span className="min-w-0 flex-1 overflow-hidden">
         <span
           data-text
