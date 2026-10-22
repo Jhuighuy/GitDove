@@ -113,6 +113,7 @@ const repoArgs = <const E extends readonly Schema.Top[]>(...elements: E) =>
 
 type DeepReadonly<T> = T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } : T;
 type Equals<A, B> =
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- exact type equality
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 
 const argSchemas = {
@@ -211,7 +212,7 @@ const decoders = new Map<string, (input: unknown) => Exit.Exit<unknown, Schema.S
 const decodeArgs = (method: ApiMethod, input: unknown) => {
   let decode = decoders.get(method);
   if (!decode) {
-    decode = Schema.decodeUnknownExit(argSchemas[method] as Schema.Codec<unknown, unknown>);
+    decode = Schema.decodeUnknownExit(argSchemas[method]);
     decoders.set(method, decode);
   }
   return decode(input);
@@ -651,7 +652,10 @@ export const registerIpc = (
         typeof requestId === "number" && CANCELLABLE.has(method) ? new AbortController() : null;
       if (controller) {
         let requests = inFlight.get(sender);
-        if (!requests) inFlight.set(sender, (requests = new Map()));
+        if (!requests) {
+          requests = new Map();
+          inFlight.set(sender, requests);
+        }
         requests.set(requestId as number, controller);
       }
       const started = performance.now();

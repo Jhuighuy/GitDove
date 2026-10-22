@@ -176,8 +176,8 @@ export const gitEnv = (): NodeJS.ProcessEnv => {
 export const REMOTE_ENV_SCRIPT = [
   `unset ${INHERITED_GIT_VARS.join(" ")}`,
   `if [ -n "\${LC_ALL-}" ]; then LC_CTYPE=$LC_ALL; export LC_CTYPE; fi; unset LC_ALL`,
-  `${Object.entries(remoteGitEnv)
+  Object.entries(remoteGitEnv)
     .map(([k, v]) => `${k}=${shellQuote(v)}`)
-    .join(" ")}`,
+    .join(" "),
   `export ${Object.keys(remoteGitEnv).join(" ")}`,
 ].join("\n");

@@ -197,7 +197,10 @@ export const ReposLive = Layer.effect(
           return Effect.succeed(ready.repo);
         }
         let waiting = claims.get(requested);
-        if (!waiting) claims.set(requested, (waiting = new Set()));
+        if (!waiting) {
+          waiting = new Set();
+          claims.set(requested, waiting);
+        }
         waiting.add(owner);
         const pending = opening.get(requested);
         if (pending) return Deferred.await(pending);
@@ -284,7 +287,10 @@ export const ReposLive = Layer.effect(
           if (entry.owners.size > 0) {
             for (const name of [id, ...idsOf(entry)]) {
               let set = releasedBy.get(name);
-              if (!set) releasedBy.set(name, (set = new Set()));
+              if (!set) {
+                set = new Set();
+                releasedBy.set(name, set);
+              }
               set.add(owner);
             }
             return updateVisibility(entry);
@@ -313,7 +319,10 @@ export const ReposLive = Layer.effect(
         if (visible) unhide(owner, [id]);
         else {
           let set = hiddenBy.get(id);
-          if (!set) hiddenBy.set(id, (set = new Set()));
+          if (!set) {
+            set = new Set();
+            hiddenBy.set(id, set);
+          }
           set.add(owner);
         }
         const entry = lookup(id);

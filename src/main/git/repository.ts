@@ -203,7 +203,9 @@ const notARepository = (path: string, e: CommandError): NotARepositoryError => {
           ? `${path} is owned by someone else, so Git refuses to open it (see "git config safe.directory")`
           : e.exitCode === 3
             ? `${path} is not a Git repository`
-            : `${path} cannot be opened${stderr ? `: ${stderr.split("\n")[0]}` : ""}`;
+            : stderr
+              ? `${path} cannot be opened: ${stderr.split("\n")[0]}`
+              : `${path} cannot be opened`;
   return new NotARepositoryError({ message: reason, path, stderr });
 };
 

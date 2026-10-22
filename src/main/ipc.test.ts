@@ -115,7 +115,7 @@ const fakeRepo = (location: RepoLocation, workTree = location.path) => {
 
 const services = {
   repo: fakeRepo({ kind: "local", path: "/work/repo" }),
-  getRepo: null as null | ((id: string) => Effect.Effect<Repository, never>),
+  getRepo: null as null | ((id: string) => Effect.Effect<Repository>),
   hosts: new Map<string, Host>(),
   connected: [] as string[],
   hidden: new Map<string, readonly string[]>(),
@@ -766,12 +766,12 @@ describe("registerIpc", () => {
   });
 
   it("reports interruptions and defects", async () => {
-    services.getRepo = () => Effect.interrupt as never;
+    services.getRepo = () => Effect.interrupt;
     expect(await invoke("repo.status", ["local:/x"])).toEqual({
       ok: false,
       error: { tag: "Interrupted", message: "Operation was cancelled" },
     });
-    services.getRepo = () => Effect.die(new Error("boom")) as never;
+    services.getRepo = () => Effect.die(new Error("boom"));
     const r = await invoke("repo.status", ["local:/x"]);
     expect(r).toMatchObject({ ok: false, error: { tag: "Defect" } });
     expect(!r.ok && r.error.message).toContain("boom");

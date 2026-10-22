@@ -26,5 +26,13 @@
     "typescript/no-unsafe-type-assertion": "off",
     "typescript/consistent-return": "off"
   },
-  "ignorePatterns": ["out", "dist", "release", "node_modules", "src/renderer/src/components/ui"]
+  "ignorePatterns": ["out", "dist", "release", "node_modules", "src/renderer/src/components/ui"],
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "typescript/unbound-method": "off"
+      }
+    }
+  ]
 }

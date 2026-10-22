@@ -169,7 +169,7 @@ const closeOrphanedMasters = (rootDir?: string) =>
     for (const entry of yield* list(root)) {
       if (!/^[0-9a-z]{1,6}$/.test(entry)) continue;
       try {
-        process.kill(parseInt(entry, 36), 0);
+        process.kill(Number.parseInt(entry, 36), 0);
         continue;
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== "ESRCH") continue;
@@ -405,8 +405,8 @@ export const loginShellCommand = (script: string): string => {
   let encoded = "";
   for (let i = 0; i < bytes.length; i++) {
     const b = bytes[i]!;
-    const plain = /[A-Za-z0-9_./-]/.test(String.fromCharCode(b)) && !(i === 0 && b === 0x2d);
-    encoded += plain ? String.fromCharCode(b) : `\\${b.toString(8).padStart(3, "0")}`;
+    const plain = /[A-Za-z0-9_./-]/.test(String.fromCodePoint(b)) && !(i === 0 && b === 0x2d);
+    encoded += plain ? String.fromCodePoint(b) : `\\${b.toString(8).padStart(3, "0")}`;
   }
   return `exec /bin/sh -c 'eval "$(printf "$0")"' '${encoded}'`;
 };
@@ -726,9 +726,7 @@ export const makeHostsLayer = (
       if (multiplex) yield* Effect.forkDetach(closeOrphanedMasters(options.controlDir));
       const masters = yield* RcMap.make({
         lookup: (host: string) =>
-          multiplex
-            ? acquireMaster(host, layer, options.controlDir)
-            : Effect.succeed(DIRECT as SshMaster),
+          multiplex ? acquireMaster(host, layer, options.controlDir) : Effect.succeed(DIRECT),
         idleTimeToLive: "10 minutes",
       });
       const backoff = new Backoff();

@@ -9,13 +9,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  AVATAR_SCHEME,
-  type AvatarProvider,
-  type AvatarRequest,
-  githubNoreply,
-  parseAvatarUrl,
-} from "@shared/avatars";
+import { AVATAR_SCHEME, type AvatarRequest, githubNoreply, parseAvatarUrl } from "@shared/avatars";
 import { app, net, protocol } from "electron";
 import log from "electron-log/main";
 import { Data, Effect, Semaphore } from "effect";
@@ -311,7 +305,7 @@ const resolve = ({ email, providers, size }: AvatarRequest) => {
       ),
     );
   }
-  for (const p of providers as readonly AvatarProvider[]) {
+  for (const p of providers) {
     if (p === "github") attempts.push(fromGithub(email, size));
     else attempts.push(fromGitlab(p.slice("gitlab:".length), email, size));
   }

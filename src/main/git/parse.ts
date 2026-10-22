@@ -259,7 +259,7 @@ export const parseStatus = (buf: string, limit = 20000): WorkingStatus => {
       if (x !== ".") staged.push(change(path, kindOf(x), x === "R" || x === "C" ? oldPath : null));
       // A submodule (`S<c><m><u>`) whose commit did not change only has changes inside it,
       // which staging it cannot take: they are committed in the submodule.
-      const subContentOnly = sub[0] === "S" && sub[1] === ".";
+      const subContentOnly = sub.startsWith("S.");
       if (y !== "." && !subContentOnly)
         unstaged.push(change(path, kindOf(y), y === "R" || y === "C" ? oldPath : null));
     } else if (type === "u") {
@@ -425,7 +425,7 @@ const headerPath = (s: string): string => {
     }
     const n = s[++i] ?? "";
     if (/[0-7]/.test(n)) {
-      bytes.push(parseInt(s.slice(i, i + 3), 8));
+      bytes.push(Number.parseInt(s.slice(i, i + 3), 8));
       i += 2;
     } else bytes.push(escapes[n] ?? n.charCodeAt(0));
   }
@@ -557,7 +557,7 @@ export const parseDiff = (
       }
       continue;
     }
-    if (line[0] === "\\") {
+    if (line.startsWith("\\")) {
       current.lines.push({ kind: "meta", oldNo: null, newNo: null, text: line.slice(2) });
       continue;
     }
@@ -580,11 +580,11 @@ export const parseDiff = (
     // A combined diff, seen from the first parent: a line is in the result unless a column
     // says `-` (it is in that parent only), and in the first parent unless its column says `+`.
     if (prefix.includes("-")) {
-      if (prefix[0] === "-") {
+      if (prefix.startsWith("-")) {
         current.lines.push({ kind: "del", oldNo: oldNo++, newNo: null, text });
         current.seenOld++;
       }
-    } else if (prefix[0] === "+") {
+    } else if (prefix.startsWith("+")) {
       current.lines.push({ kind: "add", oldNo: null, newNo: newNo++, text });
       current.seenNew++;
     } else {
