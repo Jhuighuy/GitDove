@@ -52,7 +52,6 @@ const picked = (i: number, parents = [`p${i}`]): PickedCommit => ({
     authorName: "Ada",
     authorEmail: "ada@example.com",
     authorTime: 1_700_000_000,
-    committerTime: 0,
     lane: 0,
     color: 0,
     edges: [],

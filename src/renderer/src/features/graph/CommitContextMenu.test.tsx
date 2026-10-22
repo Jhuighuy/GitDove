@@ -64,7 +64,6 @@ const row: GraphRow = {
   authorName: "A",
   authorEmail: "a@example.com",
   authorTime: 0,
-  committerTime: 0,
   lane: 0,
   color: 0,
   edges: [],

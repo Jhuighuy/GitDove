@@ -265,3 +265,27 @@ it("moves tabs and persists the order", async () => {
   s().moveTab(before[0]!.key, 0);
   expect(s().tabs).toBe(before);
 });
+
+it("keeps a repository the active tab shows out of the background", async () => {
+  const invoke = vi.fn(async (..._args: unknown[]) => ({ ok: true, value: undefined }));
+  vi.stubGlobal("window", { ...globalThis.window, gitdove: { invoke } });
+  try {
+    // No tab in the background to begin with.
+    useTabs.setState({ tabs: [{ key: "x", repo: C }], active: "x" });
+    useTabs.setState({
+      tabs: [
+        { key: "a1", repo: A },
+        { key: "a2", repo: A },
+        { key: "b", repo: B },
+      ],
+      active: "a1",
+    });
+    const hidden = () =>
+      invoke.mock.calls
+        .filter(([m, , visible]) => m === "repo.setVisible" && visible === false)
+        .map(([, repo]) => repo);
+    expect(hidden()).toEqual([B]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

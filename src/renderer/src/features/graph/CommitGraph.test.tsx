@@ -92,7 +92,6 @@ const commit = (i: number, extra: Partial<GraphRow> = {}): GraphRow => ({
   authorName: `Author ${i}`,
   authorEmail: `a${i}@example.com`,
   authorTime: 1_700_000_000 - i * 3600,
-  committerTime: 0,
   lane: 0,
   color: 0,
   edges: [0, 1, 0, 2, 0],

@@ -159,8 +159,10 @@ export const useTabs = create<TabsState>()((set, get) => {
   };
 });
 
-// Repositories in background tabs refresh when shown, not on every change.
+// Repositories in background tabs refresh when shown, not on every change. A repository that
+// the active tab shows is not in the background, whatever other tabs show it too.
 useTabs.subscribe((s, prev) => {
   if (s.tabs === prev.tabs && s.active === prev.active) return;
-  setBackgroundRepos(s.tabs.flatMap((t) => (t.repo && t.key !== s.active ? [t.repo] : [])));
+  const shown = s.tabs.find((t) => t.key === s.active)?.repo;
+  setBackgroundRepos(s.tabs.flatMap((t) => (t.repo && t.repo !== shown ? [t.repo] : [])));
 });
