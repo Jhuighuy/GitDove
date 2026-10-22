@@ -120,9 +120,9 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
                 .toString()
                 .trim(),
             );
-            const before = yield* waitGraph(repo, stale.version, (info) => info.count === commits);
+            const before = yield* waitGraph(repo, stale.version, (next) => next.count === commits);
             repo.setHiddenRefs(["refs/heads/side"]);
-            const after = yield* waitGraph(repo, before.version, (info) => info.count < commits);
+            const after = yield* waitGraph(repo, before.version, (next) => next.count < commits);
             expect(after.count).toBe(before.count - 1);
             repo.setHiddenRefs(["refs/heads/"]); // HEAD stays visible
             expect((yield* waitGraph(repo, after.version)).count).toBeGreaterThan(0);
