@@ -148,6 +148,19 @@ describe("Repos", () => {
     expect(fake.watchers).toHaveLength(1);
   });
 
+  it("finishes an open that one of its waiters gave up on", async () => {
+    const { run } = repos();
+    const [gaveUp, repo] = await run((r) =>
+      Effect.all(
+        [r.get("local:/repo", 1).pipe(Effect.timeoutOption("5 millis")), r.get("local:/repo", 1)],
+        { concurrency: "unbounded" },
+      ),
+    );
+    expect(gaveUp._tag).toBe("None");
+    expect(repo.id).toBe("local:/repo");
+    expect(fake.open).toHaveBeenCalledTimes(1);
+  });
+
   it("maps sub-directories to the repository they belong to", async () => {
     const { run } = repos();
     const sub = await run((r) => r.open(local("/repo/sub"), 1));
