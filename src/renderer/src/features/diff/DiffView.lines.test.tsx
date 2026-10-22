@@ -142,7 +142,7 @@ const buttonByText = (label: string) => {
 const status = () => container.textContent?.match(/\d+ lines? selected/)?.[0] ?? null;
 const selectedIds = () =>
   [...container.querySelectorAll<HTMLElement>("[data-line]")]
-    .filter((el) => el.className.includes("bg-sky-500/25"))
+    .filter((el) => el.className.includes("bg-primary/25"))
     .map((el) => Number(el.dataset.line));
 
 it("shows the path, the target and lines with syntax and word highlighting", async () => {
@@ -157,8 +157,8 @@ it("shows the path, the target and lines with syntax and word highlighting", asy
   expect(first?.textContent).toBe("keep");
   expect(first?.style.color).toBe("rgb(1, 0, 0)");
   // ...and the changed word of a replaced line is emphasized on both sides.
-  expect(line(1).querySelector(".bg-red-500\\/30")?.textContent).toBe("1");
-  expect(line(3).querySelector(".bg-emerald-500\\/30")?.textContent).toBe("2");
+  expect(line(1).querySelector(".bg-destructive\\/30")?.textContent).toBe("1");
+  expect(line(3).querySelector(".bg-success\\/30")?.textContent).toBe("2");
   // A deletion without a counterpart has no emphasis.
   expect(line(2).querySelector("[class*=500\\/30]")).toBeNull();
   // Visible lines of both sides are requested from the highlighter.

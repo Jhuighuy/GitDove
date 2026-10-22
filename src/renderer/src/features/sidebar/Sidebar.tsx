@@ -131,7 +131,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
     return shown === names.length ? (
       <span>{names.length}</span>
     ) : (
-      <span className="font-medium text-sky-500">
+      <span className="font-medium text-primary">
         {shown}/{names.length}
       </span>
     );
@@ -433,12 +433,12 @@ export function Sidebar({ repo }: { repo: RepoId }) {
         <div className="flex h-5 items-center justify-between px-1 text-[11px]">
           <span className="text-muted-foreground">
             Viewing{" "}
-            <span className={cn("tabular-nums", vis.anyHidden && "font-medium text-sky-500")}>
+            <span className={cn("tabular-nums", vis.anyHidden && "font-medium text-primary")}>
               {visibleTotal}/{all.length}
             </span>
           </span>
           {vis.anyHidden && (
-            <button type="button" className="text-sky-500 hover:underline" onClick={vis.showAll}>
+            <button type="button" className="text-primary hover:underline" onClick={vis.showAll}>
               Show all
             </button>
           )}

@@ -4,14 +4,14 @@ import { basename, dirname } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const KIND: Record<ChangeKind, { letter: string; className: string; label: string }> = {
-  added: { letter: "A", className: "text-emerald-500", label: "Added" },
-  untracked: { letter: "U", className: "text-emerald-500", label: "Untracked" },
-  modified: { letter: "M", className: "text-amber-500", label: "Modified" },
-  deleted: { letter: "D", className: "text-red-500", label: "Deleted" },
-  renamed: { letter: "R", className: "text-sky-500", label: "Renamed" },
-  copied: { letter: "C", className: "text-sky-500", label: "Copied" },
-  typechange: { letter: "T", className: "text-violet-500", label: "Type changed" },
-  conflicted: { letter: "!", className: "text-red-500", label: "Conflicted" },
+  added: { letter: "A", className: "text-success", label: "Added" },
+  untracked: { letter: "U", className: "text-success", label: "Untracked" },
+  modified: { letter: "M", className: "text-warning", label: "Modified" },
+  deleted: { letter: "D", className: "text-destructive", label: "Deleted" },
+  renamed: { letter: "R", className: "text-info", label: "Renamed" },
+  copied: { letter: "C", className: "text-info", label: "Copied" },
+  typechange: { letter: "T", className: "text-info", label: "Type changed" },
+  conflicted: { letter: "!", className: "text-destructive", label: "Conflicted" },
 };
 
 export function ChangeBadge({ kind }: { kind: ChangeKind }) {
@@ -82,8 +82,8 @@ export const FileList = memo(function FileList({
             )}
             {(f.additions !== null || f.deletions !== null) && (
               <span className="shrink-0 font-mono text-[10px] tabular-nums">
-                {f.additions ? <span className="text-emerald-500">+{f.additions}</span> : null}{" "}
-                {f.deletions ? <span className="text-red-500">-{f.deletions}</span> : null}
+                {f.additions ? <span className="text-success">+{f.additions}</span> : null}{" "}
+                {f.deletions ? <span className="text-destructive">-{f.deletions}</span> : null}
               </span>
             )}
           </li>

@@ -105,8 +105,8 @@ export function WipPanel({ repo }: { repo: RepoId }) {
       </div>
 
       {info && info.state !== "clean" && (
-        <div className="flex items-center gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs">
-          <IconAlertTriangle className="size-4 shrink-0 text-amber-500" />
+        <div className="flex items-center gap-2 border-b bg-warning/10 px-3 py-2 text-xs">
+          <IconAlertTriangle className="size-4 shrink-0 text-warning" />
           <span className="flex-1 capitalize">{info.state.replace("-", " ")} in progress</span>
           <BusyHint reason={blocked} className="gap-2">
             <Button

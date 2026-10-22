@@ -1,6 +1,13 @@
 import { join } from "node:path";
 import { type EventName, type Events, IPC_EVENT, type MenuCommand } from "@shared/ipc";
-import { app, BrowserWindow, Menu, type MenuItemConstructorOptions, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  type MenuItemConstructorOptions,
+  nativeTheme,
+  shell,
+} from "electron";
 import log from "electron-log/main";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import dockIcon from "../../build/icon.png?asset";
@@ -142,7 +149,8 @@ const createWindow = () => {
     minWidth: 900,
     minHeight: 560,
     show: false,
-    backgroundColor: "#18181b",
+    // The theme's background, so the window does not flash before the renderer paints.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0c0a09" : "#ffffff",
     title: "GitDove",
     // macOS takes the icon from the app bundle; elsewhere set it explicitly.
     ...(isMac ? {} : { icon: windowIcon }),
@@ -150,7 +158,7 @@ const createWindow = () => {
       ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 13 } }
       : {
           titleBarStyle: "hidden" as const,
-          titleBarOverlay: { color: "#00000000", symbolColor: "#a1a1aa", height: 40 },
+          titleBarOverlay: { color: "#00000000", symbolColor: "#a6a09b", height: 40 },
         }),
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.cjs"),

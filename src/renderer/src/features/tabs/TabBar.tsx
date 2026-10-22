@@ -88,7 +88,7 @@ export function TabBar() {
             }}
           >
             {loc?.kind === "ssh" ? (
-              <IconServer className="size-3.5 shrink-0 text-sky-400" />
+              <IconServer className="size-3.5 shrink-0 text-primary" />
             ) : (
               <IconFolder className="size-3.5 shrink-0 opacity-70" />
             )}

@@ -42,7 +42,7 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
           <CopyButton
             text={location.host}
             what="Host name copied"
-            className="text-sky-500"
+            className="text-primary"
             title={`${location.host} (click to copy)`}
           >
             <IconServer />
@@ -90,7 +90,7 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
         )}
         {appNotice && <NoticeView notice={appNotice} />}
         {update && (
-          <span className="flex shrink-0 items-center gap-1.5 text-sky-500">
+          <span className="flex shrink-0 items-center gap-1.5 text-primary">
             GitDove {update} is ready
             <Button
               variant="outline"
@@ -156,7 +156,7 @@ function GraphError({ repo, graph, error }: { repo: RepoId; graph?: GraphInfo; e
       .catch(() => {});
   };
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-amber-500" title={error}>
+    <span className="flex min-w-0 items-center gap-1.5 text-warning" title={error}>
       <IconAlertTriangle />
       <span className="truncate tabular-nums">
         {graphProblem(graph)}: {error}
@@ -199,7 +199,7 @@ function BusyIndicator({ repo, busy }: { repo: RepoId; busy: Busy }) {
 function NoticeView({ notice }: { notice: Notice }) {
   return (
     <output className="flex min-w-0 items-center gap-1" title={notice.text}>
-      {notice.kind === "success" ? <IconCheck className="text-emerald-500" /> : <IconInfoCircle />}
+      {notice.kind === "success" ? <IconCheck className="text-success" /> : <IconInfoCircle />}
       <span className="truncate">{notice.text}</span>
     </output>
   );

@@ -101,8 +101,8 @@ export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
           {data.files.length} {data.files.length === 1 ? "file" : "files"} changed
         </span>
         <span className="ml-auto font-mono text-[11px] tabular-nums">
-          <span className="text-emerald-500">+{additions}</span>{" "}
-          <span className="text-red-500">-{deletions}</span>
+          <span className="text-success">+{additions}</span>{" "}
+          <span className="text-destructive">-{deletions}</span>
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
