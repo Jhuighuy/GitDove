@@ -440,7 +440,10 @@ export const handleAvatarProtocol = () =>
     const req = parseAvatarUrl(request.url);
     if (!req) return new Response(null, { status: 400 });
     const img = await lookup(req);
-    if (!img) return new Response(null, { status: 404 });
+    // Not a 404, which Chromium logs for every image; an empty body fails to load all the same.
+    if (!img) {
+      return new Response(null, { status: 204, headers: { "cache-control": "max-age=600" } });
+    }
     return new Response(img.bytes, {
       headers: { "content-type": img.type, "cache-control": "max-age=86400" },
     });

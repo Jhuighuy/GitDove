@@ -258,7 +258,7 @@ describe("avatar lookup", () => {
       [gravatar("a@x.org")]: png("gravatar"),
     });
     expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).body).toBe("png:gravatar");
-    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
+    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(204);
     expect(fetched().filter((u) => u.includes("/api/v4/"))).toHaveLength(1);
     expect(log.warn).toHaveBeenCalledWith(
       "avatars: https://gitlab.corp.example is GitLab but refuses anonymous avatar lookups " +
@@ -270,8 +270,8 @@ describe("avatar lookup", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     await load();
     serve({ "https://gitlab.corp.example/": () => Promise.reject(new TypeError("offline")) });
-    expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
-    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
+    expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(204);
+    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(204);
     expect(fetched().filter((u) => u.includes("gitdove-probe"))).toHaveLength(1);
     // Nothing was cached, so the same avatar is asked for again once GitLab is up.
     vi.advanceTimersByTime(61_000);
@@ -339,7 +339,13 @@ describe("avatar lookup", () => {
         headers: { "content-type": "text/plain" },
       }),
     });
-    expect((await request("a@x.org")).status).toBe(404);
+    // An empty answer: the image fails to load (showing initials) without an error logged.
+    expect(await request("a@x.org")).toEqual({
+      status: 204,
+      type: null,
+      cache: "max-age=600",
+      body: null,
+    });
   });
 
   it("tries the sources in order and stops at the first avatar", async () => {
@@ -381,13 +387,13 @@ describe("avatar cache", () => {
     const start = Date.now();
     await load();
     serve({});
-    expect((await request("miss@x.org")).status).toBe(404);
+    expect((await request("miss@x.org")).status).toBe(204);
     serve({ "https://www.gravatar.com/": png("g") });
     expect((await request("hit@x.org")).status).toBe(200);
     expect(fetch).toHaveBeenCalledTimes(2);
 
     vi.setSystemTime(start + 47 * 3600 * 1000);
-    expect((await request("miss@x.org")).status).toBe(404);
+    expect((await request("miss@x.org")).status).toBe(204);
     expect(fetch).toHaveBeenCalledTimes(2);
 
     vi.setSystemTime(start + 49 * 3600 * 1000);
@@ -422,11 +428,11 @@ describe("avatar cache", () => {
         return png("g");
       },
     });
-    expect((await request("a@x.org")).status).toBe(404);
-    expect((await request("a@x.org")).status).toBe(404);
+    expect((await request("a@x.org")).status).toBe(204);
+    expect((await request("a@x.org")).status).toBe(204);
     // A host that is unavailable or rate-limits is left alone for a while.
     vi.advanceTimersByTime(61_000);
-    expect((await request("a@x.org")).status).toBe(404);
+    expect((await request("a@x.org")).status).toBe(204);
     vi.advanceTimersByTime(61_000);
     expect((await request("a@x.org")).body).toBe("png:g");
     expect(existsSync(join(electron.userData, "avatars"))).toBe(true);
@@ -438,7 +444,7 @@ describe("avatar cache", () => {
       [GITHUB_DEFAULT]: png("identicon"),
       "https://avatars.githubusercontent.com/u/e?email=": status(502),
     });
-    expect((await request("a@x.org", ["github"])).status).toBe(404);
+    expect((await request("a@x.org", ["github"])).status).toBe(204);
     serve({
       [GITHUB_DEFAULT]: png("identicon"),
       "https://avatars.githubusercontent.com/u/e?email=": png("late"),
@@ -453,7 +459,7 @@ describe("avatar cache", () => {
     const pending = request("a@x.org");
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(8000);
-    expect((await pending).status).toBe(404);
+    expect((await pending).status).toBe(204);
     const signal = fetch.mock.calls[0]![1]!.signal!;
     expect(signal.aborted).toBe(true);
     // Not cached as a miss.
@@ -472,7 +478,7 @@ describe("avatar cache", () => {
         return new Response(body, { headers: { "content-type": "image/png" } });
       },
     });
-    expect((await request("a@x.org")).status).toBe(404);
+    expect((await request("a@x.org")).status).toBe(204);
     expect((await request("a@x.org")).body).toBe("png:g");
   });
 
@@ -487,7 +493,7 @@ describe("avatar cache", () => {
     const pending = request("a@x.org");
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(8000);
-    expect((await pending).status).toBe(404);
+    expect((await pending).status).toBe(204);
     expect(cancelled).toBe(true);
   });
 
@@ -498,14 +504,14 @@ describe("avatar cache", () => {
       "https://www.gravatar.com/": () =>
         new Response(big, { headers: { "content-type": "image/png" } }),
     });
-    expect((await request("a@x.org")).status).toBe(404);
+    expect((await request("a@x.org")).status).toBe(204);
     serve({
       "https://www.gravatar.com/": () =>
         new Response("x", {
           headers: { "content-type": "image/png", "content-length": "9999999" },
         }),
     });
-    expect((await request("b@x.org")).status).toBe(404);
+    expect((await request("b@x.org")).status).toBe(204);
   });
 
   it("leaves a rate-limiting host alone for as long as it asks", async () => {
@@ -517,8 +523,8 @@ describe("avatar cache", () => {
         headers: { "retry-after": "300" },
       }),
     });
-    expect((await request("a@x.org")).status).toBe(404);
-    expect((await request("b@x.org")).status).toBe(404);
+    expect((await request("a@x.org")).status).toBe(204);
+    expect((await request("b@x.org")).status).toBe(204);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(log.warn).toHaveBeenCalledWith(
       "avatars: www.gravatar.com answered HTTP 429; leaving it alone for 300s",
