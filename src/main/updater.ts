@@ -135,6 +135,13 @@ export async function checkForUpdatesFromMenu() {
         detail: `${current} GitDove will offer to restart once the update is ready.`,
       });
       return;
+    case "checking":
+      // The check timed out (see `check`), but goes on.
+      await dialog.showMessageBox({
+        message: "Still checking for updates",
+        detail: `${current} The update server has not answered yet; GitDove will offer to restart if it finds an update.`,
+      });
+      return;
     case "error":
       await dialog.showMessageBox({
         type: "error",

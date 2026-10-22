@@ -121,6 +121,22 @@ describe("updater on macOS", () => {
     }
   });
 
+  it("says the check goes on, not that GitDove is up to date, when it times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const { checkForUpdatesFromMenu } = await load("darwin");
+      const done = checkForUpdatesFromMenu();
+      sparkle.instance?.onStatus({ kind: "checking" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await done;
+      expect(electron.dialog.showMessageBox).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Still checking for updates" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("answers a check at once when the helper is gone", async () => {
     const { updater } = await load("darwin");
     sparkle.instance?.onStatus({ kind: "error", message: "Updater stopped unexpectedly (1)" });
