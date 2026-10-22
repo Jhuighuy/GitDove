@@ -34,7 +34,7 @@ export const queryClient = new QueryClient({
  * git commands. Without a bridge that can cancel (e.g. in component tests), a plain request.
  */
 const read = <M extends CancellableMethod>(signal: AbortSignal, method: M, ...args: ApiArgs<M>) =>
-  typeof window.gitdove?.invokeCancellable === "function"
+  typeof globalThis.window?.gitdove?.invokeCancellable === "function"
     ? apiWithSignal(signal, method, ...args)
     : api(method, ...args);
 
@@ -357,7 +357,7 @@ export const refreshRepo = (
 /** Tells the main process whether a repository is shown, so hidden ones do little work there. */
 const setVisible = async (repo: RepoId, visible: boolean) => {
   // Straight through the bridge: a hint, not an operation; there is no error to show.
-  await window.gitdove?.invoke("repo.setVisible", repo, visible).catch(() => {});
+  await globalThis.window?.gitdove?.invoke("repo.setVisible", repo, visible).catch(() => {});
 };
 
 /**
