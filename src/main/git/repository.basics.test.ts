@@ -78,6 +78,25 @@ describe.skipIf(noShell).each(targets)(
       expect(await head()).toBe(main);
     });
 
+    it("words merge messages after short names, like git", async () => {
+      await sh("git branch x HEAD~1 && git checkout -q x && git commit -q --allow-empty -m x1");
+      await sh("git tag v1 && git push -q origin x && git checkout -q main");
+      const subjectOf = async (ref: string) => {
+        await run(t.repo.merge(ref, { noFf: true }));
+        const subject = await sh("git log -1 --format=%s");
+        await sh("git reset -q --hard HEAD~1");
+        return subject;
+      };
+      expect(await subjectOf("refs/heads/x")).toBe("Merge branch 'x'");
+      expect(await subjectOf("refs/remotes/origin/x")).toBe(
+        "Merge remote-tracking branch 'origin/x'",
+      );
+      expect(await subjectOf("refs/tags/v1")).toBe("Merge tag 'v1'");
+      // The short name would mean the tag: the branch keeps its full name.
+      await sh("git tag x HEAD~1");
+      expect(await subjectOf("refs/heads/x")).toBe("Merge branch 'refs/heads/x'");
+    });
+
     it("manages branches and upstreams", async () => {
       await run(t.repo.createBranch("topic", "HEAD~1", false));
       expect((await branchRef("topic"))?.hash).toBe(await sh("git rev-parse HEAD~1"));

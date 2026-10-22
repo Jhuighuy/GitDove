@@ -1596,17 +1596,32 @@ export class Repository {
   /** Merges a revision; pass full ref names (`refs/heads/x`, `refs/tags/x`) to avoid ambiguity. */
   merge(ref: string, opts: { ffOnly?: boolean; noFf?: boolean }) {
     return this.write(
-      validateRev(ref).pipe(
-        Effect.andThen(
-          this.run([
-            "merge",
-            "--no-edit",
-            ...(opts.ffOnly ? ["--ff-only"] : []),
-            ...(opts.noFf ? ["--no-ff"] : []),
-            ref,
-          ]),
-        ),
-      ),
+      Effect.gen({ self: this }, function* () {
+        yield* validateRev(ref);
+        yield* this.run([
+          "merge",
+          "--no-edit",
+          ...(opts.ffOnly ? ["--ff-only"] : []),
+          ...(opts.noFf ? ["--no-ff"] : []),
+          yield* this.mergeName(ref),
+        ]);
+      }),
+    );
+  }
+
+  /**
+   * The name to merge a ref by. Git words its message after the name it is given ("Merge branch
+   * 'refs/heads/x'"), so a full name is shortened when the short one means the same ref.
+   */
+  private mergeName(ref: string): Effect.Effect<string> {
+    const prefix = ["refs/heads/", "refs/remotes/", "refs/tags/"].find((p) => ref.startsWith(p));
+    const short = prefix ? ref.slice(prefix.length) : "";
+    if (!short || short.startsWith("-")) return Effect.succeed(ref);
+    return this.gitText(["rev-parse", "--verify", "-q", "--symbolic-full-name", short], {
+      okCodes: [0, 1],
+    }).pipe(
+      Effect.map((full) => (full.trim() === ref ? short : ref)),
+      Effect.orElseSucceed(() => ref),
     );
   }
 
