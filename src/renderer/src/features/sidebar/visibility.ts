@@ -13,16 +13,11 @@ import {
   stashKey,
   toggleHidden,
 } from "@shared/visibility";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { keys, useRefs } from "@/lib/queries";
-
-const hiddenKey = (repo: RepoId) => [...keys.repo(repo), "hidden"] as const;
-
-export const useHiddenRefs = (repo: RepoId) =>
-  useQuery({ queryKey: hiddenKey(repo), queryFn: () => api("repo.hiddenRefs", repo) });
+import { keys, useHiddenRefs, useRefs } from "@/lib/queries";
 
 /** All visibility-toggleable names in a repository (refs and stashes). */
 export const allVisibilityNames = (refs: RefsSnapshot | undefined): string[] => [
@@ -158,10 +153,10 @@ export const useVisibility = (repo: RepoId) => {
 
   const save = useCallback(
     (next: string[]) => {
-      client.setQueryData(hiddenKey(repo), next);
+      client.setQueryData(keys.hidden(repo), next);
       api("repo.setHiddenRefs", repo, next).catch((e: unknown) => {
         toast.error("Could not update graph visibility", { description: String(e) });
-        void client.invalidateQueries({ queryKey: hiddenKey(repo) });
+        void client.invalidateQueries({ queryKey: keys.hidden(repo) });
       });
     },
     [client, repo],
