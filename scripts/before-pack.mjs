@@ -9,8 +9,8 @@ function hasIconCompiler() {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10000,
     });
-    const major = version.match(
-      /<key>short-bundle-version<\/key>\s*<string>(\d+)(?:\.\d+)*<\/string>/,
+    const major = /<key>short-bundle-version<\/key>\s*<string>(\d+)(?:\.\d+)*<\/string>/.exec(
+      version,
     )?.[1];
     return Number(major) >= 26;
   } catch {

@@ -32,19 +32,19 @@ const write = (path, data) => {
 // Icon Composer supplies its own full-bleed background and system mask. Map the
 // existing 824px tile to a 1024px canvas, without baking in the desktop margin.
 // Keep the dove's facets on one glass surface so they retain their paper folds.
-const defs = source.match(/<defs>([\s\S]*?)<\/defs>/)[1];
-const artworkTransform = source.match(/<g transform="([^"]+)"/)[1];
+const defs = /<defs>([\s\S]*?)<\/defs>/.exec(source)[1];
+const artworkTransform = /<g transform="([^"]+)"/.exec(source)[1];
 const layer = (names) => {
   const groups = names
     .map((name) => {
-      const match = source.match(new RegExp(`<g id="${name}"[\\s\\S]*?<\\/g>`));
+      const match = new RegExp(String.raw`<g id="${name}"[\s\S]*?</g>`).exec(source);
       if (!match) throw new Error(`Missing icon group: ${name}`);
       return match[0];
     })
     .join("\n");
   const gradients = [...defs.matchAll(/<linearGradient\b[\s\S]*?<\/linearGradient>/g)]
     .map(([gradient]) => gradient)
-    .filter((gradient) => groups.includes(`url(#${gradient.match(/id="([^"]+)"/)[1]})`))
+    .filter((gradient) => groups.includes(`url(#${/id="([^"]+)"/.exec(gradient)[1]})`))
     .join("\n");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <!-- Generated from build/icon.svg by npm run icons. -->
