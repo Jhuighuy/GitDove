@@ -34,8 +34,10 @@ import { completion, MAX_STDERR, type SpawnResult, type Stdin } from "./spawn";
  *
  * A frame has exactly the length its header states (`dd conv=sync` pads short reads), so
  * whatever else writes to a command's output files (say, something it left running in the
- * background), the stream stays in sync. Output after the command exited is not sent; if the
- * files shrank meanwhile, the command fails with `F output`.
+ * background), the stream stays in sync. Output written after the command exited is not
+ * waited for, though a streamed command may get some of it (a frame measured after the exit,
+ * before its report reached the writer); if the files shrank meanwhile, the command fails
+ * with `F output`.
  *
  * The runner greets with `@GDR-HELLO 2\n` once it is ready; anything before that (e.g. a
  * chatty `.bashrc`) is ignored. The greeting starts a line of its own, also after output
