@@ -15,6 +15,20 @@ describe.skipIf(noShell).each(targets)("Repository graph on %s", (hostId) => {
   const t = useRepoFixture(hostId);
   const { run, fails, sh, head } = t;
 
+  it("refuses to open a git directory as a repository", async () => {
+    const e = await fails(
+      Repository.open(
+        t.host,
+        { kind: "local", path: `${t.dir}/.git` },
+        {
+          onGraphProgress: () => {},
+        },
+      ),
+    );
+    expect(e).toMatchObject({ _tag: "NotARepositoryError" });
+    expect(e.message).toMatch(/Git directory/);
+  });
+
   it("serves graph rows by version", async () => {
     let g = await run(t.repo.graphInfo());
     while (!g.complete) g = await run(t.repo.graphInfo());
@@ -28,6 +42,59 @@ describe.skipIf(noShell).each(targets)("Repository graph on %s", (hostId) => {
     expect((await fails(t.repo.findCommit(g.version + 1, rows[0]!.hash)))._tag).toBe(
       "StaleGraphError",
     );
+    expect(await run(t.repo.graphHashes(g.version, 0, 100_000))).toEqual(rows.map((r) => r.hash));
+    expect(await run(t.repo.graphHashes(g.version, -5, 1))).toEqual([rows[0]!.hash]);
+    expect((await fails(t.repo.graphHashes(g.version, 0.5, 1)))._tag).toBe("InvalidInputError");
+  });
+
+  /** Waits for a complete graph, newer than `after` if given. */
+  const complete = async (repo: Repository, after = 0) => {
+    for (;;) {
+      const g = await run(repo.graphInfo());
+      if (g.complete && g.version > after) return g;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+
+  it("reloads the graph only when refs change", async () => {
+    const events: GraphInfo[] = [];
+    const repo = await t.open(t.dir, { onGraphProgress: (_, info) => void events.push(info) });
+    await sh("git branch other HEAD~1");
+    const g = await complete(repo);
+    const settled = events.length;
+
+    // A fetch that brings nothing, and checkouts within the graph, keep it.
+    await run(repo.fetch("origin"));
+    repo.invalidateGraph();
+    await sh("git checkout -q other");
+    repo.invalidateGraph();
+    await sh("git checkout -q --detach main");
+    repo.invalidateGraph();
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(await run(repo.graphInfo())).toEqual(g);
+    expect(events).toHaveLength(settled);
+
+    // A new commit (here on a detached HEAD, which no ref reaches) does change it.
+    await sh("git commit -q --allow-empty -m detached");
+    repo.invalidateGraph();
+    const next = await complete(repo, g.version);
+    expect(next.count).toBe(3);
+    // Moving away from that commit drops it again.
+    await sh("git checkout -q main");
+    repo.invalidateGraph();
+    expect((await complete(repo, next.version)).count).toBe(2);
+  });
+
+  it("never reuses graph versions, even in a reopened repository", async () => {
+    const first = await complete(t.repo);
+    const again = await complete(await t.open(t.dir));
+    expect(again.version).toBeGreaterThan(first.version);
+  });
+
+  it("shows an empty graph for a repository without commits", async () => {
+    const fresh = `${t.root}/empty${t.n}`;
+    await sh(`mkdir '${fresh}' && git -C '${fresh}' init -q -b main`, t.root);
+    expect(await complete(await t.open(fresh))).toMatchObject({ count: 0, complete: true });
   });
 
   it("finds branch owners and filters the graph by contributor", async () => {

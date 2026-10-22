@@ -35,6 +35,23 @@ describe.skipIf(noShell).each(targets)("Repository conflicts on %s", (hostId) =>
       expect(await sh("git log -1 --format=%p")).toContain(" ");
     });
 
+    it("shows a conflicted file against ours, read-only", async () => {
+      await diverge();
+      await fails(t.repo.merge("side", {}));
+      expect((await run(t.repo.status())).conflicted).toMatchObject([
+        { path: "f.txt", conflict: "UU" },
+      ]);
+      const working = await run(t.repo.diff({ kind: "unstaged", path: "f.txt" }));
+      expect(working.readOnly).toBe("conflict");
+      const lines = working.hunks.flatMap((h) => h.lines.map((l) => [l.kind, l.text]));
+      expect(lines).toContainEqual(["add", "<<<<<<< HEAD"]);
+      expect(lines).toContainEqual(["context", "main"]);
+      expect(lines).toContainEqual(["add", "side"]);
+      expect(working.hunks[0]!.oldStart).toBe(1);
+      const staged = await run(t.repo.diff({ kind: "staged", path: "f.txt" }));
+      expect(staged).toMatchObject({ hunks: [], readOnly: "conflict" });
+    });
+
     it("aborts and continues a rebase", async () => {
       await diverge();
       await fails(t.repo.rebase("side"));

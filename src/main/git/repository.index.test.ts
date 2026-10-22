@@ -26,6 +26,55 @@ describe.skipIf(noShell).each(targets)("Repository index and diffs on %s", (host
     expect((await fails(t.repo.stashPop(0)))._tag).toBe("CommandError");
   });
 
+  it("acts on stashes by hash even after the list changed", async () => {
+    await sh("echo one > f.txt");
+    await run(t.repo.stash("first", false));
+    const [first] = (await run(t.repo.refs())).stashes;
+    // Another tool pushes a stash: "first" is now stash@{1}.
+    await sh("echo two > f.txt && git stash -q");
+    await run(t.repo.stashApply(0, first!.hash));
+    expect(await sh("cat f.txt")).toBe("one");
+    await run(t.repo.discard(["f.txt"], []));
+    await run(t.repo.stashDrop(0, first!.hash));
+    const left = (await run(t.repo.refs())).stashes;
+    expect(left.map((s) => s.message)).not.toContainEqual(expect.stringContaining("first"));
+    expect(left).toHaveLength(1);
+    // A stash that is gone is not mistaken for another.
+    expect((await fails(t.repo.stashPop(0, first!.hash)))._tag).toBe("InvalidInputError");
+
+    // A branch from a stash starts at the commit the stash was made on.
+    await sh("git commit -q --allow-empty -m three");
+    await run(t.repo.stashBranch("from-stash", 0, left[0]!.hash));
+    expect(await sh("git rev-parse --abbrev-ref HEAD")).toBe("from-stash");
+    expect(await sh("git log -1 --format=%s")).toBe("two");
+    expect(await sh("cat f.txt")).toBe("two");
+    expect((await run(t.repo.refs())).stashes).toEqual([]);
+  });
+
+  it("treats paths as names, never as patterns", async () => {
+    await sh(
+      "mkdir pages && echo a > 'pages/[id].tsx' && echo b > pages/i.tsx && echo z > z && " +
+        "echo c > ':z' && git add -A && git commit -qm pages && " +
+        "echo A >> 'pages/[id].tsx' && echo B >> pages/i.tsx && echo Z >> z && echo C >> ':z' && " +
+        "touch 'x[ab].log' xa.log xb.log",
+    );
+    await run(t.repo.stage(["pages/[id].tsx", ":z"]));
+    expect((await run(t.repo.status())).staged.map((f) => f.path)).toEqual([
+      ":z",
+      "pages/[id].tsx",
+    ]);
+    const diff = await run(t.repo.diff({ kind: "unstaged", path: "pages/[id].tsx" }));
+    expect(diff.hunks).toEqual([]);
+    expect(added(await run(t.repo.diff({ kind: "staged", path: "pages/[id].tsx" })))).toEqual([
+      "A",
+    ]);
+    await run(t.repo.unstage(["pages/[id].tsx"]));
+    await run(t.repo.discard(["pages/[id].tsx"], ["x[ab].log"]));
+    const st = await run(t.repo.status());
+    expect(st.staged.map((f) => f.path)).toEqual([":z"]);
+    expect(st.unstaged.map((f) => f.path)).toEqual(["pages/i.tsx", "xa.log", "xb.log", "z"]);
+  });
+
   it("stages, unstages, discards and applies patches", async () => {
     await sh("printf 'A\\nb\\nc\\nD\\n' > f.txt && echo u > u.txt");
     await run(t.repo.stageAll());
@@ -85,6 +134,38 @@ describe.skipIf(noShell).each(targets)("Repository index and diffs on %s", (host
     expect((await fails(t.repo.diff({ kind: "commit", hash: "-x", path: "f.txt" })))._tag).toBe(
       "InvalidInputError",
     );
+  });
+
+  it("diffs for staging whatever the user's diff configuration", async () => {
+    await sh(
+      "git config diff.context 0 && git config diff.noprefix true && git config diff.external false && " +
+        "printf '1\\n2\\n3\\n4\\n5\\n6\\n' > f.txt && git commit -qam six && " +
+        "printf '1\\n2\\n3\\nfour\\n5\\n6\\n' > f.txt",
+    );
+    const d = await run(t.repo.diff({ kind: "unstaged", path: "f.txt" }));
+    // Three lines of context, as `git apply` expects without --unidiff-zero.
+    expect(d.hunks[0]!.lines.map((l) => l.kind)).toEqual([
+      "context",
+      "context",
+      "context",
+      "del",
+      "add",
+      "context",
+      "context",
+    ]);
+  });
+
+  it("says whether a file was created or deleted", async () => {
+    await sh("chmod +x f.txt && git rm -q --cached f.txt && echo n > n.txt && git add n.txt");
+    const deleted = await run(t.repo.diff({ kind: "staged", path: "f.txt" }));
+    expect(deleted).toMatchObject({ deleted: true, mode: "100644" });
+    const created = await run(t.repo.diff({ kind: "staged", path: "n.txt" }));
+    expect(created).toMatchObject({ created: true, mode: "100644" });
+    // A rename below the similarity threshold diffs as a deletion and an addition.
+    await sh("git reset -q --hard && git rm -q f.txt && echo other > g.txt && git add g.txt");
+    const renamed = await run(t.repo.diff({ kind: "staged", path: "g.txt", oldPath: "f.txt" }));
+    expect(renamed.created).toBe(true);
+    expect(added(renamed)).toEqual(["other"]);
   });
 
   it("compares commits, also from the empty tree", async () => {

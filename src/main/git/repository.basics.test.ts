@@ -9,6 +9,7 @@ describe.skipIf(noShell).each(targets)(
     const { run, fails, sh, head, branchRef } = t;
 
     it("rejects invalid input before running git", async () => {
+      expect((await fails(t.repo.graphRows(1, 0, 100_000)))._tag).toBe("InvalidInputError");
       for (const index of [Number.NaN, 1.5, -1, 2 ** 53]) {
         for (const op of [
           t.repo.stashPop(index),
@@ -34,24 +35,47 @@ describe.skipIf(noShell).each(targets)(
       expect((await run(t.repo.refs())).refs.map((r) => r.short)).toEqual(["main", "origin/main"]);
     });
 
-    it("applies stash entries by index", async () => {
-      await sh("echo one > f.txt");
-      await run(t.repo.stash("first", false));
-      await sh("echo two > f.txt && echo u > u.txt");
-      await run(t.repo.stash(null, true));
-      let stashes = (await run(t.repo.refs())).stashes;
-      expect(stashes.map((s) => s.index)).toEqual([0, 1]);
-      expect(stashes[1]!.message).toContain("first");
-      await run(t.repo.stashApply(1));
-      expect(await sh("cat f.txt")).toBe("one");
-      await run(t.repo.discard(["f.txt"], []));
-      await run(t.repo.stashDrop(1));
-      stashes = (await run(t.repo.refs())).stashes;
-      expect(stashes).toHaveLength(1);
-      await run(t.repo.stashPop(0));
-      expect(await sh("cat f.txt u.txt")).toBe("two\nu");
-      expect((await run(t.repo.refs())).stashes).toEqual([]);
-      expect((await fails(t.repo.stashPop(0)))._tag).toBe("CommandError");
+    it("never lets names and refs read as options or refspecs", async () => {
+      const marker = `${t.dir}/injected`;
+      // git runs these remote helpers if the name reaches it as an option.
+      const bad = [
+        t.repo.fetch(`--upload-pack=touch '${marker}'; git-upload-pack`),
+        t.repo.pushTag(`--receive-pack=touch '${marker}'; git-receive-pack`, "v1"),
+        t.repo.pushTag("origin", "x:refs/heads/main"),
+        t.repo.deleteRemoteBranch("origin", `--receive-pack=touch '${marker}'`),
+        t.repo.deleteRemoteTag("origin", "-x"),
+        t.repo.createTag("-f", "HEAD", null),
+        t.repo.deleteTag("-d"),
+        t.repo.removeRemote("-v"),
+        t.repo.addRemote("a:b", "/x"),
+        t.repo.renameBranch("-M", "x"),
+        t.repo.setUpstream("-x", "origin/main"),
+        t.repo.reset("HEAD", "merge" as "hard"),
+      ];
+      for (const op of bad) expect((await fails(op))._tag).toBe("InvalidInputError");
+      expect(await sh(`[ -e '${marker}' ] && echo yes || echo no`)).toBe("no");
+      expect(await sh(`git --git-dir='${t.origin}' rev-parse main`)).toBe(await head());
+    });
+
+    it("tells a branch from a tag with the same name by its full name", async () => {
+      const first = await sh("git rev-parse HEAD~1");
+      await sh("git tag dup HEAD~1 && git branch dup HEAD");
+      await run(t.repo.checkout("refs/tags/dup"));
+      expect((await run(t.repo.info())).head).toEqual({
+        branch: null,
+        hash: first,
+        detached: true,
+      });
+      await run(t.repo.checkout("refs/heads/dup"));
+      expect((await run(t.repo.info())).head.branch).toBe("dup");
+      const main = await sh("git rev-parse main");
+      await run(t.repo.reset("refs/tags/dup", "hard"));
+      expect(await head()).toBe(first);
+      await run(t.repo.merge("refs/heads/main", { ffOnly: true }));
+      expect(await head()).toBe(main);
+      await run(t.repo.reset("refs/tags/dup", "hard"));
+      await run(t.repo.rebase("refs/heads/main"));
+      expect(await head()).toBe(main);
     });
 
     it("manages branches and upstreams", async () => {
@@ -130,8 +154,9 @@ describe.skipIf(noShell).each(targets)(
 
     it("commits, amends and searches history", async () => {
       await sh("echo e > e.txt && git add e.txt");
-      await run(t.repo.commit("Add e\n\n# keep?\nBody\n\n\n", { amend: false }));
-      expect(await run(t.repo.lastCommitMessage())).toBe("Add e\n\nBody");
+      // Lines starting with "#" are kept: they are issue references or headings, not comments.
+      await run(t.repo.commit("#12 Add e\n\n# Notes\nBody\n\n\n", { amend: false }));
+      expect(await run(t.repo.lastCommitMessage())).toBe("#12 Add e\n\n# Notes\nBody");
       await run(t.repo.commit("Add e, amended", { amend: true }));
       expect(await sh("git rev-list --count HEAD")).toBe("3");
       expect(await run(t.repo.lastCommitMessage())).toBe("Add e, amended");
@@ -146,6 +171,32 @@ describe.skipIf(noShell).each(targets)(
       expect(details.files.map((f) => [f.path, f.additions])).toEqual([["e.txt", 1]]);
       const root0 = await run(t.repo.commitDetails(await sh("git rev-list --max-parents=0 HEAD")));
       expect(root0.files.map((f) => f.path)).toEqual(["f.txt"]);
+      expect(root0.truncated).toBeUndefined();
+    });
+
+    it("lists a merge's files against its first parent, and renames", async () => {
+      await sh(
+        "git checkout -q -b side HEAD~1 && echo s > s.txt && git add s.txt && git commit -qm s && " +
+          "git checkout -q main && git merge -q --no-edit side && " +
+          "git mv f.txt g.txt && echo more >> g.txt && git add g.txt && git commit -qm move",
+      );
+      const move = await run(t.repo.commitDetails(await head()));
+      expect(move.files.map((f) => [f.path, f.kind, f.oldPath, f.additions])).toEqual([
+        ["g.txt", "renamed", "f.txt", 1],
+      ]);
+      const merge = await run(t.repo.commitDetails(await sh("git rev-parse HEAD~1")));
+      expect(merge.parents).toHaveLength(2);
+      expect(merge.subject).toBe("Merge branch 'side'");
+      expect(merge.files.map((f) => [f.path, f.kind])).toEqual([["s.txt", "added"]]);
+      // The commit's diff is against the first parent too.
+      const diff = await run(t.repo.diff({ kind: "commit", hash: merge.hash, path: "s.txt" }));
+      expect(diff.hunks[0]!.lines.map((l) => l.text)).toEqual(["s"]);
+    });
+
+    it("searches commits reachable from a detached HEAD only", async () => {
+      await sh("git checkout -q --detach && git commit -q --allow-empty -m 'detached work'");
+      expect(await run(t.repo.search("detached work"))).toEqual([await head()]);
+      expect(await run(t.repo.search("T"))).toHaveLength(3);
     });
   },
 );

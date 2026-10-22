@@ -43,7 +43,9 @@ export type RepoState =
   | "rebasing"
   | "cherry-picking"
   | "reverting"
-  | "bisecting";
+  | "bisecting"
+  /** Applying patches with `git am`. */
+  | "applying";
 
 export interface RepoInfo {
   readonly id: RepoId;
@@ -196,6 +198,12 @@ export type ChangeKind =
   | "untracked"
   | "conflicted";
 
+/**
+ * How a file conflicts, as in `git status`: `UU` both modified, `AA` both added, `DD` both
+ * deleted, `AU`/`UA` added by us/them, `DU` deleted by us, `UD` deleted by them.
+ */
+export type ConflictCode = "UU" | "AA" | "DD" | "AU" | "UA" | "DU" | "UD";
+
 export interface FileChange {
   readonly path: string;
   readonly oldPath: string | null;
@@ -203,6 +211,8 @@ export interface FileChange {
   readonly additions: number | null;
   readonly deletions: number | null;
   readonly binary: boolean;
+  /** For a conflicted file, how it conflicts. */
+  readonly conflict?: ConflictCode;
 }
 
 /** Where a renamed file came from, for a `DiffTarget`. Copies diff as added files. */
@@ -231,6 +241,10 @@ export interface CommitDetails {
   readonly subject: string;
   readonly body: string;
   readonly files: readonly FileChange[];
+  /** Set when `files` lists only the first of more changed files (see `totalFiles`). */
+  readonly truncated?: boolean;
+  /** The number of changed files, when `files` is truncated. */
+  readonly totalFiles?: number;
 }
 
 /** The changes between two commits, e.g. over a selection of commits. */
@@ -239,6 +253,10 @@ export interface Comparison {
   readonly base: string;
   readonly tip: string;
   readonly files: readonly FileChange[];
+  /** Set when `files` lists only the first of more changed files (see `totalFiles`). */
+  readonly truncated?: boolean;
+  /** The number of changed files, when `files` is truncated. */
+  readonly totalFiles?: number;
 }
 
 // ---------------------------------------------------------------------------

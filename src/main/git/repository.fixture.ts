@@ -9,7 +9,7 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import { afterAll, beforeAll, beforeEach } from "vitest";
 import type { Ref, RepoLocation } from "@shared/domain";
 import { type Host, Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
-import { Repository } from "./repository";
+import { Repository, type RepositoryHooks } from "./repository";
 
 /** Hosts the tests run on: always locally, and over SSH when configured. */
 export const targets: string[] = [LOCAL_HOST];
@@ -42,7 +42,7 @@ export interface RepoFixture {
   readonly sh: (script: string, cwd?: string) => Promise<string>;
   readonly head: () => Promise<string>;
   readonly branchRef: (name: string) => Promise<Ref | undefined>;
-  readonly open: (path: string) => Promise<Repository>;
+  readonly open: (path: string, hooks?: RepositoryHooks) => Promise<Repository>;
   /** A clone of `origin` that can push commits for `repo` to pull. */
   readonly otherClone: () => Promise<string>;
 }
@@ -63,10 +63,10 @@ export const useRepoFixture = (hostId: string): RepoFixture => {
     runtime.runPromise(Effect.flip(effect));
   const sh = async (script: string, cwd = state.dir) =>
     (await run(state.host.sh(script, { cwd }))).stdout.toString().trim();
-  const open = (path: string) => {
+  const open = (path: string, hooks: RepositoryHooks = { onGraphProgress: () => {} }) => {
     const location: RepoLocation =
       hostId === LOCAL_HOST ? { kind: "local", path } : { kind: "ssh", host: hostId, path };
-    return run(Repository.open(state.host, location, { onGraphProgress: () => {} }));
+    return run(Repository.open(state.host, location, hooks));
   };
 
   beforeAll(async () => {

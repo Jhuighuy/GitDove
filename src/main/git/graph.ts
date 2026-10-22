@@ -10,8 +10,11 @@ export interface LogCommit {
   readonly subject: string;
 }
 
-/** Field and record separators used in `git log --format`. */
-export const LOG_FORMAT = "%x1e%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%ct%x1f%s";
+/**
+ * Fields of a commit in `git log -z --format`, which ends each commit with a NUL (a subject
+ * cannot contain one). Authors are mapped through `.mailmap`, like the branch owners.
+ */
+export const LOG_FORMAT = "%H%x1f%P%x1f%aN%x1f%aE%x1f%at%x1f%ct%x1f%s";
 
 /**
  * Incremental parser for {@link LOG_FORMAT} output. Feed it raw chunks; it
@@ -25,25 +28,24 @@ export class LogParser {
 
   push(chunk: Uint8Array): void {
     this.buffer += this.decoder.decode(chunk, { stream: true });
-    let start = this.buffer.indexOf("\x1e");
-    if (start < 0) return;
+    let start = 0;
     for (;;) {
-      const next = this.buffer.indexOf("\x1e", start + 1);
-      if (next < 0) break;
-      this.parseRecord(this.buffer.slice(start + 1, next));
-      start = next;
+      const end = this.buffer.indexOf("\0", start);
+      if (end < 0) break;
+      this.parseRecord(this.buffer.slice(start, end));
+      start = end + 1;
     }
     this.buffer = this.buffer.slice(start);
   }
 
   end(): void {
     this.buffer += this.decoder.decode();
-    if (this.buffer.startsWith("\x1e")) this.parseRecord(this.buffer.slice(1));
+    if (this.buffer) this.parseRecord(this.buffer);
     this.buffer = "";
   }
 
   private parseRecord(record: string): void {
-    const f = record.replace(/\n$/, "").split("\x1f");
+    const f = record.replace(/^\n/, "").replace(/\n$/, "").split("\x1f");
     if (f.length < 7) return;
     this.emit({
       hash: f[0]!,

@@ -64,6 +64,22 @@ describe.skipIf(noShell).each(targets)("Repository write lock on %s", (hostId) =
       expect(await branchRef("after-cancel")).toBeDefined();
     });
 
+    it("cancels a commit whose hook does not return", async () => {
+      await blockingHook("pre-commit");
+      await sh("echo e > e.txt && git add e.txt");
+      const before = await head();
+      const commit = fails(t.repo.commit("stuck", { amend: false }));
+      await until(() => exists("pre-commit.started"));
+      // A push goes ahead meanwhile: it does not touch the index.
+      await run(t.repo.pushBranch("main", false));
+      await run(t.repo.cancel());
+      expect((await commit)._tag).toBe("CancelledError");
+      expect(await head()).toBe(before);
+      await run(t.repo.createBranch("after-commit", "HEAD", false));
+      expect(await branchRef("after-commit")).toBeDefined();
+      await sh("touch go");
+    });
+
     it("cancels a running push and lets the next write run", async () => {
       await blockingHook("pre-push");
       await sh("echo e > e.txt && git add e.txt && git commit -qm three");
