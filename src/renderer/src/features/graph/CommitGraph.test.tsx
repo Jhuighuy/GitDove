@@ -674,7 +674,7 @@ it("selects several commits with the platform key and Shift", async () => {
   };
   const highlighted = () =>
     ["Commit 0", "Commit 1", "Commit 2", "Commit 3", "Commit 4"].filter((t) =>
-      rowOf(t).className.includes("bg-primary/25"),
+      rowOf(t).className.includes("bg-selected"),
     );
 
   await click("Commit 3");

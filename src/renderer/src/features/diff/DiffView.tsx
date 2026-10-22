@@ -783,15 +783,15 @@ const textPoint = (node: Node, offset: number, isEnd: boolean): TextPoint | null
 
 const lineBg = (l: Line, selected: boolean) =>
   selected
-    ? "bg-sky-500/25"
+    ? "bg-selected"
     : l.kind === "add"
-      ? "bg-emerald-500/12"
+      ? "bg-success/12"
       : l.kind === "del"
-        ? "bg-red-500/12"
+        ? "bg-destructive/12"
         : undefined;
 
 const emphasisClass = (l: Line) =>
-  l.kind === "add" ? "rounded-[2px] bg-emerald-500/30" : "rounded-[2px] bg-red-500/30";
+  l.kind === "add" ? "rounded-[2px] bg-success/30" : "rounded-[2px] bg-destructive/30";
 
 function Sign({ l, selected, selectable }: { l: Line; selected: boolean; selectable: boolean }) {
   return (
@@ -799,10 +799,10 @@ function Sign({ l, selected, selectable }: { l: Line; selected: boolean; selecta
       data-gutter
       className={cn(
         "w-4 shrink-0 text-center select-none",
-        l.kind === "add" && "text-emerald-500",
-        l.kind === "del" && "text-red-500",
-        selected && "bg-sky-500 text-white",
-        selectable && !selected && "group-hover/line:bg-sky-500/30",
+        l.kind === "add" && "text-success",
+        l.kind === "del" && "text-destructive",
+        selected && "bg-primary text-primary-foreground",
+        selectable && !selected && "group-hover/line:bg-primary/30",
       )}
     >
       {l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}

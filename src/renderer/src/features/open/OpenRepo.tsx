@@ -201,7 +201,7 @@ function RecentItem({
         onClick={onOpen}
       >
         {loc.kind === "ssh" ? (
-          <IconServer className="size-4 shrink-0 text-sky-400" />
+          <IconServer className="size-4 shrink-0 text-primary" />
         ) : (
           <IconFolder className="text-muted-foreground size-4 shrink-0" />
         )}

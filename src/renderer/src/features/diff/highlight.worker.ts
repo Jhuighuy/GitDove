@@ -9,7 +9,7 @@ import { bundledLanguages } from "shiki/langs";
 import type { HighlightRequest, HighlightResponse, ThemeKind } from "./highlight-protocol";
 import { CHUNK, languageFor } from "./highlight-protocol";
 
-const THEMES: Record<ThemeKind, string> = { light: "github-light", dark: "github-dark" };
+const THEMES: Record<ThemeKind, string> = { light: "vitesse-light", dark: "vitesse-dark" };
 /** Longer lines are left plain. */
 const MAX_LINE = 1000;
 /**
@@ -24,7 +24,7 @@ const LANGUAGES: ReadonlySet<string> = new Set(Object.keys(bundledLanguages));
 let highlighter: Promise<HighlighterCore> | null = null;
 const getHighlighter = () =>
   (highlighter ??= createHighlighterCore({
-    themes: [import("shiki/themes/github-light.mjs"), import("shiki/themes/github-dark.mjs")],
+    themes: [import("shiki/themes/vitesse-light.mjs"), import("shiki/themes/vitesse-dark.mjs")],
     langs: [],
     engine: createJavaScriptRegexEngine({ forgiving: true }),
   }).catch((e: unknown) => {

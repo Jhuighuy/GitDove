@@ -88,7 +88,7 @@ export class ErrorBoundary extends Component<
     if (!error) return this.props.children;
     return (
       <div className="flex h-full min-h-0 flex-col items-center justify-center gap-4 p-8 text-center">
-        <IconAlertTriangle className="size-10 text-amber-500" />
+        <IconAlertTriangle className="size-10 text-warning" />
         <div>
           <div className="font-semibold">Something went wrong</div>
           <div className="text-muted-foreground mt-1 max-w-xl text-sm whitespace-pre-wrap select-text">

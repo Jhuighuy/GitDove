@@ -58,7 +58,7 @@ export const RepoView = memo(function RepoView({
   }
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-      <IconAlertTriangle className="size-10 text-amber-500" />
+      <IconAlertTriangle className="size-10 text-warning" />
       <div>
         <div className="font-semibold">Could not open {location.path}</div>
         <div className="text-muted-foreground mt-1 max-w-xl text-sm whitespace-pre-wrap select-text">

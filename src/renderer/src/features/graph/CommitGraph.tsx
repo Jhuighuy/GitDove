@@ -813,7 +813,7 @@ function Resizer({
 const rowClass = (selected: boolean) =>
   cn(
     "absolute top-0 left-0 flex w-full items-center text-[13px] select-none",
-    selected ? "bg-primary/25" : "hover:bg-muted/60",
+    selected ? "bg-selected" : "hover:bg-muted/60",
   );
 
 const rowStyle = (top: number): React.CSSProperties => ({

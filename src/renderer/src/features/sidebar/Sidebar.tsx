@@ -477,7 +477,7 @@ const renderCount = ({ shown, total }: Count) =>
   shown === total ? (
     <span>{total}</span>
   ) : (
-    <span className="font-medium text-sky-500">
+    <span className="font-medium text-primary">
       {shown}/{total}
     </span>
   );
@@ -683,12 +683,12 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
         <div className="flex h-5 items-center justify-between px-1 text-[11px]">
           <span className="text-muted-foreground">
             Viewing{" "}
-            <span className={cn("tabular-nums", vis.anyHidden && "font-medium text-sky-500")}>
+            <span className={cn("tabular-nums", vis.anyHidden && "font-medium text-primary")}>
               {vis.visibleCount}/{vis.all.length}
             </span>
           </span>
           {vis.anyHidden && (
-            <button type="button" className="text-sky-500 hover:underline" onClick={vis.showAll}>
+            <button type="button" className="text-primary hover:underline" onClick={vis.showAll}>
               Show all
             </button>
           )}
@@ -1038,7 +1038,7 @@ function Item({
       data-key={rowKey}
       className={cn(
         "group hover:bg-sidebar-accent absolute inset-x-0 top-0 flex h-6 cursor-default items-center gap-1.5 pr-2 pl-1 text-[12px] select-none [&_svg]:size-3.5 [&_svg]:shrink-0",
-        active && "bg-primary/20 hover:bg-primary/25 font-semibold",
+        active && "bg-selected hover:bg-selected font-semibold",
         cursor &&
           "group-focus-visible/tree:ring-ring/60 group-focus-visible/tree:ring-1 group-focus-visible/tree:ring-inset",
       )}

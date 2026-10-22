@@ -212,8 +212,8 @@ const buildMenu = () => {
  */
 const chrome = () =>
   nativeTheme.shouldUseDarkColors
-    ? { background: "#18181b", symbols: "#a1a1aa" }
-    : { background: "#ffffff", symbols: "#52525b" };
+    ? { background: "#0c0a09", symbols: "#a6a09b" }
+    : { background: "#ffffff", symbols: "#57534d" };
 
 const titleBarOverlay = () => ({ color: "#00000000", symbolColor: chrome().symbols, height: 40 });
 

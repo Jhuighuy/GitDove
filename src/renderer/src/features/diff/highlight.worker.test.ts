@@ -127,7 +127,7 @@ it("highlights a chunk of lines and sends new styles along", async () => {
   const styles = collectPalette();
   const first = lineTokens(msg, styles, lines[0]!, 0);
   expect(first.map(([text]) => text).join("")).toBe(lines[0]);
-  expect(first.find(([text]) => text === "const")![1]).not.toBe(
+  expect(first.find(([text]) => text.trim() === "const")![1]).not.toBe(
     first.find(([text]) => text === "1")![1],
   );
   const comment = lineTokens(msg, styles, lines[1]!, 1);

@@ -15,14 +15,14 @@ import { basename, dirname } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const KIND: Record<ChangeKind, { letter: string; className: string; label: string }> = {
-  added: { letter: "A", className: "text-emerald-500", label: "Added" },
-  untracked: { letter: "U", className: "text-emerald-500", label: "Untracked" },
-  modified: { letter: "M", className: "text-amber-500", label: "Modified" },
-  deleted: { letter: "D", className: "text-red-500", label: "Deleted" },
-  renamed: { letter: "R", className: "text-sky-500", label: "Renamed" },
-  copied: { letter: "C", className: "text-sky-500", label: "Copied" },
-  typechange: { letter: "T", className: "text-violet-500", label: "Type changed" },
-  conflicted: { letter: "!", className: "text-red-500", label: "Conflicted" },
+  added: { letter: "A", className: "text-success", label: "Added" },
+  untracked: { letter: "U", className: "text-success", label: "Untracked" },
+  modified: { letter: "M", className: "text-warning", label: "Modified" },
+  deleted: { letter: "D", className: "text-destructive", label: "Deleted" },
+  renamed: { letter: "R", className: "text-info", label: "Renamed" },
+  copied: { letter: "C", className: "text-info", label: "Copied" },
+  typechange: { letter: "T", className: "text-info", label: "Type changed" },
+  conflicted: { letter: "!", className: "text-destructive", label: "Conflicted" },
 };
 
 /** How a conflicted file conflicts, in the words of `git status`. */
@@ -209,7 +209,7 @@ const FileRow = memo(function FileRow({
       className={cn(
         "group absolute inset-x-0 top-0 flex cursor-default items-center gap-2 px-3 text-[12px] select-none",
         selected
-          ? "bg-primary/25 group-focus-visible/list:ring-ring group-focus-visible/list:ring-1 group-focus-visible/list:ring-inset"
+          ? "bg-selected group-focus-visible/list:ring-ring group-focus-visible/list:ring-1 group-focus-visible/list:ring-inset"
           : "hover:bg-muted/60",
       )}
       style={{ height: ROW_HEIGHT, transform: `translateY(${top}px)` }}
@@ -228,7 +228,7 @@ const FileRow = memo(function FileRow({
         {dir && <span className="text-muted-foreground min-w-0 truncate text-[11px]">{dir}</span>}
       </span>
       {f.conflict && (
-        <span className="shrink-0 text-[11px] text-red-500">{CONFLICT[f.conflict]}</span>
+        <span className="shrink-0 text-[11px] text-destructive">{CONFLICT[f.conflict]}</span>
       )}
       {actions && actions.length > 0 && (
         <span
@@ -263,8 +263,8 @@ const FileRow = memo(function FileRow({
       )}
       {(f.additions !== null || f.deletions !== null) && (
         <span className="shrink-0 font-mono text-[10px] tabular-nums">
-          {f.additions ? <span className="text-emerald-500">+{f.additions}</span> : null}{" "}
-          {f.deletions ? <span className="text-red-500">-{f.deletions}</span> : null}
+          {f.additions ? <span className="text-success">+{f.additions}</span> : null}{" "}
+          {f.deletions ? <span className="text-destructive">-{f.deletions}</span> : null}
         </span>
       )}
     </div>

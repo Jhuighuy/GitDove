@@ -95,8 +95,8 @@ export function CommitsPanel({
             className="ml-auto font-mono text-[11px] tabular-nums"
             title={data.truncated ? "In the files listed" : undefined}
           >
-            <span className="text-emerald-500">+{additions}</span>{" "}
-            <span className="text-red-500">-{deletions}</span>
+            <span className="text-success">+{additions}</span>{" "}
+            <span className="text-destructive">-{deletions}</span>
           </span>
         )}
       </div>
