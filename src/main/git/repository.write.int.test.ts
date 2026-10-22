@@ -4,7 +4,7 @@
  */
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { afterAll, describe, expect, it } from "vitest";
-import type { RepoLocation } from "@shared/domain";
+import type { GraphInfo, RepoLocation } from "@shared/domain";
 import { Hosts, HostsLive, LOCAL_HOST } from "../exec/hosts";
 import { Repository } from "./repository";
 
@@ -12,11 +12,12 @@ const targets: [string, string][] = [["local", LOCAL_HOST]];
 if (process.env.GITDOVE_INT_SSH_HOST) targets.push(["ssh", process.env.GITDOVE_INT_SSH_HOST]);
 
 /** Waits for a completed graph newer than `after`. */
-const waitGraph = (repo: Repository, after = 0) =>
+/** The next complete graph after version `after` that `until` accepts. */
+const waitGraph = (repo: Repository, after = 0, until: (g: GraphInfo) => boolean = () => true) =>
   Effect.gen(function* () {
     for (;;) {
       const g = yield* repo.graphInfo();
-      if (g.complete && g.version > after) return g;
+      if (g.complete && g.version > after && until(g)) return g;
       yield* Effect.sleep("30 millis");
     }
   });
@@ -110,12 +111,18 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             yield* repo.checkout("side");
             yield* host.sh("echo s > s.txt && git add s.txt && git commit -qm side", { cwd: dir });
             yield* repo.checkout("main");
-            // No watcher here, so refresh the graph explicitly.
+            // No watcher here, so refresh the graph explicitly. Writes also check the graph, so
+            // a load from before a change may still land: wait for the graph of every commit.
             const stale = yield* repo.graphInfo();
             repo.invalidateGraph();
-            const before = yield* waitGraph(repo, stale.version);
+            const commits = Number(
+              (yield* host.sh("git rev-list --count --branches --tags HEAD", { cwd: dir })).stdout
+                .toString()
+                .trim(),
+            );
+            const before = yield* waitGraph(repo, stale.version, (info) => info.count === commits);
             repo.setHiddenRefs(["refs/heads/side"]);
-            const after = yield* waitGraph(repo, before.version);
+            const after = yield* waitGraph(repo, before.version, (info) => info.count < commits);
             expect(after.count).toBe(before.count - 1);
             repo.setHiddenRefs(["refs/heads/"]); // HEAD stays visible
             expect((yield* waitGraph(repo, after.version)).count).toBeGreaterThan(0);

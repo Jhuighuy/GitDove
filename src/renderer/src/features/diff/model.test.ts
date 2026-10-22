@@ -145,6 +145,10 @@ it("cuts huge diffs short", () => {
     ["a", "b"],
     ["c", "d"],
   ]);
+  // The budget ends exactly at the end of a hunk, with more hunks after it.
+  const between = capLines(big, 5);
+  expect(between.truncated).toBe(true);
+  expect(between.hunks.map((h) => h.lines.length)).toEqual([2, 3]);
 });
 
 it("handles an empty diff", () => {

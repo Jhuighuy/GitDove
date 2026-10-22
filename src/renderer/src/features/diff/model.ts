@@ -92,7 +92,9 @@ export const capLines = (diff: FileDiff, max = MAX_LINES): FileDiff => {
     hunks.push(hunk.lines.length <= left ? hunk : { ...hunk, lines: hunk.lines.slice(0, left) });
     left -= hunk.lines.length;
   }
-  return left >= 0 ? diff : { ...diff, hunks, truncated: true };
+  // Cut short when a hunk was shortened or left out (the budget can end between hunks).
+  const cut = left < 0 || hunks.length < diff.hunks.length;
+  return cut ? { ...diff, hunks, truncated: true } : diff;
 };
 
 export const buildModel = (full: FileDiff): DiffModel => {
