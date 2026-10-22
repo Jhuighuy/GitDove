@@ -1002,7 +1002,9 @@ export class Repository {
         // submodules alone. Files that were ignored before the reset are kept on purpose.
         const nested = (yield* untracked).filter((p) => before.includes(p));
         const submodules = hasHead
-          ? (yield* this.gitText(["diff", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean)
+          ? (yield* this.gitText(["diff", "--name-only", "-z", "--ignore-submodules=none", "HEAD"]))
+              .split("\0")
+              .filter(Boolean)
           : [];
         const kept = [
           ...(nested.length > 0 ? [`nested repositories: ${nested.join(", ")}`] : []),

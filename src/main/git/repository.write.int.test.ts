@@ -206,8 +206,9 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
                 "git init -q -b main . && git config user.name T && git config user.email t@x && " +
                 `git -c protocol.file.allow=always submodule add -q '${dir}-sub' sub && ` +
                 "git commit -qm sub && echo x >> sub/s.txt && echo y > top.txt && " +
-                // Even when configured to, discarding must not recurse into submodules.
-                "git config submodule.recurse true",
+                // Even when configured to, discarding must not recurse into submodules, and
+                // their changes are reported however diffs are set to show them.
+                "git config submodule.recurse true && git config diff.ignoreSubmodules all",
               { cwd: dir },
             );
             const location: RepoLocation =
@@ -220,8 +221,9 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
               "Discarded the other changes, but kept changes in submodules: sub",
             );
             // The rest is gone; the submodule's own files are untouched.
+            // (The status lists no submodules here: it follows diff.ignoreSubmodules.)
             const st = yield* repo.status();
-            expect(st.unstaged.map((f) => f.path)).toEqual(["sub"]);
+            expect(st.unstaged.map((f) => f.path)).not.toContain("top.txt");
             expect((yield* host.sh("cat sub/s.txt", { cwd: dir })).stdout.toString()).toBe(
               "s\nx\n",
             );
