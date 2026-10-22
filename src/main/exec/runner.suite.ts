@@ -4,12 +4,19 @@
  */
 import { spawn as nodeSpawn, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Exit, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
-import { ResponseParser, RUNNER_SCRIPT, Runner, runOnRunner, type RunnerEvent } from "./runner";
+import {
+  encodeRequest,
+  ResponseParser,
+  RUNNER_SCRIPT,
+  Runner,
+  runOnRunner,
+  type RunnerEvent,
+} from "./runner";
 
 export const runnerSuite = (sh: string) =>
   describe.skipIf(process.platform === "win32" || !existsSync(sh))(
@@ -334,9 +341,13 @@ esac
         );
       });
 
-      it("keeps waiting while a killed command's processes may still run", async () => {
-        // A ps that reports every process as running under the same command, as if the kill
-        // could not be confirmed (e.g. a process stuck in the kernel).
+      /**
+       * Runs `f` with a ps first on the PATH (runners started meanwhile keep it) that reports
+       * every process as running under the same command, as if a kill could not be confirmed
+       * (e.g. a process stuck in the kernel). Removing it afterwards lets those runners' jobs
+       * see the real ps again, so a runner left waiting on it does not wait forever.
+       */
+      const withPinnedPs = async <A>(f: () => Promise<A>): Promise<A> => {
         const bin = mkdtempSync(join(tmpdir(), "gitdove-ps-"));
         writeFileSync(
           join(bin, "ps"),
@@ -346,8 +357,17 @@ esac
         const path = process.env.PATH;
         process.env.PATH = `${bin}:${path}`;
         try {
+          return await f();
+        } finally {
+          process.env.PATH = path;
+          rmSync(bin, { recursive: true, force: true });
+        }
+      };
+
+      it("keeps waiting while a killed command's processes may still run", async () => {
+        const outcome = await withPinnedPs(async () => {
           const runner = await Effect.runPromise(start());
-          const outcome = await Effect.runPromise(
+          return Effect.runPromise(
             Effect.gen(function* () {
               const fiber = yield* Effect.forkChild(run(runner, "sleep 30 & wait"));
               yield* Effect.sleep("200 millis");
@@ -359,10 +379,43 @@ esac
               return early._tag;
             }),
           );
-          expect(outcome).toBe("None");
-        } finally {
-          process.env.PATH = path;
-        }
+        });
+        expect(outcome).toBe("None");
+      });
+
+      it("exits once its client is gone, even if a kill is not confirmed", async () => {
+        // Raw, so nothing kills the runner: it has to exit on its own (an app that quits does
+        // not wait to kill it, and a runner left waiting would poll ps forever).
+        const exit = await withPinnedPs(async () => {
+          const child = nodeSpawn(sh, ["-c", RUNNER_SCRIPT], {
+            stdio: ["pipe", "ignore", "ignore"],
+          });
+          const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) =>
+            child.on("exit", (code, signal) => resolve([code, signal])),
+          );
+          const dir = mkdtempSync(join(tmpdir(), "gitdove-runner-"));
+          const ready = join(dir, "ready");
+          try {
+            // Ready once the runner has the command's process id (1.p, in the runner's directory,
+            // which is the command's working directory), so the kill has processes to confirm.
+            child.stdin.write(
+              encodeRequest(
+                1,
+                `sleep 30 & until [ -s 1.p ]; do sleep 0.01; done; : >"${ready}"; wait`,
+              ),
+            );
+            await expect.poll(() => existsSync(ready), { timeout: 10_000 }).toBe(true);
+            child.stdin.end("K 1\n");
+            return await Promise.race([
+              exited,
+              new Promise<"running">((resolve) => setTimeout(() => resolve("running"), 10_000)),
+            ]);
+          } finally {
+            child.kill();
+            rmSync(dir, { recursive: true, force: true });
+          }
+        });
+        expect(exit).toEqual([0, null]);
       });
 
       it("fails pending commands when the runner dies", async () => {
