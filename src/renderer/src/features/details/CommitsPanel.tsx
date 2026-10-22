@@ -1,10 +1,11 @@
-import type { RepoId } from "@shared/domain";
+import type { FileChange, RepoId } from "@shared/domain";
+import { useCallback, useState } from "react";
 import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import { Spinner } from "@/components/ui/spinner";
 import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
 import { useCompare } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { type PickedCommit, useRepoUi, useRepoUiStore } from "@/stores/repo-ui";
+import { type PickedCommit, useRepoUiStore } from "@/stores/repo-ui";
 import { fileTarget } from "../diff/targets";
 import { FileList } from "./FileList";
 
@@ -21,12 +22,19 @@ export function CommitsPanel({
 }) {
   const avatarProviders = useAvatarProviders(repo);
   const select = useRepoUiStore((s) => s.select);
-  const openDiff = useRepoUiStore((s) => s.openDiff);
-  const { diff } = useRepoUi(repo);
+  const diff = useRepoUiStore((s) => s.byRepo[repo]?.diff ?? null);
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const tip = commits[0]!.row;
   const oldest = commits.at(-1)!.row;
   const { data, error, isPending } = useCompare(repo, oldest.parents[0] ?? null, tip.hash);
-  const source = { kind: "commit", hash: tip.hash, base: data?.base } as const;
+  const base = data?.base;
+  const onOpen = useCallback(
+    (f: FileChange) =>
+      useRepoUiStore
+        .getState()
+        .openDiff(repo, fileTarget({ kind: "commit", hash: tip.hash, base }, f)),
+    [repo, tip.hash, base],
+  );
 
   const additions = data?.files.reduce((n, f) => n + (f.additions ?? 0), 0) ?? 0;
   const deletions = data?.files.reduce((n, f) => n + (f.deletions ?? 0), 0) ?? 0;
@@ -91,12 +99,17 @@ export function CommitsPanel({
           </span>
         )}
       </div>
-      <div className={cn("min-h-0 flex-1 overflow-y-auto", !data && "flex items-start")}>
+      <div
+        ref={setScroller}
+        className={cn("min-h-0 flex-1 overflow-y-auto", !data && "flex items-start")}
+      >
         {data ? (
           <FileList
+            label="Changed files"
             files={data.files}
             selectedPath={selectedPath}
-            onOpen={(f) => openDiff(repo, fileTarget(source, f))}
+            onOpen={onOpen}
+            scroller={scroller}
           />
         ) : error ? (
           <div className="text-destructive p-3 text-sm">{error.message}</div>

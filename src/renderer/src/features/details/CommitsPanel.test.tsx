@@ -60,6 +60,8 @@ let root: Root;
 let container: HTMLElement;
 
 beforeEach(() => {
+  // Gives the virtualized file lists a viewport, so that rows render.
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.compared = [];
   useRepoUiStore.setState({ byRepo: {} });
@@ -71,6 +73,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
 });
 
 async function render(commits: PickedCommit[]) {
@@ -95,7 +98,7 @@ it("lists the commits and the changes from the oldest one's parent to the newest
   expect(container.textContent).toContain("+5 -1");
 
   // Files open as diffs over the range; a commit opens on its own.
-  const file = [...container.querySelectorAll("li")].find((li) =>
+  const file = [...container.querySelectorAll<HTMLElement>("[role=option]")].find((li) =>
     li.textContent?.includes("b.ts"),
   )!;
   await act(async () => file.click());

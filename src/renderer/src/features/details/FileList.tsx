@@ -1,5 +1,16 @@
 import type { ChangeKind, FileChange } from "@shared/domain";
-import { memo, type ReactNode } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { basename, dirname } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -26,69 +37,250 @@ export function ChangeBadge({ kind }: { kind: ChangeKind }) {
   );
 }
 
-// Keeps the selected file on screen as the arrow keys move it through a diff.
-const scrollIntoView = (el: HTMLElement | null) => el?.scrollIntoView?.({ block: "nearest" });
+/** An action on a file, shown on its row when hovered (or selected in a focused list). */
+export interface FileAction {
+  readonly label: string;
+  readonly icon: ReactNode;
+  /** Keys (`KeyboardEvent.key`, lowercase) that run it on the selected file of a focused list. */
+  readonly keys?: readonly string[];
+  readonly run: (file: FileChange) => void;
+}
+
+export const ROW_HEIGHT = 24;
 
 interface Props {
   readonly files: readonly FileChange[];
   readonly selectedPath: string | null;
   readonly onOpen: (file: FileChange) => void;
-  /** Hover actions for a file, shown before its line counts. */
-  readonly renderActions?: (file: FileChange) => ReactNode;
-  readonly onContextMenu?: (file: FileChange) => void;
+  /** Keep this stable (e.g. `useMemo`): rows render again when it changes. */
+  readonly actions?: readonly FileAction[];
+  /** Why the actions are disabled, if they are (e.g. another operation runs). */
+  readonly disabledReason?: string;
+  /**
+   * The element that scrolls the list; it may hold other content above and below the list.
+   * Pass it through state (a callback ref): the list renders its rows once it is there.
+   */
+  readonly scroller: HTMLElement | null;
+  /** Height of sticky headers at the top of the scroll element, kept clear when scrolling to a file. */
+  readonly stickyTop?: number;
+  /** Accessible name of the list. */
+  readonly label: string;
 }
 
-/** Flat list of changed files ("path" view). */
+const keyOf = (f: FileChange) => `${f.oldPath ?? ""}:${f.path}`;
+
+/**
+ * Flat list of changed files ("path" view). Only the rows on screen are rendered. A focused list
+ * moves the selection with the arrow keys, opens a file with Enter and runs actions with their keys.
+ */
 export const FileList = memo(function FileList({
   files,
   selectedPath,
   onOpen,
-  renderActions,
-  onContextMenu,
+  actions,
+  disabledReason,
+  scroller,
+  stickyTop = 0,
+  label,
 }: Props) {
+  const id = useId();
+  const listRef = useRef<HTMLDivElement>(null);
+  const margin = useScrollMargin(scroller, listRef);
+  const virtualizer = useVirtualizer({
+    count: files.length,
+    getScrollElement: () => scroller,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 12,
+    scrollMargin: margin,
+    scrollPaddingStart: stickyTop,
+    getItemKey: (i) => keyOf(files[i]!),
+  });
+
+  const selected = useMemo(
+    () => (selectedPath === null ? -1 : files.findIndex((f) => f.path === selectedPath)),
+    [files, selectedPath],
+  );
+
+  // Keeps the selected file on screen, e.g. as the arrow keys move it through a diff.
+  useEffect(() => {
+    if (selected >= 0) virtualizer.scrollToIndex(selected, { align: "auto" });
+  }, [selected, virtualizer]);
+
+  // Rows get stable callbacks, so that they render again only when their own props change.
+  const latest = useRef({ files, onOpen });
+  latest.current = { files, onOpen };
+  const open = useCallback((index: number) => {
+    const file = latest.current.files[index];
+    if (file) latest.current.onOpen(file);
+  }, []);
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || files.length === 0) return;
+    const last = files.length - 1;
+    const step: Record<string, number> = {
+      ArrowDown: selected < 0 ? 0 : Math.min(selected + 1, last),
+      ArrowUp: selected < 0 ? 0 : Math.max(selected - 1, 0),
+      Home: 0,
+      End: last,
+      PageDown: Math.min(Math.max(selected, 0) + 10, last),
+      PageUp: Math.max(selected - 10, 0),
+      Enter: Math.max(selected, 0),
+      " ": Math.max(selected, 0),
+    };
+    const to = e.shiftKey ? undefined : step[e.key];
+    if (to !== undefined) {
+      e.preventDefault();
+      open(to);
+      return;
+    }
+    const action = actions?.find((a) => a.keys?.includes(e.key.toLowerCase()));
+    if (action && selected >= 0) {
+      e.preventDefault();
+      if (!disabledReason) action.run(files[selected]!);
+    }
+  };
+
   return (
-    <ul className="flex flex-col py-0.5">
-      {files.map((f) => {
-        const dir = dirname(f.path);
-        return (
-          <li
-            key={`${f.oldPath ?? ""}:${f.path}`}
-            className={cn(
-              "group flex h-6 cursor-default items-center gap-2 px-3 text-[12px] select-none",
-              selectedPath === f.path ? "bg-primary/25" : "hover:bg-muted/60",
-            )}
-            title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
-            onClick={(e) => {
-              // Clicking an action (even a disabled one) doesn't open the file.
-              if (!(e.target as Element).closest("[data-row-actions]")) onOpen(f);
-            }}
-            onContextMenu={() => onContextMenu?.(f)}
-            ref={selectedPath === f.path ? scrollIntoView : undefined}
-          >
-            <ChangeBadge kind={f.kind} />
-            <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-              <span className="shrink-0 truncate">{basename(f.path)}</span>
-              {dir && (
-                <span className="text-muted-foreground min-w-0 truncate text-[11px]">{dir}</span>
-              )}
-            </span>
-            {renderActions && (
-              <span
-                data-row-actions
-                className="hidden shrink-0 items-center gap-0.5 group-hover:flex"
-              >
-                {renderActions(f)}
-              </span>
-            )}
-            {(f.additions !== null || f.deletions !== null) && (
-              <span className="shrink-0 font-mono text-[10px] tabular-nums">
-                {f.additions ? <span className="text-emerald-500">+{f.additions}</span> : null}{" "}
-                {f.deletions ? <span className="text-red-500">-{f.deletions}</span> : null}
-              </span>
-            )}
-          </li>
-        );
-      })}
-    </ul>
+    <div
+      ref={listRef}
+      role="listbox"
+      aria-label={label}
+      tabIndex={files.length > 0 ? 0 : -1}
+      aria-activedescendant={selected >= 0 ? `${id}-${selected}` : undefined}
+      className="group/list relative outline-none"
+      style={{ height: virtualizer.getTotalSize() }}
+      onKeyDown={onKeyDown}
+    >
+      {virtualizer.getVirtualItems().map((item) => (
+        <FileRow
+          key={item.key}
+          id={`${id}-${item.index}`}
+          index={item.index}
+          top={item.start - margin}
+          file={files[item.index]!}
+          selected={item.index === selected}
+          actions={actions}
+          disabledReason={disabledReason}
+          onOpen={open}
+        />
+      ))}
+    </div>
   );
 });
+
+const FileRow = memo(function FileRow({
+  id,
+  index,
+  top,
+  file: f,
+  selected,
+  actions,
+  disabledReason,
+  onOpen,
+}: {
+  id: string;
+  index: number;
+  top: number;
+  file: FileChange;
+  selected: boolean;
+  actions: readonly FileAction[] | undefined;
+  disabledReason: string | undefined;
+  onOpen: (index: number) => void;
+}) {
+  const dir = dirname(f.path);
+  return (
+    <div
+      id={id}
+      role="option"
+      aria-selected={selected}
+      className={cn(
+        "group absolute inset-x-0 top-0 flex cursor-default items-center gap-2 px-3 text-[12px] select-none",
+        selected
+          ? "bg-primary/25 group-focus-visible/list:ring-ring group-focus-visible/list:ring-1 group-focus-visible/list:ring-inset"
+          : "hover:bg-muted/60",
+      )}
+      style={{ height: ROW_HEIGHT, transform: `translateY(${top}px)` }}
+      title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
+      onClick={(e) => {
+        // Clicking an action (even a disabled one) doesn't open the file.
+        if (!(e.target as Element).closest("[data-row-actions]")) onOpen(index);
+      }}
+    >
+      <ChangeBadge kind={f.kind} />
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span className="shrink-0 truncate">{basename(f.path)}</span>
+        {dir && <span className="text-muted-foreground min-w-0 truncate text-[11px]">{dir}</span>}
+      </span>
+      {actions && actions.length > 0 && (
+        <span
+          data-row-actions
+          className={cn(
+            "hidden shrink-0 items-center gap-0.5 group-hover:flex",
+            selected && "group-focus-visible/list:flex",
+          )}
+        >
+          {actions.map((a) => (
+            // A wrapper shows the title: disabled buttons get no pointer events.
+            <span
+              key={a.label}
+              className="flex"
+              title={
+                disabledReason ?? (a.keys?.[0] ? `${a.label} (${keyLabel(a.keys[0])})` : a.label)
+              }
+            >
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={a.label}
+                disabled={disabledReason !== undefined}
+                className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-5 items-center justify-center rounded disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5"
+                onClick={() => a.run(f)}
+              >
+                {a.icon}
+              </button>
+            </span>
+          ))}
+        </span>
+      )}
+      {(f.additions !== null || f.deletions !== null) && (
+        <span className="shrink-0 font-mono text-[10px] tabular-nums">
+          {f.additions ? <span className="text-emerald-500">+{f.additions}</span> : null}{" "}
+          {f.deletions ? <span className="text-red-500">-{f.deletions}</span> : null}
+        </span>
+      )}
+    </div>
+  );
+});
+
+const keyLabel = (key: string) =>
+  key === "delete" ? "Delete" : key === "backspace" ? "Backspace" : key.toUpperCase();
+
+/**
+ * Where the list starts in its scroll element's content: the list may follow other content
+ * (e.g. another list), whose size changes move it.
+ */
+function useScrollMargin(
+  scroller: HTMLElement | null,
+  listRef: React.RefObject<HTMLElement | null>,
+): number {
+  const [margin, setMargin] = useState(0);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!scroller || !list) return;
+    const measure = () => {
+      const top =
+        list.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top +
+        scroller.scrollTop;
+      setMargin((m) => (Math.abs(m - top) < 0.5 ? m : Math.round(top)));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    // Content above the list changing size changes the size of the whole content too.
+    const observer = new ResizeObserver(measure);
+    for (const child of scroller.children) observer.observe(child);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [scroller, listRef]);
+  return margin;
+}

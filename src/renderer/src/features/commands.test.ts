@@ -36,6 +36,7 @@ const { keys, queryClient } = await import("@/lib/queries");
 const { useRepoUiStore } = await import("@/stores/repo-ui");
 const { useBusyStore } = await import("@/stores/busy");
 const { APP, useStatusStore } = await import("@/stores/status");
+const { useTabs } = await import("@/stores/tabs");
 
 const repo = "local:/work/repo";
 /** The status bar's notice for the repository (or the app). */
@@ -72,6 +73,7 @@ const setRefs = (refs: Ref[], remotes = [remote("upstream"), remote("origin")]) 
     remotes,
     worktrees: [],
     submodules: [],
+    owners: { byRef: {}, people: {}, me: { email: null, name: null } },
   });
 const setInfo = (workTree: string) =>
   queryClient.setQueryData<Partial<RepoInfo>>(keys.info(repo), { workTree });
@@ -85,6 +87,7 @@ const methods = () => mocks.api.mock.calls.map(([m]) => m as string);
 beforeEach(() => {
   vi.clearAllMocks();
   useStatusStore.setState({ notices: {}, activities: [] });
+  useTabs.setState({ tabs: [{ key: "t", repo }], active: "t" });
   queryClient.clear();
   mocks.api.mockResolvedValue(undefined);
   mocks.confirm.mockResolvedValue(true);
@@ -162,10 +165,11 @@ it("reports results in the status bar, not in toasts", async () => {
 
 it("reports failures as error toasts", async () => {
   mocks.api.mockRejectedValue(new Error("could not resolve host"));
-  await expect(commands.pull(repo)).resolves.toBeUndefined();
+  await expect(commands.pull(repo)).resolves.toEqual({ ok: false });
   expect(mocks.toast.error).toHaveBeenCalledWith("Pull failed", {
     description: "could not resolve host",
     duration: 10000,
+    action: expect.objectContaining({ label: "Copy" }),
   });
   expect(noticeText()).toBeUndefined();
   mocks.prompt.mockResolvedValue({ value: "b", checked: true });
@@ -195,9 +199,23 @@ it("does not open dialogs or start commands while another operation runs", async
   }
 });
 
-it("cancels the running operation", () => {
+it("cancels the running operation", async () => {
   commands.cancel(repo);
   expect(apiCalls("repo.cancel")).toEqual([[repo]]);
+  mocks.api.mockRejectedValueOnce(new Error("gone"));
+  commands.cancel(repo);
+  await vi.waitFor(() =>
+    expect(mocks.toast.error).toHaveBeenCalledWith("Cancel failed", { description: "gone" }),
+  );
+});
+
+it("confirms aborting a merge or rebase", async () => {
+  mocks.confirm.mockResolvedValueOnce(false);
+  await commands.abort(repo);
+  expect(mocks.confirm).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Abort?", destructive: true }),
+  );
+  expect(methods()).toEqual([]);
 });
 
 it("labels the busy state with the operation and its target", async () => {
@@ -243,7 +261,30 @@ it("asks to set the upstream when pushing a branch without one", async () => {
   mocks.api.mockClear();
   setRefs([{ ...main, upstreamGone: true }]);
   await commands.push(repo);
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      description:
+        "The upstream branch of “main” no longer exists. Push it and set the upstream to origin/main?",
+    }),
+  );
   expect(apiCalls("repo.push")).toEqual([[repo, { force: false, setUpstream: true }]]);
+});
+
+it("names the remote that a new upstream is set on, and needs one", async () => {
+  setRefs([{ ...main, upstream: null }], [remote("fork")]);
+  mocks.confirm.mockResolvedValueOnce(false);
+  await commands.push(repo);
+  expect(mocks.confirm).toHaveBeenCalledWith(
+    expect.objectContaining({
+      description: "“main” has no upstream branch. Push it and set the upstream to fork/main?",
+    }),
+  );
+  setRefs([{ ...main, upstream: null }], []);
+  await commands.push(repo);
+  expect(mocks.toast.error).toHaveBeenCalledWith("Push failed", {
+    description: "No remotes configured",
+  });
+  expect(methods()).toEqual([]);
 });
 
 it("confirms force pushes", async () => {
@@ -335,7 +376,7 @@ it("deletes local and remote branches after confirming", async () => {
 
   mocks.confirm.mockResolvedValue(true);
   await commands.deleteBranch(repo, topic);
-  expect(apiCalls("repo.deleteBranch")).toEqual([[repo, "topic", true]]);
+  expect(apiCalls("repo.deleteBranch")).toEqual([[repo, "topic", false]]);
   await commands.deleteBranch(repo, originFeature);
   expect(mocks.confirm).toHaveBeenLastCalledWith(
     expect.objectContaining({
@@ -345,6 +386,25 @@ it("deletes local and remote branches after confirming", async () => {
   );
   expect(apiCalls("repo.deleteRemoteBranch")).toEqual([[repo, "origin", "feature/x"]]);
   expect(mocks.toast.loading).not.toHaveBeenCalled();
+});
+
+it("forces deleting an unmerged branch only after asking again", async () => {
+  mocks.api.mockRejectedValueOnce(new Error("error: the branch 'topic' is not fully merged"));
+  mocks.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+  await commands.deleteBranch(repo, topic);
+  expect(mocks.confirm).toHaveBeenLastCalledWith(
+    expect.objectContaining({ title: "Delete unmerged topic?", destructive: true }),
+  );
+  expect(apiCalls("repo.deleteBranch")).toEqual([[repo, "topic", false]]);
+  expect(mocks.toast.error).not.toHaveBeenCalled();
+
+  mocks.api.mockClear();
+  mocks.api.mockRejectedValueOnce(new Error("error: the branch 'topic' is not fully merged"));
+  await commands.deleteBranch(repo, topic);
+  expect(apiCalls("repo.deleteBranch")).toEqual([
+    [repo, "topic", false],
+    [repo, "topic", true],
+  ]);
 });
 
 it("deletes tags after confirming", async () => {
@@ -557,6 +617,11 @@ it("reveals files in the file manager", () => {
     [repo, "a.ts"],
     [repo, undefined],
   ]);
+  // Remote files are not on this machine.
+  mocks.api.mockClear();
+  commands.reveal("ssh://box/repo", "a.ts");
+  expect(methods()).toEqual([]);
+  expect(noticeText("ssh://box/repo")).toBe("Only local files can be revealed");
 });
 
 it("pushes and deletes tags on the default remote", async () => {
@@ -607,6 +672,16 @@ it("adds remotes and fetches them", async () => {
   expect(mocks.prompt.mock.calls.at(-2)![0]).toMatchObject({ defaultValue: "origin" });
   await vi.waitFor(() => expect(apiCalls("repo.fetch")).toEqual([[repo, "origin"]]));
   expect(apiCalls("repo.addRemote")).toEqual([[repo, "origin", "git@x:me/repo.git"]]);
+});
+
+it("does not fetch a remote that could not be added", async () => {
+  mocks.prompt
+    .mockResolvedValueOnce({ value: "origin" })
+    .mockResolvedValueOnce({ value: "git@x:me/repo.git" });
+  mocks.api.mockRejectedValueOnce(new Error("remote origin already exists"));
+  await commands.addRemote(repo);
+  expect(mocks.toast.error).toHaveBeenCalledWith("Add remote failed", expect.anything());
+  expect(apiCalls("repo.fetch")).toEqual([]);
 });
 
 it("edits remote URLs unless unchanged", async () => {

@@ -1,6 +1,10 @@
 import type { RepoId } from "@shared/domain";
 import { create } from "zustand";
 import { api } from "@/lib/api";
+import { forgetRepoQueries, setBackgroundRepos } from "@/lib/queries";
+import { useDrafts } from "./drafts";
+import { useRepoUiStore } from "./repo-ui";
+import { useStatusStore } from "./status";
 
 /** A tab either shows a repository or the "open a repository" page. */
 export type Tab = { readonly key: string; readonly repo: RepoId | null };
@@ -23,16 +27,31 @@ interface TabsState {
 let counter = 0;
 const makeKey = () => `tab-${Date.now().toString(36)}-${counter++}`;
 
-const persist = (s: TabsState) => {
+const saveState = (s: TabsState) => {
   const tabs = s.tabs.flatMap((t) => (t.repo ? [t.repo] : []));
   const activeTab = s.tabs.find((t) => t.key === s.active)?.repo ?? null;
   void api("app.setState", { tabs, activeTab, recent: [...s.recent] }).catch(() => {});
 };
 
+/**
+ * Forgets a closed repository: its cached data (reopening it starts afresh, and the main
+ * process starts a new graph), its selection and its notices. A non-empty commit message stays.
+ */
+const forgetRepo = (repo: RepoId) => {
+  forgetRepoQueries(repo);
+  useRepoUiStore.getState().forget(repo);
+  const drafts = useDrafts.getState();
+  if (drafts.drafts[repo]?.amend) drafts.set(repo, { amend: false, prefill: null });
+  useStatusStore.setState((s) => {
+    const { [repo]: _, ...notices } = s.notices;
+    return { notices };
+  });
+};
+
 export const useTabs = create<TabsState>()((set, get) => {
   const update = (partial: Partial<TabsState>) => {
     set(partial);
-    persist(get());
+    saveState(get());
   };
 
   return {
@@ -42,11 +61,18 @@ export const useTabs = create<TabsState>()((set, get) => {
     loaded: false,
 
     async load() {
-      const state = await api("app.getState");
+      let state: { tabs: readonly RepoId[]; activeTab: RepoId | null; recent: readonly RepoId[] };
+      try {
+        state = await api("app.getState");
+      } catch (e) {
+        // Start with a blank tab rather than a spinner forever.
+        console.error("Could not load the saved tabs", e);
+        state = { tabs: [], activeTab: null, recent: [] };
+      }
       const tabs: Tab[] = state.tabs.map((repo) => ({ key: makeKey(), repo }));
       if (tabs.length === 0) tabs.push({ key: makeKey(), repo: null });
       const active = tabs.find((t) => t.repo === state.activeTab)?.key ?? tabs[0]!.key;
-      set({ tabs, active, recent: state.recent, loaded: true });
+      set({ tabs, active, recent: [...state.recent], loaded: true });
     },
 
     openRepo(repo, inTab) {
@@ -92,14 +118,17 @@ export const useTabs = create<TabsState>()((set, get) => {
       const index = tabs.findIndex((t) => t.key === key);
       if (index < 0) return;
       const closing = tabs[index]!;
-      if (closing.repo && !tabs.some((t) => t.key !== key && t.repo === closing.repo)) {
-        void api("repo.close", closing.repo).catch(() => {});
-      }
       let next = tabs.filter((t) => t.key !== key);
       if (next.length === 0) next = [{ key: makeKey(), repo: null }];
       const nextActive =
         active === key ? (next[Math.min(index, next.length - 1)]?.key ?? null) : active;
       update({ tabs: next, active: nextActive });
+      if (closing.repo && !next.some((t) => t.repo === closing.repo)) {
+        // Forget before closing, so that nothing asks the main process (which would reopen
+        // the repository) once it is closed.
+        forgetRepo(closing.repo);
+        void api("repo.close", closing.repo).catch(() => {});
+      }
     },
 
     activate(key) {
@@ -117,4 +146,10 @@ export const useTabs = create<TabsState>()((set, get) => {
       update({ recent: get().recent.filter((r) => r !== repo) });
     },
   };
+});
+
+// Repositories in background tabs refresh when shown, not on every change.
+useTabs.subscribe((s, prev) => {
+  if (s.tabs === prev.tabs && s.active === prev.active) return;
+  setBackgroundRepos(s.tabs.flatMap((t) => (t.repo && t.key !== s.active ? [t.repo] : [])));
 });

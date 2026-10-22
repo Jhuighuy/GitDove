@@ -17,7 +17,8 @@ import { APP, notify } from "@/stores/status";
 const refs = (repo: RepoId) => queryClient.getQueryData<RefsSnapshot>(keys.refs(repo));
 const headBranch = (repo: RepoId) => refs(repo)?.refs.find((r) => r.kind === "branch" && r.isHead);
 /** A ref or a commit hash for display. */
-const refLabel = (ref: string) => (/^[0-9a-f]{40}$/.test(ref) ? shortHash(ref) : ref);
+const refLabel = (ref: string) =>
+  /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(ref) ? shortHash(ref) : ref;
 const info = (repo: RepoId) => queryClient.getQueryData<RepoInfo>(keys.info(repo));
 const defaultRemote = (repo: RepoId) => {
   const remotes = refs(repo)?.remotes ?? [];
@@ -39,13 +40,13 @@ const sibling = (repo: RepoId, path: string): RepoLocation => {
 export const commands = {
   fetch: (repo: RepoId) =>
     runAction(repo, "Fetch", () => api("repo.fetch", repo, null), {
-      progress: "Fetching…",
+      status: "Fetching…",
       cancellable: true,
     }),
 
   pull: (repo: RepoId, mode: "ff-only" | "merge" | "rebase" = "ff-only") =>
     runAction(repo, "Pull", () => api("repo.pull", repo, mode), {
-      progress: "Pulling…",
+      status: "Pulling…",
       success: "Pulled",
       cancellable: true,
     }),
@@ -59,9 +60,18 @@ export const commands = {
     }
     let setUpstream = false;
     if (!head.upstream || head.upstreamGone) {
+      // The main process pushes to the same remote.
+      const remote = defaultRemote(repo);
+      if (!remote) {
+        toast.error("Push failed", { description: "No remotes configured" });
+        return;
+      }
+      const why = head.upstreamGone
+        ? `The upstream branch of “${head.short}” no longer exists.`
+        : `“${head.short}” has no upstream branch.`;
       const ok = await confirm({
         title: `Push ${head.short}?`,
-        description: `“${head.short}” has no upstream branch. Push it and set the upstream to origin/${head.short}?`,
+        description: `${why} Push it and set the upstream to ${remote}/${head.short}?`,
         confirmLabel: "Push",
       });
       if (!ok) return;
@@ -78,7 +88,7 @@ export const commands = {
       if (!ok) return;
     }
     await runAction(repo, "Push", () => api("repo.push", repo, { force, setUpstream }), {
-      progress: `Pushing ${head.short}…`,
+      status: `Pushing ${head.short}…`,
       success: `Pushed ${head.short}`,
       cancellable: true,
     });
@@ -175,18 +185,37 @@ export const commands = {
           repo,
           "Delete remote branch",
           () => api("repo.deleteRemoteBranch", repo, ref.remote!, name),
-          { progress: `Deleting ${ref.short}…`, cancellable: true },
+          { status: `Deleting ${ref.short}…`, cancellable: true },
         );
       }
       return;
     }
     const ok = await confirm({
       title: `Delete ${ref.short}?`,
-      description: "The branch will be deleted even if it is not fully merged.",
+      description: `The branch “${ref.short}” will be deleted.`,
       confirmLabel: "Delete",
       destructive: true,
     });
-    if (ok)
+    if (!ok) return;
+    const result = await runAction(repo, "Delete branch", async () => {
+      try {
+        await api("repo.deleteBranch", repo, ref.short, false);
+        return "deleted";
+      } catch (e) {
+        // Unmerged work is deleted only when the user says so.
+        if (e instanceof ApiError && /not fully merged/.test(`${e.message}\n${e.detail ?? ""}`))
+          return "unmerged";
+        throw e;
+      }
+    });
+    if (!result.ok || result.value !== "unmerged") return;
+    const force = await confirm({
+      title: `Delete unmerged ${ref.short}?`,
+      description: `“${ref.short}” has commits that are not merged into its upstream or HEAD. Deleting it anyway may lose them.`,
+      confirmLabel: "Delete Anyway",
+      destructive: true,
+    });
+    if (force)
       await runAction(repo, "Delete branch", () => api("repo.deleteBranch", repo, ref.short, true));
   },
 
@@ -284,15 +313,31 @@ export const commands = {
     }
   },
 
-  abort: (repo: RepoId) =>
-    runAction(repo, "Abort", () => api("repo.abortOperation", repo), { status: "Aborting…" }),
+  abort: async (repo: RepoId) => {
+    if (refuseWhileBusy(repo, "Abort")) return;
+    const ok = await confirm({
+      title: "Abort?",
+      description:
+        "Returns to the state before the operation started. Conflict resolutions and other changes made since are lost.",
+      confirmLabel: "Abort",
+      destructive: true,
+    });
+    if (ok)
+      await runAction(repo, "Abort", () => api("repo.abortOperation", repo), {
+        status: "Aborting…",
+      });
+  },
   continue: (repo: RepoId) =>
     runAction(repo, "Continue", () => api("repo.continueOperation", repo), {
       status: "Continuing…",
     }),
 
   /** Cancels the running fetch, pull or push. */
-  cancel: (repo: RepoId) => void api("repo.cancel", repo),
+  cancel: (repo: RepoId) => {
+    api("repo.cancel", repo).catch((e: unknown) => {
+      toast.error("Cancel failed", { description: e instanceof Error ? e.message : String(e) });
+    });
+  },
 
   discard: async (repo: RepoId, paths: string[], untracked: string[]) => {
     if (refuseWhileBusy(repo, "Discard")) return;
@@ -320,7 +365,7 @@ export const commands = {
     ref.isHead
       ? commands.push(repo)
       : runAction(repo, "Push", () => api("repo.pushBranch", repo, ref.short, false), {
-          progress: `Pushing ${ref.short}…`,
+          status: `Pushing ${ref.short}…`,
           success: `Pushed ${ref.short}`,
           cancellable: true,
         }),
@@ -330,7 +375,7 @@ export const commands = {
     ref.isHead
       ? commands.pull(repo)
       : runAction(repo, "Fast-forward", () => api("repo.fastForwardBranch", repo, ref.short), {
-          progress: `Updating ${ref.short}…`,
+          status: `Updating ${ref.short}…`,
           success: `Updated ${ref.short}`,
           cancellable: true,
         }),
@@ -392,7 +437,7 @@ export const commands = {
         throw e;
       }
     });
-    if (result !== "needs-force") return;
+    if (!result.ok || result.value !== "needs-force") return;
     const force = await confirm({
       title: "Force remove worktree?",
       description:
@@ -411,11 +456,19 @@ export const commands = {
 
   openSibling: (repo: RepoId, path: string) => void openLocation(sibling(repo, path)),
 
-  reveal: (repo: RepoId, path?: string) => void api("shell.revealInFinder", repo, path),
+  reveal: (repo: RepoId, path?: string) => {
+    if (repoLocationOf(repo).kind !== "local") {
+      notify(repo, "Only local files can be revealed", "info");
+      return;
+    }
+    api("shell.revealInFinder", repo, path).catch((e: unknown) => {
+      toast.error("Could not reveal", { description: e instanceof Error ? e.message : String(e) });
+    });
+  },
 
   updateSubmodule: (repo: RepoId, path: string) =>
     runAction(repo, "Update submodule", () => api("repo.updateSubmodule", repo, path), {
-      progress: `Updating ${path}…`,
+      status: `Updating ${path}…`,
       success: `Updated ${path}`,
     }),
 
@@ -423,7 +476,7 @@ export const commands = {
     const remote = defaultRemote(repo);
     if (!remote) return void toast.error("No remotes configured");
     return runAction(repo, "Push tag", () => api("repo.pushTag", repo, remote, tag), {
-      progress: `Pushing ${tag}…`,
+      status: `Pushing ${tag}…`,
       success: `Pushed ${tag} to ${remote}`,
       cancellable: true,
     });
@@ -444,13 +497,13 @@ export const commands = {
         repo,
         "Delete remote tag",
         () => api("repo.deleteRemoteTag", repo, remote, tag),
-        { progress: `Deleting ${tag} from ${remote}…`, cancellable: true },
+        { status: `Deleting ${tag} from ${remote}…`, cancellable: true },
       );
   },
 
   fetchRemote: (repo: RepoId, remote: string) =>
     runAction(repo, "Fetch", () => api("repo.fetch", repo, remote), {
-      progress: `Fetching ${remote}…`,
+      status: `Fetching ${remote}…`,
       cancellable: true,
     }),
 
@@ -472,8 +525,10 @@ export const commands = {
       confirmLabel: "Add Remote",
     });
     if (!url) return;
-    await runAction(repo, "Add remote", () => api("repo.addRemote", repo, name.value, url.value));
-    void commands.fetchRemote(repo, name.value);
+    const added = await runAction(repo, "Add remote", () =>
+      api("repo.addRemote", repo, name.value, url.value),
+    );
+    if (added.ok) await commands.fetchRemote(repo, name.value);
   },
 
   editRemoteUrl: async (repo: RepoId, name: string, current: string) => {
@@ -506,7 +561,12 @@ export const commands = {
     }),
 
   copy: (text: string, what = "Copied") => {
-    void navigator.clipboard.writeText(text).then(() => notify(APP, what));
+    navigator.clipboard.writeText(text).then(
+      () => notify(APP, what),
+      (e: unknown) => {
+        toast.error("Copy failed", { description: e instanceof Error ? e.message : String(e) });
+      },
+    );
   },
 
   selectCommit: (repo: RepoId, hash: string) =>

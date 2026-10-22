@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 import type { FileChange, RepoInfo, WorkingStatus } from "@shared/domain";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { queryClient } from "@/lib/queries";
 import { useBusyStore } from "@/stores/busy";
-import { useRepoUiStore } from "@/stores/repo-ui";
+import { useLayout, useRepoUiStore } from "@/stores/repo-ui";
 import { WipPanel } from "./WipPanel";
 
 const mocks = vi.hoisted(() => ({
@@ -59,6 +60,9 @@ let n = 0;
 let repo: string;
 
 beforeEach(() => {
+  // Gives the virtualized file lists a viewport, so that rows render.
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
+  useLayout.setState({ collapsed: {} });
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
   // Commit drafts are kept per repository: use a fresh one per test.
@@ -79,16 +83,18 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
 });
 
 async function render() {
   // A fresh root per render, so queries start over.
   await act(async () => root.unmount());
   root = createRoot(container);
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // The app's client: actions refresh it.
+  queryClient.clear();
   await act(async () =>
     root.render(
-      <QueryClientProvider client={client}>
+      <QueryClientProvider client={queryClient}>
         <WipPanel repo={repo} />
       </QueryClientProvider>,
     ),
@@ -105,13 +111,15 @@ const button = (label: string) => {
   return el;
 };
 const row = (path: string) => {
-  const el = container.querySelector<HTMLElement>(`li[title="${path}"]`);
+  const el = container.querySelector<HTMLElement>(`[role=option][title="${path}"]`);
   if (!el) throw new Error(`No row ${path}`);
   return el;
 };
 /** The n-th hover action of a file row. */
 const rowAction = (path: string, i: number) => row(path).querySelectorAll("button")[i]!;
 const click = (el: HTMLElement) => act(async () => el.click());
+/** Lets a started action (and the refresh after it) finish. */
+const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)));
 const apiCalls = (method: string) =>
   mocks.api.mock.calls.filter(([m]) => m === method).map(([, ...args]) => args);
 const ui = () => useRepoUiStore.getState().byRepo[repo];
@@ -170,10 +178,12 @@ it("opens diffs of unstaged, untracked and staged files", async () => {
 it("stages, unstages and discards files", async () => {
   await render();
   await click(rowAction("src/edit.ts", 1));
+  await settle();
   expect(apiCalls("repo.stage")).toEqual([[repo, ["src/edit.ts"]]]);
   // Row actions do not open the file.
   expect(ui()?.diff ?? null).toBeNull();
   await click(rowAction("staged.ts", 0));
+  await settle();
   expect(apiCalls("repo.unstage")).toEqual([[repo, ["staged.ts"]]]);
   await click(rowAction("src/edit.ts", 0));
   await click(rowAction("new.ts", 0));
@@ -182,7 +192,9 @@ it("stages, unstages and discards files", async () => {
     [repo, [], ["new.ts"]],
   ]);
   await click(button("Stage All"));
+  await settle();
   await click(button("Unstage All"));
+  await settle();
   expect(apiCalls("repo.stageAll")).toEqual([[repo]]);
   expect(apiCalls("repo.unstageAll")).toEqual([[repo]]);
 });
@@ -232,8 +244,11 @@ it("collapses sections", async () => {
     b.textContent?.startsWith("Unstaged Files"),
   )!;
   await click(trigger);
-  expect(container.querySelector('li[title="src/edit.ts"]')).toBeNull();
-  expect(container.querySelector('li[title="staged.ts"]')).not.toBeNull();
+  expect(container.querySelector('[role=option][title="src/edit.ts"]')).toBeNull();
+  expect(container.querySelector('[role=option][title="staged.ts"]')).not.toBeNull();
+  // Collapsed stays collapsed, e.g. after looking at a commit.
+  await render();
+  expect(container.querySelector('[role=option][title="src/edit.ts"]')).toBeNull();
 });
 
 it("shows conflicts and the operation in progress", async () => {
@@ -243,7 +258,12 @@ it("shows conflicts and the operation in progress", async () => {
   expect(text()).toContain("Conflicts(1)");
   expect(text()).toContain("cherry picking in progress");
   expect(button("Continue").disabled).toBe(true);
+  // Committing needs the conflicts resolved.
+  await type(summary(), "Merge");
+  expect(button("Commit Changes").disabled).toBe(true);
+  expect(button("Commit Changes").parentElement!.title).toBe("Resolve the conflicts first.");
   await click(rowAction("both.ts", 0));
+  await settle();
   expect(apiCalls("repo.stage")).toEqual([[repo, ["both.ts"]]]);
   await click(row("both.ts"));
   expect(ui()?.diff).toEqual({ kind: "unstaged", path: "both.ts", untracked: false });
@@ -268,7 +288,48 @@ it("limits long file lists", async () => {
   });
   await render();
   expect(text()).toContain("…and 2 more");
-  expect(container.querySelectorAll("li")).toHaveLength(3000);
+  const staged = container.querySelectorAll<HTMLElement>("[role=listbox]")[1]!;
+  expect(staged.style.height).toBe(`${3000 * 24}px`);
+  // Only the rows on screen are rendered.
+  expect(staged.querySelectorAll("[role=option]").length).toBeLessThan(100);
+});
+
+it("counts each changed file once, and says when the list is incomplete", async () => {
+  mocks.status = status({
+    staged: [file("both.ts")],
+    unstaged: [file("both.ts"), file("other.ts")],
+  });
+  await render();
+  expect(text()).toContain("2 file changes");
+  mocks.status = status({ staged: [file("a.ts")], unstaged: [], truncated: true });
+  await render();
+  expect(text()).toContain("1+ file changes");
+  expect(text()).toContain("Staged Files(1+)");
+  expect(button("Commit Changes to 1+ Files")).toBeDefined();
+});
+
+it("moves staged files at once, before the status comes back", async () => {
+  let release!: () => void;
+  mocks.api.mockImplementation(async (method: string) => {
+    if (method === "repo.status") return mocks.status;
+    if (method === "repo.info") return mocks.info;
+    if (method === "repo.stage") return new Promise<void>((r) => (release = r));
+    return undefined;
+  });
+  await render();
+  await click(rowAction("new.ts", 1));
+  await settle();
+  // Shown as staged (and added) while git runs.
+  expect(row("new.ts").closest("[aria-label='Staged files']")).not.toBeNull();
+  expect(row("new.ts").textContent?.startsWith("A")).toBe(true);
+  mocks.status = status({
+    staged: [...status().staged, file("new.ts", "added")],
+    unstaged: [file("src/edit.ts")],
+  });
+  await act(async () => release());
+  await settle();
+  expect(row("new.ts").closest("[aria-label='Staged files']")).not.toBeNull();
+  expect(apiCalls("repo.status").length).toBeGreaterThan(1);
 });
 
 it("commits staged changes with a summary and description", async () => {
@@ -308,7 +369,7 @@ it("commits with the keyboard and keeps the draft when committing fails", async 
   });
   expect(mocks.api).toHaveBeenCalledWith("repo.commit", repo, "Summary only", { amend: false });
   expect(mocks.toast.error).toHaveBeenCalledWith(
-    "Commit failed",
+    `Commit failed in repo${n}`,
     expect.objectContaining({ description: "hook failed" }),
   );
   expect(summary().value).toBe("Summary only");
@@ -398,10 +459,69 @@ it("keeps a typed message when switching to amend", async () => {
   expect(summary().value).toBe("Mine");
 });
 
-it("focuses the summary from the menu", async () => {
+it("focuses the summary when asked", async () => {
   await render();
-  mocks.listeners.get("menu.command")!({ command: "fetch" });
   expect(document.activeElement).not.toBe(summary());
-  mocks.listeners.get("menu.command")!({ command: "commit-focus" });
+  await act(async () => useRepoUiStore.getState().focusCommit(repo));
   expect(document.activeElement).toBe(summary());
+  // Only once: showing the panel again later does not take the focus.
+  summary().blur();
+  await render();
+  expect(document.activeElement).not.toBe(summary());
+});
+
+it("clears the prefilled message when amending is turned off", async () => {
+  mocks.status = status({ staged: [] });
+  await render();
+  await toggleAmend();
+  await settle();
+  expect(summary().value).toBe("Previous summary");
+  await toggleAmend();
+  expect(summary().value).toBe("");
+  expect(description().value).toBe("");
+  // An edited message stays.
+  await toggleAmend();
+  await settle();
+  await type(summary(), "Previous summary, reworded");
+  await toggleAmend();
+  expect(summary().value).toBe("Previous summary, reworded");
+});
+
+it("cannot amend before the first commit", async () => {
+  mocks.info = info({ head: { branch: "main", hash: null, detached: false } });
+  await render();
+  expect(amend().getAttribute("aria-disabled")).toBe("true");
+});
+
+it("does not commit while an input method composes text", async () => {
+  await render();
+  await type(summary(), "Summary");
+  await act(async () => {
+    const e = new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true });
+    Object.defineProperty(e, "isComposing", { value: true });
+    summary().dispatchEvent(e);
+  });
+  expect(apiCalls("repo.commit")).toEqual([]);
+});
+
+it("splits a pasted multi-line message into summary and description", async () => {
+  await render();
+  await type(description(), "Existing");
+  await act(async () => {
+    const e = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
+      clipboardData: unknown;
+    };
+    e.clipboardData = { getData: () => "Fix the bug\n\nIt crashed.\n" };
+    summary().dispatchEvent(e);
+  });
+  expect(summary().value).toBe("Fix the bug");
+  expect(description().value).toBe("It crashed.\nExisting");
+});
+
+it("keeps the draft across restarts, but not amending", async () => {
+  await render();
+  await type(summary(), "Saved");
+  await toggleAmend();
+  const saved = JSON.parse(localStorage.getItem("gitdove.drafts")!).state.drafts[repo];
+  expect(saved).toEqual({ summary: "Saved", description: "" });
 });
