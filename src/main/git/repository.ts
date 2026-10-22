@@ -1404,11 +1404,12 @@ export class Repository {
     return this.write(validateRev(onto).pipe(Effect.andThen(this.run(["rebase", onto]))));
   }
 
-  /** Applies commits given newest first (as in the graph); git applies them oldest first. */
+  /** Applies commits given newest first (as in the graph), oldest first. */
   cherryPick(hashes: readonly string[]) {
     return this.write(
       Effect.forEach(hashes, validateRev).pipe(
-        Effect.andThen(this.run(["cherry-pick", ...hashes])),
+        // git picks commits in command-line order.
+        Effect.andThen(this.run(["cherry-pick", ...hashes.toReversed()])),
       ),
     );
   }

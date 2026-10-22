@@ -513,7 +513,6 @@ describe("repository handlers", () => {
     "repo.clone",
     "repo.hiddenRefs",
     "repo.setHiddenRefs",
-    "repo.graphHashes",
   ]);
   const delegating = Object.keys(handlers).filter((m) => m.startsWith("repo.") && !special.has(m));
 
@@ -530,14 +529,6 @@ describe("repository handlers", () => {
       args,
     });
     expect(ids).toEqual(["local:/work/repo"]);
-  });
-
-  it("returns graph row hashes", async () => {
-    services.repo = Object.assign(services.repo, {
-      graphRows: vi.fn(() => Effect.succeed([{ hash: "a" }, { hash: "b" }])),
-    });
-    expect(await call("repo.graphHashes", "local:/work/repo", 3, 10, 12)).toEqual(["a", "b"]);
-    expect(services.repo.graphRows).toHaveBeenCalledWith(3, 10, 12);
   });
 
   it("reads and stores hidden refs", async () => {
