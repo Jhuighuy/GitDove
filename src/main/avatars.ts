@@ -99,15 +99,18 @@ const fromGithub = (email: string, size: number) =>
   });
 
 /**
- * GitLab's avatar API (`/api/v4/avatar`); public, also on self-hosted instances. `origin` is
- * the instance's web origin, e.g. `https://gitlab.com` or `http://git.lan:8080`.
+ * GitLab's avatar API (`/api/v4/avatar`). It only knows users by their public
+ * email, and instances that restrict public visibility refuse anonymous calls.
+ * `origin` is the instance's web origin, e.g. `https://gitlab.com` or `http://git.lan:8080`.
  */
-const gitlabAvatarUrl = (origin: string, email: string, size: number) =>
+const gitlabAvatarApi = (origin: string, email: string, size: number) =>
+  get(
+    `${origin}/api/v4/avatar?email=${encodeURIComponent(email)}&size=${size}`,
+    "application/json",
+  );
+
+const avatarUrlOf = (origin: string, res: Response) =>
   Effect.gen(function* () {
-    const res = yield* get(
-      `${origin}/api/v4/avatar?email=${encodeURIComponent(email)}&size=${size}`,
-      "application/json",
-    );
     if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) {
       return yield* definite(origin);
     }
@@ -122,28 +125,89 @@ const gitlabAvatarUrl = (origin: string, email: string, size: number) =>
   });
 
 /**
- * Whether a web origin runs GitLab. Self-hosted instances can have any name,
- * so ask once per session instead of guessing from the host name.
+ * `gitlab` with the avatar URL served for unknown users, `locked` for GitLab
+ * refusing anonymous calls, or `other`.
  */
-const gitlabOrigins = new Map<string, Effect.Effect<boolean>>();
-export const isGitlab = (origin: string) => {
-  let probe = gitlabOrigins.get(origin);
-  if (!probe) {
-    probe = Effect.runSync(
+type GitlabProbe =
+  | { readonly kind: "gitlab"; readonly unknown: string }
+  | { readonly kind: "locked" | "other" };
+
+/** A probe that failed on the network is retried after this long. */
+const PROBE_RETRY = 60 * 1000;
+
+const summary = (res: Response) => {
+  const final = URL.canParse(res.url) ? new URL(res.url).host : "";
+  return `HTTP ${res.status}, ${res.headers.get("content-type") ?? "no type"}${
+    res.redirected && final ? `, redirected to ${final}` : ""
+  }`;
+};
+
+const probeGitlab = (origin: string) =>
+  Effect.gen(function* () {
+    const res = yield* gitlabAvatarApi(origin, "gitdove-probe@invalid.invalid", 16);
+    const why = summary(res);
+    // GitLab marks its answers, its error pages included.
+    const marked = res.headers.has("x-gitlab-meta");
+    if (res.status === 401 || res.status === 403 || (marked && !res.ok)) {
+      const message = yield* body(origin, () => res.json() as Promise<{ message?: unknown }>).pipe(
+        Effect.map((b) => (typeof b === "object" && b !== null ? b.message : null)),
+        Effect.orElseSucceed(() => null),
+      );
+      if (marked || (typeof message === "string" && /^40[13]\b/.test(message))) {
+        log.warn(`avatars: ${origin} is GitLab but refuses anonymous avatar lookups (${why})`);
+        return { kind: "locked" } satisfies GitlabProbe;
+      }
+    }
+    const probe: GitlabProbe = yield* avatarUrlOf(origin, res).pipe(
+      Effect.map((unknown) => ({ kind: "gitlab" as const, unknown })),
+      Effect.catchIf(
+        (e) => !e.transient,
+        () => Effect.succeed({ kind: marked ? ("locked" as const) : ("other" as const) }),
+      ),
+    );
+    log.info(`avatars: ${origin} is ${probe.kind === "other" ? "not " : ""}GitLab (${why})`);
+    return probe;
+  }).pipe(Effect.tapError(() => Effect.sync(() => log.warn(`avatars: cannot reach ${origin}`))));
+
+/**
+ * Whether a web origin runs GitLab. Self-hosted instances can have any name,
+ * so ask once per session instead of guessing from the host name. Network
+ * failures (e.g. VPN not up yet) are not remembered for long.
+ */
+const gitlabOrigins = new Map<
+  string,
+  { probe: Effect.Effect<GitlabProbe, NoAvatar>; at: number }
+>();
+const probeOf = (origin: string): Effect.Effect<GitlabProbe, NoAvatar> => {
+  let entry = gitlabOrigins.get(origin);
+  if (!entry) {
+    const probe = Effect.runSync(
       Effect.cached(
-        gitlabAvatarUrl(origin, "gitdove-probe@invalid.invalid", 16).pipe(
-          Effect.as(true),
-          Effect.orElseSucceed(() => false),
-          Effect.tap((yes) =>
-            Effect.sync(() => log.info(`avatars: ${origin} is ${yes ? "" : "not "}GitLab`)),
+        probeGitlab(origin).pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              const failed = gitlabOrigins.get(origin);
+              if (failed?.probe === probe) gitlabOrigins.set(origin, { ...failed, at: Date.now() });
+            }),
           ),
         ),
       ),
     );
-    gitlabOrigins.set(origin, probe);
+    entry = { probe, at: Infinity };
+    gitlabOrigins.set(origin, entry);
+  } else if (Date.now() - entry.at > PROBE_RETRY) {
+    gitlabOrigins.delete(origin);
+    return probeOf(origin);
   }
   return entry.probe;
 };
+
+/** Whether a web origin runs GitLab, refusing anonymous lookups or not (false if unreachable). */
+export const isGitlab = (origin: string) =>
+  probeOf(origin).pipe(
+    Effect.map((p) => p.kind !== "other"),
+    Effect.orElseSucceed(() => false),
+  );
 
 /** Avatar services (Gravatar, Libravatar) answer `d=404` instead of a placeholder. */
 const noPlaceholder = (url: string) =>
@@ -154,10 +218,12 @@ const noPlaceholder = (url: string) =>
 const fromGitlab = (host: string, email: string, size: number) =>
   Effect.gen(function* () {
     const origin = `https://${host}`;
-    if (!(yield* isGitlab(origin))) return yield* definite(host);
-    const url = yield* gitlabAvatarUrl(origin, email, size);
-    // Unknown users get a Gravatar identicon; ask Gravatar for a 404 instead.
-    return yield* image(/gravatar\.com/.test(url) ? url.replace(/([?&])d=[^&]*/, "$1d=404") : url);
+    const probe = yield* probeOf(origin);
+    if (probe.kind !== "gitlab") return yield* definite(host);
+    const url = yield* avatarUrlOf(origin, yield* gitlabAvatarApi(origin, email, size));
+    // Instances without Gravatar answer unknown users with a default picture.
+    if (url === probe.unknown) return yield* definite(host);
+    return yield* image(noPlaceholder(url));
   });
 
 const fromGravatar = (email: string, size: number) =>
