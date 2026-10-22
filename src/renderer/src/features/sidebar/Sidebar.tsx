@@ -816,7 +816,10 @@ const RowList = memo(function RowList({
       className="group/tree min-h-0 flex-1 overflow-y-auto outline-none"
       onKeyDown={onKeyDown}
       onFocus={(e) => {
-        if (e.target === e.currentTarget && cursorIndex < 0 && rows[0]) setCursor(rows[0].key);
+        // Tabbing in starts at the first row, unless a click put the cursor somewhere.
+        const first = rows[0];
+        if (e.target === e.currentTarget && first)
+          setCursor((c) => (c !== null && rows.some((r) => r.key === c) ? c : first.key));
       }}
       onMouseDown={(e) => {
         // The cursor goes on from the row clicked.
