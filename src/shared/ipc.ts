@@ -88,6 +88,8 @@ export interface Api {
   /** Commit hashes of rows `start` to `end` (exclusive), e.g. for range selection. */
   "repo.graphHashes": (repo: RepoId, version: number, start: number, end: number) => string[];
   "repo.findCommit": (repo: RepoId, version: number, hash: string) => number;
+  /** Row indexes of several commits (-1 for those not in the graph), e.g. to re-index a selection. */
+  "repo.findCommits": (repo: RepoId, version: number, hashes: string[]) => number[];
   "repo.search": (repo: RepoId, query: string) => string[];
   "repo.status": (repo: RepoId) => WorkingStatus;
   "repo.commitDetails": (repo: RepoId, hash: string) => CommitDetails;
@@ -122,12 +124,14 @@ export interface Api {
   "repo.deleteTag": (repo: RepoId, name: string) => void;
   "repo.merge": (repo: RepoId, ref: string, opts: { ffOnly?: boolean; noFf?: boolean }) => void;
   "repo.rebase": (repo: RepoId, onto: string) => void;
-  "repo.cherryPick": (repo: RepoId, hash: string) => void;
-  "repo.revert": (repo: RepoId, hash: string) => void;
+  /** Applies commits given in graph order (newest first), oldest first. */
+  "repo.cherryPick": (repo: RepoId, hashes: string[]) => void;
+  /** Reverts commits given in graph order (newest first), newest first. */
+  "repo.revert": (repo: RepoId, hashes: string[]) => void;
   "repo.reset": (repo: RepoId, hash: string, mode: ResetMode) => void;
   "repo.abortOperation": (repo: RepoId) => void;
   "repo.continueOperation": (repo: RepoId) => void;
-  /** Cancels the running fetch, pull or push, if any. */
+  /** Cancels the running fetch, pull or push, otherwise a running local write, if any. */
   "repo.cancel": (repo: RepoId) => void;
 
   // Graph visibility
@@ -142,9 +146,13 @@ export interface Api {
 
   // Stash
   "repo.stash": (repo: RepoId, message: string | null, includeUntracked: boolean) => void;
-  "repo.stashPop": (repo: RepoId, index: number) => void;
-  "repo.stashApply": (repo: RepoId, index: number) => void;
-  "repo.stashDrop": (repo: RepoId, index: number) => void;
+  // A stash is named by its index; `hash`, when given, must be its commit, so that an index that
+  // shifted meanwhile (e.g. a stash pushed from a terminal) fails instead of hitting another stash.
+  "repo.stashPop": (repo: RepoId, index: number, hash?: string) => void;
+  "repo.stashApply": (repo: RepoId, index: number, hash?: string) => void;
+  "repo.stashDrop": (repo: RepoId, index: number, hash?: string) => void;
+  /** Creates and checks out a branch at the stash's base commit, then pops the stash onto it. */
+  "repo.stashBranch": (repo: RepoId, name: string, index: number, hash?: string) => void;
 
   // Remotes
   "repo.fetch": (repo: RepoId, remote: string | null) => void;

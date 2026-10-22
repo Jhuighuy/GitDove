@@ -980,17 +980,27 @@ export class Repository {
   }
 
   findCommit(version: number, hash: string): Effect.Effect<number, StaleGraphError> {
+    return Effect.map(this.findCommits(version, [hash]), ([i]) => i!);
+  }
+
+  /** Row indexes of commits by (possibly abbreviated) hash, -1 for those not in the graph. */
+  findCommits(
+    version: number,
+    hashes: readonly string[],
+  ): Effect.Effect<number[], StaleGraphError> {
     return Effect.suspend(() => {
       const g = this.graph;
       if (g?.version !== version) {
         return Effect.fail(new StaleGraphError({ message: "Graph version is outdated" }));
       }
-      const exact = g.builder.index.get(hash);
-      if (exact !== undefined) return Effect.succeed(exact);
-      if (hash.length >= 4) {
-        for (const [h, i] of g.builder.index) if (h.startsWith(hash)) return Effect.succeed(i);
-      }
-      return Effect.succeed(-1);
+      const { index } = g.builder;
+      const find = (hash: string) => {
+        const exact = index.get(hash);
+        if (exact !== undefined) return exact;
+        if (hash.length >= 4) for (const [h, i] of index) if (h.startsWith(hash)) return i;
+        return -1;
+      };
+      return Effect.succeed(hashes.map(find));
     });
   }
 
@@ -1394,13 +1404,21 @@ export class Repository {
     return this.write(validateRev(onto).pipe(Effect.andThen(this.run(["rebase", onto]))));
   }
 
-  cherryPick(hash: string) {
-    return this.write(validateRev(hash).pipe(Effect.andThen(this.run(["cherry-pick", hash]))));
+  /** Applies commits given newest first (as in the graph); git applies them oldest first. */
+  cherryPick(hashes: readonly string[]) {
+    return this.write(
+      Effect.forEach(hashes, validateRev).pipe(
+        Effect.andThen(this.run(["cherry-pick", ...hashes])),
+      ),
+    );
   }
 
-  revert(hash: string) {
+  /** Reverts commits given newest first (as in the graph), in that order. */
+  revert(hashes: readonly string[]) {
     return this.write(
-      validateRev(hash).pipe(Effect.andThen(this.run(["revert", "--no-edit", hash]))),
+      Effect.forEach(hashes, validateRev).pipe(
+        Effect.andThen(this.run(["revert", "--no-edit", ...hashes])),
+      ),
     );
   }
 

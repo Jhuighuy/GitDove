@@ -70,12 +70,12 @@ describe.skipIf(noShell).each(targets)("Repository conflicts on %s", (hostId) =>
 
     it("aborts and continues a cherry-pick", async () => {
       await diverge();
-      await fails(t.repo.cherryPick("side"));
+      await fails(t.repo.cherryPick(["side"]));
       expect(await state()).toBe("cherry-picking");
       await run(t.repo.abortOperation());
       expect(await state()).toBe("clean");
 
-      await fails(t.repo.cherryPick("side"));
+      await fails(t.repo.cherryPick(["side"]));
       await resolve();
       await sh("git config core.editor true");
       await run(t.repo.continueOperation());
@@ -85,12 +85,12 @@ describe.skipIf(noShell).each(targets)("Repository conflicts on %s", (hostId) =>
 
     it("aborts and continues a revert", async () => {
       await sh("echo three > f.txt && git commit -qam three");
-      await fails(t.repo.revert("HEAD~1"));
+      await fails(t.repo.revert(["HEAD~1"]));
       expect(await state()).toBe("reverting");
       await run(t.repo.abortOperation());
       expect(await state()).toBe("clean");
 
-      await fails(t.repo.revert("HEAD~1"));
+      await fails(t.repo.revert(["HEAD~1"]));
       await resolve();
       await sh("git config core.editor true");
       await run(t.repo.continueOperation());

@@ -88,6 +88,11 @@ const RowRange = (max: number) =>
     valid(([, , start, end]) => end - start <= max, `At most ${max} rows can be requested`),
   );
 
+/** A non-empty list of commits, at most as many as a selection can hold. */
+const Hashes = Schema.Array(Str).check(
+  valid((h: readonly string[]) => h.length > 0 && h.length <= MAX_GRAPH_HASHES, "Invalid commits"),
+);
+
 const noArgs = Schema.Tuple([]);
 const argsOf = <const E extends readonly Schema.Top[]>(...elements: E) => Schema.Tuple(elements);
 const repoArgs = <const E extends readonly Schema.Top[]>(...elements: E) =>
@@ -118,6 +123,7 @@ const argSchemas = {
   "repo.graphRows": RowRange(MAX_GRAPH_ROWS),
   "repo.graphHashes": RowRange(MAX_GRAPH_HASHES),
   "repo.findCommit": repoArgs(Index, Str),
+  "repo.findCommits": repoArgs(Index, Hashes),
   "repo.search": repoArgs(Str),
   "repo.status": repoArgs(),
   "repo.commitDetails": repoArgs(Str),
@@ -146,8 +152,8 @@ const argSchemas = {
     Schema.Struct({ ffOnly: Schema.optional(Bool), noFf: Schema.optional(Bool) }),
   ),
   "repo.rebase": repoArgs(Str),
-  "repo.cherryPick": repoArgs(Str),
-  "repo.revert": repoArgs(Str),
+  "repo.cherryPick": repoArgs(Hashes),
+  "repo.revert": repoArgs(Hashes),
   "repo.reset": repoArgs(Str, Schema.Literals(["soft", "mixed", "hard"])),
   "repo.abortOperation": repoArgs(),
   "repo.continueOperation": repoArgs(),
@@ -159,9 +165,10 @@ const argSchemas = {
   "repo.pruneWorktrees": repoArgs(),
   "repo.updateSubmodule": repoArgs(Str),
   "repo.stash": repoArgs(Schema.NullOr(Str), Bool),
-  "repo.stashPop": repoArgs(Index),
-  "repo.stashApply": repoArgs(Index),
-  "repo.stashDrop": repoArgs(Index),
+  "repo.stashPop": repoArgs(Index, Schema.optional(Str)),
+  "repo.stashApply": repoArgs(Index, Schema.optional(Str)),
+  "repo.stashDrop": repoArgs(Index, Schema.optional(Str)),
+  "repo.stashBranch": repoArgs(Str, Index, Schema.optional(Str)),
   "repo.fetch": repoArgs(Schema.NullOr(Str)),
   "repo.pull": repoArgs(Schema.Literals(["ff-only", "merge", "rebase"])),
   "repo.push": repoArgs(Schema.Struct({ force: Bool, setUpstream: Bool })),
@@ -433,10 +440,9 @@ export const handlers: Handlers = {
   "repo.graphRows": (id, version, start, end) =>
     withRepo(id, (r) => r.graphRows(version, start, end)),
   "repo.graphHashes": (id, version, start, end) =>
-    withRepo(id, (r) => r.graphRows(version, start, end)).pipe(
-      Effect.map((rows) => rows.map((row) => row.hash)),
-    ),
+    withRepo(id, (r) => r.graphHashes(version, start, end)),
   "repo.findCommit": (id, version, hash) => withRepo(id, (r) => r.findCommit(version, hash)),
+  "repo.findCommits": (id, version, hashes) => withRepo(id, (r) => r.findCommits(version, hashes)),
   "repo.search": (id, query) => withRepo(id, (r) => r.search(query)),
   "repo.status": (id) => withRepo(id, (r) => r.status()),
   "repo.commitDetails": (id, hash) => withRepo(id, (r) => r.commitDetails(hash)),
@@ -470,8 +476,8 @@ export const handlers: Handlers = {
   "repo.deleteTag": (id, name) => withRepo(id, (r) => r.deleteTag(name)),
   "repo.merge": (id, ref, opts) => withRepo(id, (r) => r.merge(ref, opts)),
   "repo.rebase": (id, onto) => withRepo(id, (r) => r.rebase(onto)),
-  "repo.cherryPick": (id, hash) => withRepo(id, (r) => r.cherryPick(hash)),
-  "repo.revert": (id, hash) => withRepo(id, (r) => r.revert(hash)),
+  "repo.cherryPick": (id, hashes) => withRepo(id, (r) => r.cherryPick(hashes)),
+  "repo.revert": (id, hashes) => withRepo(id, (r) => r.revert(hashes)),
   "repo.reset": (id, hash, mode) => withRepo(id, (r) => r.reset(hash, mode)),
   "repo.abortOperation": (id) => withRepo(id, (r) => r.abortOperation()),
   "repo.continueOperation": (id) => withRepo(id, (r) => r.continueOperation()),
@@ -502,9 +508,11 @@ export const handlers: Handlers = {
 
   // Stash ----------------------------------------------------------------------------
   "repo.stash": (id, message, untracked) => withRepo(id, (r) => r.stash(message, untracked)),
-  "repo.stashPop": (id, index) => withRepo(id, (r) => r.stashPop(index)),
-  "repo.stashApply": (id, index) => withRepo(id, (r) => r.stashApply(index)),
-  "repo.stashDrop": (id, index) => withRepo(id, (r) => r.stashDrop(index)),
+  "repo.stashPop": (id, index, hash) => withRepo(id, (r) => r.stashPop(index, hash)),
+  "repo.stashApply": (id, index, hash) => withRepo(id, (r) => r.stashApply(index, hash)),
+  "repo.stashDrop": (id, index, hash) => withRepo(id, (r) => r.stashDrop(index, hash)),
+  "repo.stashBranch": (id, name, index, hash) =>
+    withRepo(id, (r) => r.stashBranch(name, index, hash)),
 
   // Remotes --------------------------------------------------------------------------
   "repo.fetch": (id, remote) => withRepo(id, (r) => r.fetch(remote)),

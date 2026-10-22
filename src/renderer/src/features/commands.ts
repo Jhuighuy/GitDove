@@ -281,13 +281,13 @@ export const commands = {
   },
 
   cherryPick: (repo: RepoId, hash: string) =>
-    runAction(repo, "Cherry-pick", () => api("repo.cherryPick", repo, hash), {
+    runAction(repo, "Cherry-pick", () => api("repo.cherryPick", repo, [hash]), {
       status: `Cherry-picking ${shortHash(hash)}…`,
       success: `Cherry-picked ${shortHash(hash)}`,
     }),
 
   revert: (repo: RepoId, hash: string) =>
-    runAction(repo, "Revert", () => api("repo.revert", repo, hash), {
+    runAction(repo, "Revert", () => api("repo.revert", repo, [hash]), {
       status: `Reverting ${shortHash(hash)}…`,
       success: `Reverted ${shortHash(hash)}`,
     }),

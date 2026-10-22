@@ -132,9 +132,9 @@ describe.skipIf(noShell).each(targets)(
       expect(await sh("git log -1 --format=%s")).toBe("side");
 
       await run(t.repo.checkout("main"));
-      await run(t.repo.cherryPick("side"));
+      await run(t.repo.cherryPick(["side"]));
       expect(await sh("git log -1 --format=%s")).toBe("side");
-      await run(t.repo.revert("HEAD"));
+      await run(t.repo.revert(["HEAD"]));
       expect(await sh("git log -1 --format=%s")).toBe('Revert "side"');
       expect(await sh("ls")).toBe("f.txt");
     });
