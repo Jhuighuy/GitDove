@@ -9,6 +9,7 @@ import {
   parseStatus,
   parseSubmodules,
   parseWorktrees,
+  pushRemoteOf,
 } from "./parse";
 
 describe("parseStatus", () => {
@@ -360,6 +361,33 @@ describe("parseRemotes", () => {
       { name: "local", fetchUrl: "/srv/my repos/b.git", pushUrl: "ssh://host/b.git" },
       { name: "partial", fetchUrl: "https://h/p.git", pushUrl: "https://h/p.git" },
     ]);
+  });
+});
+
+describe("pushRemoteOf", () => {
+  const remotes = ["upstream", "origin", "fork"];
+  it("prefers the branch's push remote, then the default one, then origin", () => {
+    const config = [
+      "user.name T",
+      "remote.pushdefault upstream",
+      "branch.Topic.pushremote fork",
+      "branch.other.pushremote upstream",
+    ].join("\n");
+    expect(pushRemoteOf(config, remotes, "Topic")).toBe("fork");
+    expect(pushRemoteOf(config, remotes, "main")).toBe("upstream");
+    expect(pushRemoteOf(config, remotes, null)).toBe("upstream");
+    expect(pushRemoteOf("", remotes, "main")).toBe("origin");
+    expect(pushRemoteOf("", ["b", "a"], "main")).toBe("b");
+    expect(pushRemoteOf("", [], "main")).toBeNull();
+  });
+
+  it("takes the last value and skips settings naming no remote", () => {
+    const config = [
+      "remote.pushdefault fork",
+      "remote.pushdefault upstream",
+      "branch.main.pushremote gone",
+    ].join("\n");
+    expect(pushRemoteOf(config, remotes, "main")).toBe("upstream");
   });
 });
 

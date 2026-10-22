@@ -147,6 +147,12 @@ export interface RefsSnapshot {
   readonly worktrees: readonly Worktree[];
   readonly submodules: readonly Submodule[];
   readonly owners: BranchOwners;
+  /**
+   * The remote that pushing the checked out branch with `setUpstream` goes to, as `repo.push`
+   * picks it (`branch.<name>.pushRemote`, `remote.pushDefault`, `origin`, the first remote);
+   * null without remotes. Always set by the main process.
+   */
+  readonly pushRemote?: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,22 @@ describe.skipIf(noShell).each(targets)("Repository remotes on %s", (hostId) => {
       );
     });
 
+    it("says where pushing the current branch goes, and pushes there", async () => {
+      expect((await run(t.repo.refs())).pushRemote).toBe("origin");
+      const fork = `${t.root}/fork${t.n}.git`;
+      await sh(`git init -q --bare '${fork}' && git remote add fork '${fork}'`);
+      await sh("git config remote.pushDefault fork");
+      expect((await run(t.repo.refs())).pushRemote).toBe("fork");
+      await run(t.repo.createBranch("topic", "HEAD", true));
+      await sh(`git config branch.topic.pushRemote origin`);
+      expect((await run(t.repo.refs())).pushRemote).toBe("origin");
+      await run(t.repo.push({ force: false, setUpstream: true }));
+      expect((await branchRef("topic"))?.upstream).toBe("refs/remotes/origin/topic");
+      await run(t.repo.createBranch("other", "HEAD", false));
+      await run(t.repo.pushBranch("other", false));
+      expect((await branchRef("other"))?.upstream).toBe("refs/remotes/fork/other");
+    });
+
     it("pushes branches that are not checked out", async () => {
       await run(t.repo.createBranch("a", "HEAD~1", false));
       await run(t.repo.pushBranch("a", false));

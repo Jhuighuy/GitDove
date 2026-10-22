@@ -123,6 +123,35 @@ export const parseRemotes = (out: string): Remote[] => {
   return [...map].map(([name, e]) => ({ name, ...e }));
 };
 
+/**
+ * The remote that a branch without an upstream is pushed to (by `git push`, and by `push -u`
+ * here): `branch.<name>.pushRemote`, else `remote.pushDefault`, else `origin`, else the first
+ * remote. `config` is `git config --get-regexp` output with those keys; settings that name no
+ * remote in `remotes` are skipped. Null without remotes.
+ */
+export const pushRemoteOf = (
+  config: string,
+  remotes: readonly string[],
+  branch: string | null,
+): string | null => {
+  let pushDefault: string | null = null;
+  let branchRemote: string | null = null;
+  // The last value wins, as in git.
+  for (const line of config.split("\n")) {
+    const sp = line.indexOf(" ");
+    if (sp < 0) continue;
+    const key = line.slice(0, sp);
+    const value = line.slice(sp + 1);
+    if (key.toLowerCase() === "remote.pushdefault") pushDefault = value;
+    else if (branch !== null && key === `branch.${branch}.pushremote`) branchRemote = value;
+  }
+  return (
+    [branchRemote, pushDefault, "origin", remotes[0]].find(
+      (r): r is string => r != null && remotes.includes(r),
+    ) ?? null
+  );
+};
+
 export const parseWorktrees = (out: string): Worktree[] => {
   const result: Worktree[] = [];
   for (const block of out.split("\n\n")) {

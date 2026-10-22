@@ -32,13 +32,7 @@ import type { ExecOptions, Host } from "../exec/hosts";
 import { shellQuote } from "../exec/shell";
 import type { SpawnResult } from "../exec/spawn";
 import { GraphBuilder, LOG_FORMAT, LogParser } from "./graph";
-import {
-  branchOwners,
-  type OwnerLogs,
-  OWNERS_LOG_ARGS,
-  TIPS_LOG_ARGS,
-  USER_CONFIG_ARGS,
-} from "./owners";
+import { branchOwners, type OwnerLogs, OWNERS_LOG_ARGS, TIPS_LOG_ARGS } from "./owners";
 import {
   type ChangedFiles,
   COMMIT_FORMAT,
@@ -52,6 +46,7 @@ import {
   parseStatus,
   parseSubmodules,
   parseWorktrees,
+  pushRemoteOf,
   REFS_FORMAT,
   STASH_FORMAT,
   type StashEntry,
@@ -134,6 +129,16 @@ const MAX_GRAPH_ROWS = 10_000;
 
 /** Most paths given to one `git clean`, which cannot read them from a file. */
 const CLEAN_BATCH = 500;
+
+/**
+ * `git config` arguments for the refs: the user, for branch owners (see `USER_CONFIG_ARGS`), and
+ * where pushes go (see `pushRemoteOf`). Exit code 1 when none is set.
+ */
+const REFS_CONFIG_ARGS = [
+  "config",
+  "--get-regexp",
+  "^(user\\.(name|email)|remote\\.pushdefault|branch\\..*\\.pushremote)$",
+];
 
 const RESET_MODES: readonly string[] = ["soft", "mixed", "hard"] satisfies ResetMode[];
 
@@ -671,7 +676,7 @@ export class Repository {
       {
         refs: this.refList(),
         ownerLogs: this.ownerLogs(),
-        user: this.gitText(USER_CONFIG_ARGS, { okCodes: [0, 1] }).pipe(
+        config: this.gitText(REFS_CONFIG_ARGS, { okCodes: [0, 1] }).pipe(
           Effect.orElseSucceed(() => ""),
         ),
         stashes: this.gitText(["stash", "list", `--format=${STASH_FORMAT}`]).pipe(
@@ -687,14 +692,17 @@ export class Repository {
       },
       { concurrency: "unbounded" },
     ).pipe(
-      Effect.map(({ refs, ownerLogs, user, ...rest }) => ({
-        ...rest,
-        refs: parseRefs(
-          refs,
-          rest.remotes.map((r) => r.name),
-        ),
-        owners: branchOwners(refs, ownerLogs, user),
-      })),
+      Effect.map(({ refs, ownerLogs, config, ...rest }) => {
+        const remotes = rest.remotes.map((r) => r.name);
+        const parsed = parseRefs(refs, remotes);
+        const head = parsed.find((r) => r.isHead && r.kind === "branch");
+        return {
+          ...rest,
+          refs: parsed,
+          owners: branchOwners(refs, ownerLogs, config),
+          pushRemote: pushRemoteOf(config, remotes, head?.short ?? null),
+        };
+      }),
     );
   }
 
@@ -1798,17 +1806,14 @@ export class Repository {
       Effect.gen({ self: this }, function* () {
         const args = ["push", ...(opts.force ? ["--force-with-lease"] : [])];
         if (opts.setUpstream) {
-          const [branch, remote] = yield* Effect.all(
-            [this.gitText(["symbolic-ref", "-q", "HEAD"], { okCodes: [0, 1] }), this.pushRemote()],
-            { concurrency: 2 },
-          );
+          const branch = yield* this.gitText(["symbolic-ref", "-q", "HEAD"], { okCodes: [0, 1] });
           const name = branchName(branch.trim());
           if (!name) {
             return yield* Effect.fail(
               new InvalidInputError({ message: "Cannot push a detached HEAD" }),
             );
           }
-          args.push("-u", "--", remote, `refs/heads/${name}`);
+          args.push("-u", "--", yield* this.pushRemote(name), `refs/heads/${name}`);
         }
         yield* this.run(args);
       }),
@@ -1831,31 +1836,29 @@ export class Repository {
         if (remote && merge) {
           return yield* this.run(["push", ...lease, "--", remote, `refs/heads/${branch}:${merge}`]);
         }
-        const target = yield* this.pushRemote();
+        const target = yield* this.pushRemote(branch);
         yield* this.run(["push", ...lease, "-u", "--", target, `refs/heads/${branch}`]);
       }),
     );
   }
 
-  /**
-   * The remote to push a branch without an upstream to: `remote.pushDefault`, else `origin`,
-   * else the first remote.
-   */
-  private pushRemote(): Effect.Effect<string, GitError | InvalidInputError> {
-    return this.gitText(["config", "--get-regexp", "^remote\\."], { okCodes: [0, 1] }).pipe(
+  /** The remote to push a branch without an upstream to, see `pushRemoteOf`. */
+  private pushRemote(branch: string): Effect.Effect<string, GitError | InvalidInputError> {
+    return this.gitText(
+      [
+        "config",
+        "--get-regexp",
+        "^(remote\\..*\\.url|remote\\.pushdefault|branch\\..*\\.pushremote)$",
+      ],
+      { okCodes: [0, 1] },
+    ).pipe(
       Effect.flatMap((out) => {
         const names: string[] = [];
-        let pushDefault: string | null = null;
         for (const line of lines(out)) {
-          const sp = line.indexOf(" ");
-          const key = sp < 0 ? line : line.slice(0, sp);
-          if (key === "remote.pushdefault") pushDefault = line.slice(sp + 1);
-          const m = /^remote\.(.+)\.url$/.exec(key);
+          const m = /^remote\.(.+)\.url$/.exec(line.split(" ", 1)[0]!);
           if (m && !names.includes(m[1]!)) names.push(m[1]!);
         }
-        const remote =
-          (pushDefault && names.includes(pushDefault) ? pushDefault : null) ??
-          (names.includes("origin") ? "origin" : names[0]);
+        const remote = pushRemoteOf(out, names, branch);
         return remote
           ? Effect.succeed(remote)
           : Effect.fail(new InvalidInputError({ message: "No remotes configured" }));
