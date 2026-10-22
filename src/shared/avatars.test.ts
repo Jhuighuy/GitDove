@@ -12,6 +12,9 @@ describe("avatars", () => {
     expect(remoteHost("https://github.com/Jhuighuy/GitDove.git")).toBe("github.com");
     expect(remoteHost("git@github.com:Jhuighuy/GitDove.git")).toBe("github.com");
     expect(remoteHost("ssh://git@gitlab.example.org:2222/a/b.git")).toBe("gitlab.example.org");
+    expect(remoteHost("https://git.corp.example:8443/a/b.git")).toBe("git.corp.example:8443");
+    expect(remoteHost("https://u:p@git.corp.example:443/a/b.git")).toBe("git.corp.example");
+    expect(remoteHost("http://git.corp.example:80/a/b.git")).toBe("git.corp.example");
     expect(remoteHost("/srv/git/repo.git")).toBeNull();
   });
 
@@ -24,12 +27,14 @@ describe("avatars", () => {
         "https://code.example.com/z",
         "git@bitbucket.org:a/b.git",
         "fedora:/srv/repo.git",
+        "https://git.corp.example:8443/a/b.git",
       ]),
     ).toEqual([
       "github",
       "gitlab:gitlab.com",
       "gitlab:gitlab.kitware.com",
       "gitlab:code.example.com",
+      "gitlab:git.corp.example:8443",
     ]);
   });
 
