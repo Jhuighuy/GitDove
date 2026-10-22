@@ -31,14 +31,15 @@ const write = (path, data) => {
 // macOS
 write("build/icon.png", render(source, 1024));
 if (process.platform === "darwin") {
-  const dir = join(mkdtempSync(join(tmpdir(), "gitdove-icon-")), "icon.iconset");
+  const work = mkdtempSync(join(tmpdir(), "gitdove-icon-"));
+  const dir = join(work, "icon.iconset");
   mkdirSync(dir);
   for (const size of [16, 32, 128, 256, 512]) {
     writeFileSync(join(dir, `icon_${size}x${size}.png`), render(source, size));
     writeFileSync(join(dir, `icon_${size}x${size}@2x.png`), render(source, size * 2));
   }
-  execFileSync("iconutil", ["-c", "icns", dir, "-o", "build/icon.icns"]);
-  rmSync(dir, { recursive: true, force: true });
+  execFileSync("/usr/bin/iconutil", ["-c", "icns", dir, "-o", "build/icon.icns"]);
+  rmSync(work, { recursive: true, force: true });
   console.log("wrote build/icon.icns");
 } else {
   console.warn("skipping build/icon.icns (requires macOS iconutil)");
