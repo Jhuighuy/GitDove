@@ -24,6 +24,19 @@ const mocks = vi.hoisted(() => ({
   rowsGate: null as Promise<void> | null,
 }));
 
+/** Calls of `relativeTime`, one per commit row rendered. */
+const formatted = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/lib/format", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/format")>();
+  return {
+    ...actual,
+    relativeTime: (...args: Parameters<typeof actual.relativeTime>) => {
+      formatted.count++;
+      return actual.relativeTime(...args);
+    },
+  };
+});
+
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
   isMac: true,
@@ -167,7 +180,7 @@ const rowOf = (text: string) => {
   return el;
 };
 const selection = () => useRepoUiStore.getState().byRepo[repo]?.selection ?? null;
-const scroller = () => container.querySelector<HTMLElement>("[tabindex='0']")!;
+const scroller = () => container.querySelector<HTMLElement>("[role=listbox]")!;
 const key = (k: string) =>
   act(async () => {
     scroller().dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
@@ -577,4 +590,170 @@ it("does not take indexes from rows of the graph before it reloaded", async () =
     version: 2,
   });
   await act(async () => release());
+});
+
+it("renders only the rows that change", async () => {
+  mocks.rows = Array.from({ length: 30 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 30, complete: true, maxLanes: 1 };
+  await render();
+  formatted.count = 0;
+  await mouse(rowOf("Commit 3"), "mousedown");
+  await mouse(rowOf("Commit 5"), "mousedown");
+  // Commit 3 when selected, then both when the selection moves on.
+  expect(formatted.count).toBe(3);
+  // Resizing a column does not render rows either.
+  formatted.count = 0;
+  await dragSteps(headerCells()[3]!, [90, 80]);
+  expect(formatted.count).toBe(0);
+});
+
+it("opens no menu away from the rows, rather than the last one", async () => {
+  await render();
+  // Nothing was right-clicked yet.
+  await mouse(scroller(), "contextmenu");
+  expect(menuItems()).toEqual([]);
+  await mouse(rowOf("Commit 2"), "contextmenu");
+  expect(menuItems()).toContain("Cherry-pick commit");
+  const copy = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (e) => e.textContent?.trim() === "Copy commit SHA",
+  )!;
+  await act(async () => copy.click());
+  await settle();
+  await mouse(rowOf("Commit 4"), "mousedown");
+  await mouse(scroller(), "contextmenu");
+  await settle();
+  expect(menuItems()).toEqual([]);
+  expect(selection()).toEqual({ kind: "commit", hash: "c4" });
+});
+
+it("keeps a multi-selection that is right-clicked, for actions on all of it", async () => {
+  await render();
+  await mouse(rowOf("Commit 1"), "mousedown");
+  await act(async () => {
+    rowOf("Commit 2").dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0, shiftKey: true }),
+    );
+  });
+  await settle();
+  await mouse(rowOf("Commit 2"), "contextmenu");
+  expect(selection()).toMatchObject({ kind: "commits", anchor: "c1" });
+  expect(menuItems()).toEqual(["Copy 2 commit SHAs"]);
+  // Outside the selection, a right-click selects the one commit.
+  await mouse(rowOf("Commit 4"), "contextmenu");
+  expect(selection()).toEqual({ kind: "commit", hash: "c4" });
+});
+
+it("moves on from a selected commit that is not loaded any more", async () => {
+  mocks.rows = Array.from({ length: 1000 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 1000, complete: true, maxLanes: 1 };
+  mocks.found = null;
+  await render();
+  act(() => useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c800" }));
+  await key("ArrowDown");
+  await settle();
+  expect(mocks.api).toContainEqual(["repo.findCommit", 1, "c800"]);
+  expect(selection()).toEqual({ kind: "commit", hash: "c801" });
+});
+
+it("moves down from a WIP selection whose row is gone to the first commit", async () => {
+  await render();
+  act(() => useRepoUiStore.getState().select(repo, { kind: "wip" }));
+  await key("ArrowDown");
+  expect(selection()).toEqual({ kind: "commit", hash: "c0" });
+});
+
+it("jumps to either end and extends a range with Shift and the arrows", async () => {
+  await render();
+  await key("End");
+  await settle();
+  expect(selection()).toEqual({ kind: "commit", hash: "c4" });
+  await key("Home");
+  expect(selection()).toEqual({ kind: "commit", hash: "c0" });
+  const shift = (k: string) =>
+    act(async () => {
+      scroller().dispatchEvent(
+        new KeyboardEvent("keydown", { key: k, shiftKey: true, bubbles: true }),
+      );
+    });
+  await shift("ArrowDown");
+  await settle();
+  await shift("ArrowDown");
+  await settle();
+  const picked = () => {
+    const s = selection();
+    return s?.kind === "commits" ? [s.anchor, s.commits.map((c) => c.row.hash)] : s;
+  };
+  expect(picked()).toEqual(["c0", ["c0", "c1", "c2"]]);
+  await shift("ArrowUp");
+  await settle();
+  expect(picked()).toEqual(["c0", ["c0", "c1"]]);
+});
+
+it("names the selected row for assistive technology and opens its menu from the keyboard", async () => {
+  await render();
+  expect(scroller().getAttribute("aria-activedescendant")).toBeNull();
+  await mouse(rowOf("Commit 1"), "mousedown");
+  const id = scroller().getAttribute("aria-activedescendant")!;
+  expect(document.getElementById(id)).toBe(rowOf("Commit 1"));
+  expect(rowOf("Commit 1").getAttribute("aria-selected")).toBe("true");
+  await act(async () => {
+    scroller().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
+    );
+  });
+  expect(menuItems()).toContain("Cherry-pick commit");
+});
+
+it("looks for a revealed commit again until it has streamed in", async () => {
+  mocks.found = -1;
+  mocks.info = { version: 1, count: 5, complete: false, maxLanes: 1 };
+  await render();
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c4" }, true),
+  );
+  await settle();
+  const lookups = () => mocks.api.filter(([m]) => m === "repo.findCommit").length;
+  expect(lookups()).toBe(1);
+  mocks.found = 4;
+  await act(async () =>
+    client.setQueryData(keys.graphInfo(repo), {
+      version: 1,
+      count: 6,
+      complete: true,
+      maxLanes: 1,
+    }),
+  );
+  await settle();
+  expect(lookups()).toBe(2);
+  // Found: no more lookups.
+  await act(async () =>
+    client.setQueryData(keys.graphInfo(repo), {
+      version: 1,
+      count: 6,
+      complete: true,
+      maxLanes: 2,
+    }),
+  );
+  await settle();
+  expect(lookups()).toBe(2);
+});
+
+it("ends a column drag that is cancelled", async () => {
+  await render();
+  const refs = headerCells()[0]!;
+  const before = width(refs);
+  const handle = refs.querySelector<HTMLElement>(".cursor-col-resize")!;
+  handle.setPointerCapture = () => {};
+  const fire = (type: string, x: number) =>
+    act(async () => {
+      handle.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, pointerId: 1 }));
+    });
+  await fire("pointerdown", 100);
+  await fire("pointermove", 120);
+  await fire("pointercancel", 120);
+  await fire("pointermove", 200);
+  expect(width(headerCells()[0]!)).toBe(before + 20);
+  // Restore the default for other tests.
+  await dragSteps(headerCells()[0]!, [80]);
+  expect(width(headerCells()[0]!)).toBe(before);
 });

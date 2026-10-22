@@ -7,6 +7,44 @@ function ContextMenu({ ...props }: ContextMenuPrimitive.Root.Props) {
   return <ContextMenuPrimitive.Root data-slot="context-menu" {...props} />;
 }
 
+/**
+ * The target of a context menu shared by many items (rows of a list). An item calls `capture`
+ * from its `contextmenu` handler, which runs before the trigger's as the event bubbles up to
+ * it; opening anywhere else (empty space, a header without a menu) is cancelled, so the menu
+ * never shows an earlier target. The target is dropped once the menu has closed: render the
+ * menu's content only while there is one.
+ */
+function useContextMenuTarget<T>() {
+  const [target, setTarget] = React.useState<T | null>(null);
+  const pending = React.useRef<T | null>(null);
+  const open = React.useRef(false);
+  const capture = React.useCallback((t: T) => {
+    // An open menu takes the new target as is: it stays open for a right-click inside it.
+    if (open.current) setTarget(t);
+    pending.current = t;
+    // Only for the event being dispatched.
+    queueMicrotask(() => {
+      pending.current = null;
+    });
+  }, []);
+  const onOpenChange = React.useCallback(
+    (next: boolean, details: ContextMenuPrimitive.Root.ChangeEventDetails) => {
+      if (next) {
+        const t = pending.current;
+        pending.current = null;
+        if (t === null) return details.cancel();
+        setTarget(t);
+      }
+      open.current = next;
+    },
+    [],
+  );
+  const onOpenChangeComplete = React.useCallback((next: boolean) => {
+    if (!next && !open.current) setTarget(null);
+  }, []);
+  return { target, capture, rootProps: { onOpenChange, onOpenChangeComplete } };
+}
+
 function ContextMenuPortal({ ...props }: ContextMenuPrimitive.Portal.Props) {
   return <ContextMenuPrimitive.Portal data-slot="context-menu-portal" {...props} />;
 }
@@ -236,4 +274,5 @@ export {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
   ContextMenuRadioGroup,
+  useContextMenuTarget,
 };

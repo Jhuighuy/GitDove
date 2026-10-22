@@ -34,6 +34,8 @@ vi.mock("@/lib/api", () => ({
       case "repo.setHiddenRefs":
       case "repo.stageAll":
         return undefined;
+      case "repo.commitDetails":
+        return { subject: "Fix the thing", body: "Because it was broken." };
     }
     throw new Error(`unexpected ${method}`);
   },
@@ -100,7 +102,7 @@ const unmount = async () => {
 
 afterEach(unmount);
 
-async function open(target: MenuTarget | null, stashes: Stash[] = []) {
+async function open(target: MenuTarget, stashes: Stash[] = []) {
   await unmount();
   const container = document.createElement("div");
   document.body.append(container);
@@ -156,9 +158,12 @@ const sub = async (label: string) => {
   await act(async () => new Promise((r) => setTimeout(r, 0)));
 };
 
-it("renders no items without a target", async () => {
-  await open(null);
-  expect(items()).toEqual([]);
+it("copies the hashes of a multi-selection", async () => {
+  const commits = [0, 1].map((i) => ({ index: i, row: { ...row, hash: `h${i}` } }));
+  await open({ kind: "commits", commits });
+  expect(items()).toEqual(["Copy 2 commit SHAs"]);
+  await click("Copy 2 commit SHAs");
+  expect(mocks.calls).toEqual([["copy", "h0\nh1", "2 commit SHAs copied"]]);
 });
 
 it("stages or stashes everything from the WIP row", async () => {
@@ -173,7 +178,7 @@ it("stages or stashes everything from the WIP row", async () => {
 
 it("offers stash actions on stash commits", async () => {
   const stash: Stash = { index: 2, name: "stash@{2}", hash: HASH, message: "WIP", time: 0 };
-  const target: MenuTarget = { kind: "commit", row, refs: [], stashIndex: 2 };
+  const target: MenuTarget = { kind: "commit", row, refs: [] };
   for (const label of ["Apply stash", "Pop stash", "Delete stash"]) {
     await open(target, [stash]);
     expect(items()).toEqual(["Apply stash", "Pop stash", "Delete stash"]);
@@ -189,7 +194,7 @@ it("offers stash actions on stash commits", async () => {
 it("disables changing actions while another operation runs", async () => {
   useBusyStore.getState().start(REPO, { label: "Checking out feature…", cancellable: false });
   try {
-    await open({ kind: "commit", row, refs: [], stashIndex: null });
+    await open({ kind: "commit", row, refs: [] });
     const disabled = (label: string) => find(label).getAttribute("aria-disabled") === "true";
     for (const label of [
       "Checkout this commit (detached)",
@@ -211,7 +216,7 @@ it("disables changing actions while another operation runs", async () => {
 });
 
 it("offers commit actions", async () => {
-  const target: MenuTarget = { kind: "commit", row, refs: [], stashIndex: null };
+  const target: MenuTarget = { kind: "commit", row, refs: [] };
   await open(target);
   expect(items()).toEqual([
     "Checkout this commit (detached)",
@@ -242,12 +247,13 @@ it("offers commit actions", async () => {
     ["cherryPick", HASH],
     ["revert", HASH],
     ["copy", HASH, "Commit SHA copied"],
-    ["copy", "Fix the thing", "Message copied"],
+    // The whole message, not just the subject the graph has.
+    ["copy", "Fix the thing\n\nBecause it was broken.", "Message copied"],
   ]);
 });
 
 it("resets HEAD to the commit", async () => {
-  const target: MenuTarget = { kind: "commit", row, refs: [], stashIndex: null };
+  const target: MenuTarget = { kind: "commit", row, refs: [] };
   for (const label of [
     "Soft — keep all changes staged",
     "Mixed — keep working copy, reset index",
@@ -266,7 +272,7 @@ it("resets HEAD to the commit", async () => {
 
 it("offers branch actions for refs on the commit", async () => {
   const feature = ref("refs/heads/feature");
-  const target: MenuTarget = { kind: "commit", row, refs: [feature], stashIndex: null };
+  const target: MenuTarget = { kind: "commit", row, refs: [feature] };
   const labels = [
     "Checkout feature",
     "Merge feature into main",
@@ -284,8 +290,9 @@ it("offers branch actions for refs on the commit", async () => {
   }
   expect(mocks.calls).toEqual([
     ["checkoutRef", feature],
-    ["merge", "feature"],
-    ["rebase", "feature"],
+    // Full names: a tag can have the same short name.
+    ["merge", "refs/heads/feature"],
+    ["rebase", "refs/heads/feature"],
     ["renameBranch", "feature"],
     ["copy", "feature", "Branch name copied"],
     ["deleteBranch", feature],
@@ -298,7 +305,7 @@ it("offers branch actions for refs on the commit", async () => {
 it("offers fewer actions for the checked-out branch and remote branches", async () => {
   const head = ref("refs/heads/main", { isHead: true });
   const remote = ref("refs/remotes/origin/main");
-  await open({ kind: "commit", row, refs: [head, remote], stashIndex: null });
+  await open({ kind: "commit", row, refs: [head, remote] });
   await sub("main");
   const headItems = items();
   expect(headItems).toContain("Rename main…");
@@ -306,7 +313,7 @@ it("offers fewer actions for the checked-out branch and remote branches", async 
   expect(headItems).not.toContain("Checkout main");
   expect(headItems).not.toContain("Delete main");
 
-  await open({ kind: "commit", row, refs: [head, remote], stashIndex: null });
+  await open({ kind: "commit", row, refs: [head, remote] });
   await sub("origin/main");
   expect(items()).toContain("Checkout origin/main");
   expect(items()).not.toContain("Rename origin/main…");
@@ -314,7 +321,7 @@ it("offers fewer actions for the checked-out branch and remote branches", async 
 
 it("offers tag actions", async () => {
   const tag = ref("refs/tags/v1.0");
-  const target: MenuTarget = { kind: "commit", row, refs: [tag], stashIndex: null };
+  const target: MenuTarget = { kind: "commit", row, refs: [tag] };
   for (const label of ["Copy tag name", "Delete tag v1.0", "Hide from graph"]) {
     await open(target);
     await sub("Tag v1.0");

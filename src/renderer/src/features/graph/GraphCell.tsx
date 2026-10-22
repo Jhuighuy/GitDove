@@ -12,12 +12,8 @@ const ly = (y: number) => (y * ROW_HEIGHT) / 2;
 export const graphWidthFor = (lanes: number) => PAD * 2 + Math.max(1, lanes) * LANE_WIDTH;
 
 /** Width a row's lanes need, to tell whether a narrower column cuts them off. */
-export const rowGraphWidth = (row: GraphRow): number => {
-  let max = row.lane;
-  const e = row.edges;
-  for (let i = 0; i < e.length; i += 5) max = Math.max(max, e[i]!, e[i + 2]!);
-  return graphWidthFor(max + 1);
-};
+export const rowGraphWidth = (row: GraphRow): number =>
+  graphWidthFor(Math.max(row.width, row.lane + 1));
 
 const edgePath = (x1: number, y1: number, x2: number, y2: number) => {
   const ax = lx(x1);
@@ -31,7 +27,6 @@ const edgePath = (x1: number, y1: number, x2: number, y2: number) => {
 
 interface Props {
   readonly row: GraphRow;
-  readonly width: number;
   readonly isHead: boolean;
   readonly isStash: boolean;
   /** Draw a dashed line up to the WIP row above. */
@@ -40,10 +35,12 @@ interface Props {
   readonly refLine?: boolean;
 }
 
-/** Draws one row of the commit graph. */
+/**
+ * Draws one row of the commit graph, as wide as its lanes: the column around it cuts it off
+ * (so resizing the column does not draw it again).
+ */
 export const GraphCell = memo(function GraphCell({
   row,
-  width,
   isHead,
   isStash,
   wipAbove,
@@ -68,7 +65,12 @@ export const GraphCell = memo(function GraphCell({
   const merge = row.parents.length > 1;
 
   return (
-    <svg width={width} height={ROW_HEIGHT} className="block shrink-0 overflow-hidden" aria-hidden>
+    <svg
+      width={rowGraphWidth(row)}
+      height={ROW_HEIGHT}
+      className="block shrink-0 overflow-hidden"
+      aria-hidden
+    >
       {wipAbove && (
         <path
           d={`M${cx} 0V${cy}`}
@@ -104,26 +106,33 @@ export const GraphCell = memo(function GraphCell({
           strokeWidth={2.5}
         />
       )}
-      {isHead && <circle cx={cx} cy={cy} r={2.5} fill={color} />}
+      {/* On a filled merge dot, HEAD is a hole instead. */}
+      {isHead && (
+        <circle
+          cx={cx}
+          cy={cy}
+          r={merge && !isStash ? 2 : 2.5}
+          className={merge && !isStash ? "fill-background" : undefined}
+          fill={merge && !isStash ? undefined : color}
+        />
+      )}
     </svg>
   );
 });
 
 /** Graph cell for the work-in-progress row. */
-export function WipGraphCell({
+export const WipGraphCell = memo(function WipGraphCell({
   lane,
   color,
-  width,
 }: {
   lane: number;
   color: number;
-  width: number;
 }) {
   const cx = lx(lane);
   const cy = ROW_HEIGHT / 2;
   const c = laneColor(color);
   return (
-    <svg width={width} height={ROW_HEIGHT} className="block shrink-0" aria-hidden>
+    <svg width={graphWidthFor(lane + 1)} height={ROW_HEIGHT} className="block shrink-0" aria-hidden>
       <path d={`M${cx} ${cy}V${ROW_HEIGHT}`} stroke={c} strokeWidth={2} strokeDasharray="3 3" />
       <circle
         cx={cx}
@@ -136,4 +145,4 @@ export function WipGraphCell({
       />
     </svg>
   );
-}
+});
