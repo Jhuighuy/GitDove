@@ -50,7 +50,7 @@ trap 'exit 1' HUP INT TERM
 cd "$d" && mkfifo q || exit 1
 # Files of command <id>: .c script, .i stdin, .o/.e stdout/stderr, .x exit code, .p process
 # id, .k kill requested, .t processes being killed, .z stdin incomplete, .r output requested
-# (streaming), .b dd's report on the frame being sent.
+# (streaming), .b dd's report on the frame being sent. eof: the client is gone.
 hc=
 head -c 1 </dev/null >/dev/null 2>&1 && hc=1
 tree() {
@@ -92,9 +92,10 @@ job() {
   fi
   [ -n "$u" ] && kill "$u" 2>/dev/null
   # A killed command is reported once everything it started is gone too (see K), without a
-  # deadline: the write lock around it must stay held until that is confirmed.
+  # deadline: the write lock around it must stay held until that is confirmed. Once the client
+  # is gone (eof), nobody waits for the report, and the runner must not wait for it either.
   if [ -f "$1.t" ]; then
-    while [ -n "$(survivors "$1.t")" ]; do sleep 0.05 2>/dev/null || sleep 1; done
+    while [ ! -f eof ] && [ -n "$(survivors "$1.t")" ]; do sleep 0.05 2>/dev/null || sleep 1; done
   fi
   : >"$1.p"
   set -- "$1" "$3" $(wc -c "$1.o" "$1.e" 2>/dev/null)
@@ -212,6 +213,7 @@ while read -r op id a b l c i; do
      fi ;;
   esac
 done
+: >eof
 for p in *.p; do read -r k 2>/dev/null <"$p" && [ -n "$k" ] && kill "$k" 2>/dev/null; done
 echo . >&3
 exec 3>&-
