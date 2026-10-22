@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { DirEntry, RepoId, RepoLocation } from "@shared/domain";
 import {
   type ApiArgs,
@@ -208,12 +209,29 @@ const openFor = (location: RepoLocation) =>
  */
 const SAFE_TRANSPORTS = ["-c", "protocol.ext.allow=never", "-c", "protocol.fd.allow=never"];
 
+/**
+ * Prints the current directory, then its sub-directories marked `R` (a repository) or `D`, all
+ * NUL-terminated since names may contain newlines. A `.git` directory is not listed: it is not
+ * a work tree to open.
+ */
 const LIST_DIR_SCRIPT = String.raw`
-for f in * .[!.]*; do
-  [ -d "$f" ] || continue
-  if [ -e "$f/.git" ] || { [ -f "$f/HEAD" ] && [ -d "$f/objects" ]; }; then printf 'R%s\n' "$f"; else printf 'D%s\n' "$f"; fi
+printf '%s\0' "$PWD"
+for f in * .[!.]* ..?*; do
+  [ -d "$f" ] && [ "$f" != .git ] || continue
+  if [ -e "$f/.git" ] || { [ -f "$f/HEAD" ] && [ -d "$f/objects" ]; }; then printf 'R%s\0' "$f"; else printf 'D%s\0' "$f"; fi
 done
 `;
+
+/** A `cd` to a directory typed by the user, where `~` is the home directory. */
+const cdTo = (path: string | null) => {
+  if (!path || path === "~") return "cd";
+  if (path.startsWith("~/")) return `cd -- "$HOME"/${shellQuote(path.slice(2))}`;
+  return `cd -- ${shellQuote(path)}`;
+};
+
+/** Whether `url` is a web page that may be opened in the browser. */
+export const isWebUrl = (url: string): boolean =>
+  URL.canParse(url) && ["http:", "https:"].includes(new URL(url).protocol);
 
 /** A detached program to start, e.g. a terminal emulator. */
 interface Launch {
@@ -317,25 +335,40 @@ export const handlers: Handlers = {
         })
       : Effect.fail(new InvalidInputError({ message: `Unknown edit command: ${String(command)}` })),
   "dialog.pickDirectory": () =>
-    Effect.promise(async () => {
-      const win = BrowserWindow.getFocusedWindow();
+    Effect.gen(function* () {
+      // Attached to the window that asked, which need not be focused.
+      const win = BrowserWindow.fromWebContents((yield* Caller).webContents);
       const opts = { properties: ["openDirectory" as const, "createDirectory" as const] };
-      const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+      const r = yield* Effect.promise(() =>
+        win ? dialog.showOpenDialog(win, opts) : dialog.showOpenDialog(opts),
+      );
       return r.canceled ? null : (r.filePaths[0] ?? null);
     }),
   "shell.openTerminal": (id) => withRepo(id, openTerminal),
   "shell.revealInFinder": (id, path) =>
     withRepo(id, (repo) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (repo.location.kind !== "local") return;
-        const target = path ? `${repo.workTree}/${path}` : repo.workTree;
-        if (path) shell.showItemInFolder(target);
-        else void shell.openPath(target);
+        if (path) {
+          const target = resolve(repo.workTree, path);
+          const rel = relative(repo.workTree, target);
+          if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+            return yield* new InvalidInputError({ message: `${path} is outside the repository` });
+          }
+          shell.showItemInFolder(target);
+          return;
+        }
+        const error = yield* Effect.promise(() => shell.openPath(repo.workTree));
+        if (error) return yield* new InvalidInputError({ message: error });
       }),
     ),
   "shell.openExternal": (url) =>
-    /^https?:\/\//.test(url)
-      ? Effect.promise(() => shell.openExternal(url))
+    isWebUrl(url)
+      ? Effect.tryPromise({
+          try: () => shell.openExternal(url),
+          catch: (e) =>
+            new InvalidInputError({ message: `Cannot open ${url}: ${(e as Error).message}` }),
+        })
       : Effect.fail(new InvalidInputError({ message: `Refusing to open ${url}` })),
 
   // Remote hosts ---------------------------------------------------------------
@@ -348,9 +381,8 @@ export const handlers: Handlers = {
       const hosts = yield* Hosts;
       const host = hosts.get(hostId);
       yield* hosts.connect(hostId);
-      const cd = path ? `cd -- ${shellQuote(path)}` : "cd";
-      const r = yield* host.sh(`${cd} && pwd && ${LIST_DIR_SCRIPT}`, { idempotent: true });
-      const [cwd, ...rest] = r.stdout.toString("utf8").split("\n");
+      const r = yield* host.sh(`${cdTo(path)} && {${LIST_DIR_SCRIPT}}`, { idempotent: true });
+      const [cwd, ...rest] = r.stdout.toString("utf8").split("\0");
       const entries: DirEntry[] = rest
         .filter((l) => l.length > 1)
         .map((l) => ({ name: l.slice(1), isDir: true, isRepo: l.startsWith("R") }))

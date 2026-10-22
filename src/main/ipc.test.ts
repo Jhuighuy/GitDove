@@ -15,7 +15,7 @@ import { RepoSettings, Repos } from "./services";
 
 const electron = vi.hoisted(() => ({
   app: { getVersion: () => "1.2.3" },
-  BrowserWindow: { getFocusedWindow: vi.fn((): object | null => null) },
+  BrowserWindow: { fromWebContents: vi.fn((): object | null => null) },
   dialog: {
     showOpenDialog: vi.fn(
       async (..._args: unknown[]): Promise<{ canceled: boolean; filePaths: string[] }> => ({
@@ -213,14 +213,15 @@ describe("app and dialog handlers", () => {
     expect(await call("app.version")).toEqual({ version: "1.2.3", platform: process.platform });
   });
 
-  it("picks a directory, attached to the focused window if any", async () => {
+  it("picks a directory, attached to the caller's window if any", async () => {
     expect(await call("dialog.pickDirectory")).toBe("/picked");
     expect(electron.dialog.showOpenDialog).toHaveBeenLastCalledWith({
       properties: ["openDirectory", "createDirectory"],
     });
     const win = { id: 1 };
-    electron.BrowserWindow.getFocusedWindow.mockReturnValueOnce(win);
+    electron.BrowserWindow.fromWebContents.mockReturnValueOnce(win);
     await call("dialog.pickDirectory");
+    expect(electron.BrowserWindow.fromWebContents).toHaveBeenLastCalledWith({ id: 1 });
     expect(electron.dialog.showOpenDialog).toHaveBeenLastCalledWith(win, expect.any(Object));
 
     electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
@@ -233,12 +234,23 @@ describe("app and dialog handlers", () => {
 describe("shell handlers", () => {
   it("opens http(s) links only", async () => {
     await call("shell.openExternal", "https://example.org/x");
+    await call("shell.openExternal", "HTTP://example.org/y");
     expect(electron.shell.openExternal).toHaveBeenCalledWith("https://example.org/x");
-    const exit = await callExit("shell.openExternal", "file:///etc/passwd");
-    expect(exit).toEqual(
-      Exit.fail(new InvalidInputError({ message: "Refusing to open file:///etc/passwd" })),
+    expect(electron.shell.openExternal).toHaveBeenCalledWith("HTTP://example.org/y");
+    for (const url of ["file:///etc/passwd", "javascript:alert(1)", "not a url"]) {
+      const exit = await callExit("shell.openExternal", url);
+      expect(exit).toEqual(
+        Exit.fail(new InvalidInputError({ message: `Refusing to open ${url}` })),
+      );
+    }
+    expect(electron.shell.openExternal).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports links that cannot be opened", async () => {
+    electron.shell.openExternal.mockRejectedValueOnce(new Error("no handler"));
+    expect(await callExit("shell.openExternal", "https://x.org")).toEqual(
+      Exit.fail(new InvalidInputError({ message: "Cannot open https://x.org: no handler" })),
     );
-    expect(electron.shell.openExternal).toHaveBeenCalledTimes(1);
   });
 
   it("reveals local files and folders", async () => {
@@ -246,6 +258,18 @@ describe("shell handlers", () => {
     expect(electron.shell.showItemInFolder).toHaveBeenCalledWith("/work/repo/src/a b.ts");
     await call("shell.revealInFinder", "local:/work/repo");
     expect(electron.shell.openPath).toHaveBeenCalledWith("/work/repo");
+  });
+
+  it("reveals nothing outside the repository and reports failures", async () => {
+    for (const path of ["../etc/passwd", "a/../../x", "/etc/passwd", "."]) {
+      const exit = await callExit("shell.revealInFinder", "local:/work/repo", path);
+      expect(JSON.stringify(exit)).toContain("is outside the repository");
+    }
+    expect(electron.shell.showItemInFolder).not.toHaveBeenCalled();
+    electron.shell.openPath.mockResolvedValueOnce("Failed to open");
+    expect(await callExit("shell.revealInFinder", "local:/work/repo")).toEqual(
+      Exit.fail(new InvalidInputError({ message: "Failed to open" })),
+    );
   });
 
   it("does not reveal remote files", async () => {
@@ -355,10 +379,20 @@ describe.skipIf(process.platform === "win32")("ssh handlers", () => {
   beforeAll(() => {
     dir = realpathSync(mkdtempSync(join(tmpdir(), "gitdove-ipc-")));
     const browse = join(dir, "browse");
-    for (const d of ["zeta", "Alpha", "repo/.git", "bare.git/objects", ".hidden", "linked"]) {
+    for (const d of [
+      "zeta",
+      "Alpha",
+      "repo/.git/objects",
+      "bare.git/objects",
+      ".hidden",
+      "..dots",
+      "new\nline",
+      "linked",
+    ]) {
       mkdirSync(join(browse, d), { recursive: true });
     }
     writeFileSync(join(browse, "bare.git", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(browse, "repo", ".git", "HEAD"), "ref: refs/heads/main\n");
     writeFileSync(join(browse, "linked", ".git"), "gitdir: /elsewhere\n");
     writeFileSync(join(browse, "file.txt"), "");
     mkdirSync(join(dir, "home", "projects"), { recursive: true });
@@ -382,10 +416,12 @@ describe.skipIf(process.platform === "win32")("ssh handlers", () => {
     expect(r).toEqual({
       path: join(dir, "browse"),
       entries: [
+        { name: "..dots", isDir: true, isRepo: false },
         { name: ".hidden", isDir: true, isRepo: false },
         { name: "Alpha", isDir: true, isRepo: false },
         { name: "bare.git", isDir: true, isRepo: true },
         { name: "linked", isDir: true, isRepo: true },
+        { name: "new\nline", isDir: true, isRepo: false },
         { name: "repo", isDir: true, isRepo: true },
         { name: "zeta", isDir: true, isRepo: false },
       ],
@@ -397,6 +433,17 @@ describe.skipIf(process.platform === "win32")("ssh handlers", () => {
     expect(await call("ssh.listDir", "fedora", "")).toEqual({
       path: join(dir, "home"),
       entries: [{ name: "projects", isDir: true, isRepo: false }],
+    });
+  });
+
+  it("expands ~ to the home directory and hides .git", async () => {
+    process.env.HOME = join(dir, "browse");
+    expect(await call("ssh.listDir", "fedora", "~/repo")).toEqual({
+      path: join(dir, "browse", "repo"),
+      entries: [],
+    });
+    expect((await call("ssh.listDir", "fedora", "~")) as { path: string }).toMatchObject({
+      path: join(dir, "browse"),
     });
   });
 
