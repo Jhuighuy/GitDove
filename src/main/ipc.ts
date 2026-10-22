@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
 import { isAbsolute, relative, resolve } from "node:path";
-import type { DirEntry, RepoId, RepoLocation } from "@shared/domain";
+import { type DirEntry, type RepoId, type RepoLocation, repoLocationOf } from "@shared/domain";
 import {
   type ApiArgs,
   type ApiMethod,
@@ -52,10 +52,16 @@ const Str = Schema.String;
 const Bool = Schema.Boolean;
 const Index = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const Path = Str.check(valid((p: string) => p !== "" && !p.includes("\0"), "Invalid path"));
-const Id = Str.check(valid(isRepoId, "Invalid repository id"));
-const SshHost = Str.check(
-  valid((h: string) => isSshHost(h) && h !== LOCAL_HOST, "Invalid SSH host"),
+/** An SSH host to connect to; never the local host's id. */
+const isRemoteHost = (h: string) => isSshHost(h) && h !== LOCAL_HOST;
+const Id = Str.check(
+  valid((id: string) => {
+    if (!isRepoId(id)) return false;
+    const loc = repoLocationOf(id);
+    return loc.kind === "local" || isRemoteHost(loc.host);
+  }, "Invalid repository id"),
 );
+const SshHost = Str.check(valid(isRemoteHost, "Invalid SSH host"));
 const Location = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("local"), path: Path }),
   Schema.Struct({ kind: Schema.Literal("ssh"), host: SshHost, path: Path }),

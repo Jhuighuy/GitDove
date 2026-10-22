@@ -604,6 +604,7 @@ describe("registerIpc", () => {
       // The local host is not an SSH host, whatever its id.
       ["repo.open", [{ kind: "ssh", host: LOCAL_HOST, path: "/srv" }]],
       ["ssh.listDir", [LOCAL_HOST, null]],
+      ["repo.status", [`ssh://${LOCAL_HOST}/srv`]],
       ["ssh.listDir", ["fedora --", null]],
       ["app.setState", [{ tabs: "x", activeTab: null, recent: [] }]],
       ["repo.graphRows", [id, 1, 0, 4097]],
