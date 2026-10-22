@@ -1,37 +1,53 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { Effect } from "effect";
+import { environmentReady } from "./environment";
 import { CommandError, SshError } from "./errors";
-import { completion, type SpawnResult, type Stdin } from "./spawn";
+import { completion, MAX_STDERR, type SpawnResult, type Stdin } from "./spawn";
 
 /*
  * A persistent command runner: one long-lived POSIX `sh` on a remote host that
  * executes many commands over a single SSH session, so a command costs a fork
  * on the remote instead of an SSH session setup plus a login shell.
  *
- * Requests are single lines on the runner's stdin:
+ * Requests are lines on the runner's stdin:
  *
- *   X <id> <limit> <command> [<stdin>]    run a command
- *   K <id>                                kill a running command
+ *   D <id> <length>\n<bytes>                       append to command <id>'s stdin
+ *   X <id> <limit> <stream> <length> <command> [<stdin>]
+ *                                                  run a command
+ *   K <id>                                         kill a running command
  *
- * `<command>` (a shell script) and `<stdin>` are `printf` format strings that
- * use only printable ASCII without spaces (everything else is an octal escape),
- * so `read` splits them reliably and `printf` restores the exact bytes. With a
- * `<limit>` > 0, stdout is cut after `<limit> + 1` bytes (so truncation is
- * detectable) and the command is killed by SIGPIPE.
+ * `<command>` (a shell script) and an inline `<stdin>` are `printf` format strings that use
+ * only printable ASCII without spaces (everything else is an octal escape), so `read` splits
+ * them reliably and `printf` restores the exact bytes. Larger stdin comes before the command
+ * in `D` requests, raw; `<length>` is its total size then (else `-`). With a `<limit>` > 0,
+ * stdout is cut after `<limit> + 1` bytes (so truncation is detectable) and the command is
+ * killed by SIGPIPE. With `<stream>` = 1, stdout is sent while the command runs.
  *
- * Commands run concurrently in the background with their output captured in
- * files of a private temporary directory. A single writer process serializes
- * the responses, so frames never interleave:
+ * Commands run concurrently in the background with their output captured in files of a
+ * private temporary directory. A single writer process sends the responses as frames of
+ * at most 512 KiB, taking turns between commands, so a large response does not hold up
+ * the others:
  *
- *   @GDR <id> <exit code> <stdout length> <stderr length>\n<stdout><stderr>
+ *   @GDR <id> O <length>\n<stdout bytes>           output (any number of these)
+ *   @GDR <id> X <exit code> <length>\n<stderr>      the command is done
+ *   @GDR <id> F <input|output>                     the runner lost the command's data
  *
- * The runner greets with `@GDR-HELLO 1\n` once it is ready.
+ * A frame has exactly the length its header states (`dd conv=sync` pads short reads), so
+ * whatever else writes to a command's output files (say, something it left running in the
+ * background), the stream stays in sync. Output after the command exited is not sent; if the
+ * files shrank meanwhile, the command fails with `F output`.
+ *
+ * The runner greets with `@GDR-HELLO 2\n` once it is ready; anything before that (e.g. a
+ * chatty `.bashrc`) is ignored.
  */
 export const RUNNER_SCRIPT = `d=$(mktemp -d "\${TMPDIR:-/tmp}/gitdove.XXXXXX" 2>/dev/null) ||
   { d=\${TMPDIR:-/tmp}/gitdove.$$ && (umask 077 && mkdir "$d"); } || exit 1
 trap 'cd / && rm -rf "$d"' EXIT
 trap 'exit 1' HUP INT TERM
 cd "$d" && mkfifo q || exit 1
+# Files of command <id>: .c script, .i stdin, .o/.e stdout/stderr, .x exit code, .p process
+# id, .k kill requested, .t processes being killed, .z stdin incomplete, .r output requested
+# (streaming), .b dd's report on the frame being sent.
 hc=
 head -c 1 </dev/null >/dev/null 2>&1 && hc=1
 tree() {
@@ -40,63 +56,155 @@ tree() {
       if (index(s, " " p[i] " ") && !index(s, " " k[i] " ")) { s = s k[i] " "; n = 1 } }
       print s }'
 }
-# Whether a process listed in $1 ("pid command" lines) still runs. Zombies don't count, and a
-# process id now running another command was reused. Without ps, kill -0 decides.
-alive() {
-  while read -r q c; do
-    s=$(ps -o stat= -p "$q" 2>/dev/null) || { kill -0 "$q" 2>/dev/null && return 0; continue; }
+# Prints the processes listed in $1 ("pid command" lines) that still run. Zombies don't
+# count, and a process id now running another command was reused. Without ps, kill -0 decides.
+survivors() {
+  while read -r p c; do
+    s=$(ps -o stat= -p "$p" 2>/dev/null) || { kill -0 "$p" 2>/dev/null && echo "$p"; continue; }
     case $s in *Z*) continue ;; esac
-    [ "$(ps -o comm= -p "$q" 2>/dev/null)" = "$c" ] && return 0
-  done <"$1"
-  return 1
+    [ "$(ps -o comm= -p "$p" 2>/dev/null)" = "$c" ] && echo "$p"
+  done 2>/dev/null <"$1"
 }
+# Asks the writer to send what command $1 has written so far, while it runs.
+pump() {
+  while :; do
+    sleep 0.05 2>/dev/null || sleep 1
+    [ -f "$1.r" ] || { : >"$1.r" && echo "$1" >&3; }
+  done
+}
+# Runs command $1 (stdout limit $2, streamed if $3 = 1) and queues "<id> <exit> <stdout size>
+# <stderr size> <streamed>" for the writer, or "<id> F input" if its stdin is incomplete.
 job() {
+  if [ -f "$1.z" ]; then echo "$1 F input" >&3; return; fi
+  u=
+  if [ "$3" = 1 ]; then pump "$1" & u=$!; fi
   if [ "$2" -gt 0 ] && [ -n "$hc" ]; then
-    { (. "./$1.c") <"$1.i" 2>"$1.e" 3>&- & echo $! >"$1.p"
+    { (. "./$1.c") <"$1.i" 2>>"$1.e" 3>&- & echo $! >"$1.p"
       [ -f "$1.k" ] && kill $! 2>/dev/null; wait $!; echo $? >"$1.x"
-    } | head -c "$(($2 + 1))" >"$1.o"
-    read -r x <"$1.x"
+    } | head -c "$(($2 + 1))" >>"$1.o"
+    x=; read -r x 2>/dev/null <"$1.x"
   else
-    (. "./$1.c") <"$1.i" >"$1.o" 2>"$1.e" 3>&- & echo $! >"$1.p"
+    (. "./$1.c") <"$1.i" >>"$1.o" 2>>"$1.e" 3>&- & echo $! >"$1.p"
     [ -f "$1.k" ] && kill $! 2>/dev/null; wait $!; x=$?
   fi
+  [ -n "$u" ] && kill "$u" 2>/dev/null
   # A killed command is reported once everything it started is gone too (see K), without a
   # deadline: the write lock around it must stay held until that is confirmed.
-  if [ -f "$1.t" ]; then while alive "$1.t"; do sleep 0.05 2>/dev/null || sleep 1; done; fi
+  if [ -f "$1.t" ]; then
+    while [ -n "$(survivors "$1.t")" ]; do sleep 0.05 2>/dev/null || sleep 1; done
+  fi
   : >"$1.p"
-  set -- "$1" "$x" $(wc -c "$1.o" "$1.e")
-  printf '@GDR %s %s %s %s\\n' "$1" "$2" "$3" "$5" >"$1.h"
-  echo "$1" >&3
+  set -- "$1" "$3" $(wc -c "$1.o" "$1.e" 2>/dev/null)
+  if [ $# = 8 ]; then o=$3 e=$5; else
+    o=$(wc -c 2>/dev/null <"$1.o") || o=0
+    e=$(wc -c 2>/dev/null <"$1.e") || e=0
+  fi
+  e=$((e))
+  [ "$e" -gt 65536 ] && e=65536
+  echo "$1 \${x:-255} $((o)) $e $2" >&3
 }
-while read -r id; do
-  cat "$id.h" "$id.o" "$id.e"
-  rm -f "$id.c" "$id.i" "$id.o" "$id.e" "$id.h" "$id.x" "$id.p" "$id.k" "$id.t"
-done <q &
+# Writes bytes [$2, $2 + $3) of file $1: exactly $3 bytes, so the frame they are in stays
+# intact whatever else writes to the file. Fails if they are not all there anymore (the file
+# shrank); zeros stand in for them then.
+body() {
+  : >"$id.b"
+  if [ $(($2 % $3)) = 0 ]; then
+    dd bs="$3" skip=$(($2 / $3)) count=1 conv=sync 2>"$id.b" <"$1"
+  else
+    { dd bs=1 skip="$2" count=0 2>/dev/null; dd bs="$3" count=1 conv=sync 2>"$id.b"; } <"$1"
+  fi
+  r=; read -r r 2>/dev/null <"$id.b"
+  case $r in
+  1+0*) return 0 ;;
+  0+1*) ;;
+  *) dd bs="$3" count=1 </dev/zero 2>/dev/null ;;
+  esac
+  return 1
+}
+# Sends frames for tokens "<id>" (streaming) and "<id> <exit> ..." (done, see job): at most
+# one output frame per token, which is queued again while there is more to send.
+writer() {
+  exec 4>q
+  while read -r id x o e g; do
+    [ "$id" = . ] && break
+    [ -f "$id.c" ] || continue
+    if [ "$x" = F ]; then printf '@GDR %s F %s\\n' "$id" "$o"; rm -f "$id".?; continue; fi
+    eval "s=\\\${s$id:-0} f=\\\${f$id-}"
+    if [ -z "$x" ]; then o=$(wc -c 2>/dev/null <"$id.o") || o=0; o=$((o)); fi
+    if [ -z "$f" ] && [ "$o" -gt "$s" ]; then
+      n=$((o - s))
+      [ "$n" -gt 524288 ] && n=524288
+      printf '@GDR %s O %s\\n' "$id" "$n"
+      body "$id.o" "$s" "$n" || { f=1; eval "f$id=1"; }
+      s=$((s + n))
+      eval "s$id=$s"
+    fi
+    if [ -z "$x" ]; then
+      if [ -z "$f" ] && [ "$o" -gt "$s" ]; then echo "$id" >&4; else rm -f "$id.r"; fi
+      continue
+    fi
+    if [ -z "$f" ] && [ "$o" -gt "$s" ]; then echo "$id $x $o $e $g" >&4; continue; fi
+    if [ -n "$f" ]; then
+      printf '@GDR %s F output\\n' "$id"
+    else
+      printf '@GDR %s X %s %s\\n' "$id" "$x" "$e"
+      [ "$e" -gt 0 ] && body "$id.e" 0 "$e"
+    fi
+    # Without streaming, no other token for it can follow: no need to wait for this.
+    if [ "$g" = 1 ]; then rm -f "$id".?; else rm -f "$id".? & fi
+    unset "s$id" "f$id"
+  done
+}
+# Appends $2 bytes of our stdin to command $1's stdin, never taking bytes of the next request:
+# dd reads once (with fullblock, until it has them all) and reads no more than it needs.
+fb=
+dd bs=1 count=0 iflag=fullblock </dev/null >/dev/null 2>&1 && fb=1
+recv() {
+  n=$2
+  if [ -n "$fb" ]; then
+    dd bs="$n" count=1 iflag=fullblock 2>/dev/null >>"$1.i"
+    return
+  fi
+  while [ "$n" -gt 0 ]; do
+    m=$(dd bs="$n" count=1 2>/dev/null | tee -a "$1.i" 2>/dev/null | wc -c) || m=0
+    [ "$((m))" -gt 0 ] || exit 1
+    n=$((n - m))
+  done
+}
+writer <q &
 exec 3>q
-printf '@GDR-HELLO 1\\n'
-while read -r op id l c i; do
+printf '@GDR-HELLO 2\\n'
+while read -r op id a b l c i; do
   case $op in
-  X) printf "$c" >"$id.c"; printf "$i" >"$id.i"; job "$id" "$l" & ;;
-  K) p=; read -r p 2>/dev/null <"$id.p"
+  D) recv "$id" "$a" ;;
+  X) printf "$c" >"$id.c"; printf "$i" >>"$id.i"
+     if [ "$l" != - ]; then
+       n=$(wc -c 2>/dev/null <"$id.i") || n=-1
+       [ "$((n))" = "$l" ] || : >"$id.z"
+     fi
+     job "$id" "$a" "$b" & ;;
+  K) [ -f "$id.c" ] || continue
+     : >"$id.k"; p=; read -r p 2>/dev/null <"$id.p"
      if [ -n "$p" ]; then
        # The command and everything it started (e.g. git merge behind git pull): SIGTERM,
        # then SIGKILL for what is left after 3 seconds.
        t=$(tree "$p"); [ -n "$t" ] || t=$p
-       for q in $t; do echo "$q $(ps -o comm= -p "$q" 2>/dev/null)"; done >"$id.t"
+       for p in $t; do echo "$p $(ps -o comm= -p "$p" 2>/dev/null)"; done >"$id.t"
        kill $t 2>/dev/null
-       (sleep 3; alive "$id.t" && kill -9 $t 2>/dev/null) &
-     else : >"$id.k"; fi ;;
+       (sleep 3; t=$(survivors "$id.t"); [ -n "$t" ] && kill -9 $t) 2>/dev/null &
+     fi ;;
   esac
 done
+for p in *.p; do read -r k 2>/dev/null <"$p" && [ -n "$k" ] && kill "$k" 2>/dev/null; done
+echo . >&3
 exec 3>&-
-for p in *.p; do read -r k 2>/dev/null <"$p" && kill "$k" 2>/dev/null; done
 wait
 `;
 
-/** Largest stdin payload sent through the runner (encoding costs up to 4x). */
-export const MAX_RUNNER_STDIN = 16 * 1024;
-
-const MAX_STDERR = 64 * 1024;
+/** Stdin up to this size goes inline in the request line (encoding costs up to 4x). */
+const INLINE_STDIN = 4096;
+/** Larger stdin is sent in pieces of this size. */
+const STDIN_CHUNK = 256 * 1024;
 
 const isPlain = (b: number) => b > 0x20 && b < 0x7f && b !== 0x25 && b !== 0x5c;
 
@@ -120,38 +228,56 @@ export const encodePrintf = (data: Stdin): string => {
   return out + bytes.toString("latin1", plainFrom);
 };
 
-/** Builds a request line that runs `command` (a shell script) on the runner. */
-export const encodeRequest = (
-  id: number,
-  command: string,
-  stdin: Stdin | undefined,
-  limit: number,
-): string => {
-  const parts = ["X", String(id), String(limit), encodePrintf(command)];
-  if (stdin !== undefined && stdin.length > 0) parts.push(encodePrintf(stdin));
-  return parts.join(" ") + "\n";
-};
-
-export interface RunnerResponse {
-  readonly id: number;
-  readonly exitCode: number;
-  readonly stdout: Buffer;
-  readonly stderr: Buffer;
+export interface RunRequest {
+  readonly stdin?: Stdin;
+  /** Stdout beyond this many bytes is cut off (0: no limit). */
+  readonly limit?: number;
+  /** Send stdout while the command runs. */
+  readonly stream?: boolean;
 }
+
+/** Builds the requests that run `command` (a shell script) on the runner. */
+export const encodeRequest = (id: number, command: string, request: RunRequest = {}): Buffer => {
+  const stdin =
+    typeof request.stdin === "string" ? Buffer.from(request.stdin, "utf8") : request.stdin;
+  const parts: Buffer[] = [];
+  let length = "-";
+  let inline = "";
+  if (stdin && stdin.length > INLINE_STDIN) {
+    for (let at = 0; at < stdin.length; at += STDIN_CHUNK) {
+      const chunk = stdin.subarray(at, at + STDIN_CHUNK);
+      parts.push(Buffer.from(`D ${id} ${chunk.length}\n`), chunk);
+    }
+    length = String(stdin.length);
+  } else if (stdin && stdin.length > 0) {
+    inline = ` ${encodePrintf(stdin)}`;
+  }
+  const flags = `${request.limit ?? 0} ${request.stream ? 1 : 0} ${length}`;
+  parts.push(Buffer.from(`X ${id} ${flags} ${encodePrintf(command)}${inline}\n`, "latin1"));
+  return Buffer.concat(parts);
+};
 
 export type RunnerEvent =
   | { readonly kind: "hello" }
-  | ({ readonly kind: "response" } & RunnerResponse);
+  | { readonly kind: "output"; readonly id: number; readonly data: Buffer }
+  | {
+      readonly kind: "exit";
+      readonly id: number;
+      readonly exitCode: number;
+      readonly stderr: Buffer;
+    }
+  | { readonly kind: "failed"; readonly id: number; readonly reason: string };
 
+const HELLO = "@GDR-HELLO 2";
 const MAX_HEADER = 256;
-const HEADER_RE = /^@GDR (\d+) (\d+) (\d+) (\d+)$/;
+const HEADER_RE = /^@GDR (\d+) (?:O (\d+)|X (\d+) (\d+)|F (\w+))$/;
 
 /** Incremental parser for the runner's output stream. */
 export class ResponseParser {
+  private greeted = false;
   private header: Buffer[] = [];
   private headerLength = 0;
-  private frame: { id: number; exitCode: number; stdoutLength: number; total: number } | null =
-    null;
+  private frame: { id: number; exitCode: number | null; length: number } | null = null;
   private body: Buffer[] = [];
   private received = 0;
   private failed = false;
@@ -167,9 +293,10 @@ export class ResponseParser {
       if (this.frame === null) {
         const nl = chunk.indexOf(0x0a, off);
         const end = nl < 0 ? chunk.length : nl;
-        this.header.push(chunk.subarray(off, end));
+        // Before the greeting, long lines are noise to skip rather than an error.
+        if (this.headerLength <= MAX_HEADER) this.header.push(chunk.subarray(off, end));
         this.headerLength += end - off;
-        if (this.headerLength > MAX_HEADER) {
+        if (this.headerLength > MAX_HEADER && this.greeted) {
           this.fail("Runner protocol error: header too long");
           return;
         }
@@ -180,18 +307,21 @@ export class ResponseParser {
         this.headerLength = 0;
         this.startFrame(line);
       } else {
-        const take = Math.min(this.frame.total - this.received, chunk.length - off);
+        const take = Math.min(this.frame.length - this.received, chunk.length - off);
         this.body.push(chunk.subarray(off, off + take));
         this.received += take;
         off += take;
-        if (this.received === this.frame.total) this.endFrame();
+        if (this.received === this.frame.length) this.endFrame();
       }
     }
   }
 
   private startFrame(line: string): void {
-    if (line === "@GDR-HELLO 1") {
-      this.onEvent({ kind: "hello" });
+    if (!this.greeted) {
+      if (line === HELLO) {
+        this.greeted = true;
+        this.onEvent({ kind: "hello" });
+      }
       return;
     }
     const m = HEADER_RE.exec(line);
@@ -199,29 +329,27 @@ export class ResponseParser {
       this.fail(`Runner protocol error: unexpected ${JSON.stringify(line.slice(0, 80))}`);
       return;
     }
-    const stdoutLength = Number(m[3]);
-    this.frame = {
-      id: Number(m[1]),
-      exitCode: Number(m[2]),
-      stdoutLength,
-      total: stdoutLength + Number(m[4]),
-    };
-    if (this.frame.total === 0) this.endFrame();
+    const id = Number(m[1]);
+    if (m[5] !== undefined) {
+      this.onEvent({ kind: "failed", id, reason: m[5] });
+      return;
+    }
+    const exitCode = m[3] === undefined ? null : Number(m[3]);
+    this.frame = { id, exitCode, length: Number(m[2] ?? m[4]) };
+    if (this.frame.length === 0) this.endFrame();
   }
 
   private endFrame(): void {
     const f = this.frame!;
-    const body = Buffer.concat(this.body, f.total);
+    const body = Buffer.concat(this.body, f.length);
     this.frame = null;
     this.body = [];
     this.received = 0;
-    this.onEvent({
-      kind: "response",
-      id: f.id,
-      exitCode: f.exitCode,
-      stdout: body.subarray(0, f.stdoutLength),
-      stderr: body.subarray(f.stdoutLength),
-    });
+    this.onEvent(
+      f.exitCode === null
+        ? { kind: "output", id: f.id, data: body }
+        : { kind: "exit", id: f.id, exitCode: f.exitCode, stderr: body },
+    );
   }
 
   private fail(message: string): void {
@@ -230,12 +358,45 @@ export class ResponseParser {
   }
 }
 
-type Callback = (response: RunnerResponse | Error) => void;
+export interface RunnerResponse {
+  /** Stdout, unless it was streamed (`onOutput`). */
+  readonly stdout: Buffer;
+  readonly stderr: Buffer;
+  readonly exitCode: number;
+  /** Stdout went beyond the limit and was cut off there. */
+  readonly truncated: boolean;
+}
+
+/** A command's outcome, or the reason the runner lost it. */
+export type RunnerResult = RunnerResponse | { readonly lost: string } | Error;
+
+interface Pending {
+  readonly limit: number;
+  readonly onOutput: ((chunk: Buffer) => void) | undefined;
+  callback: (result: RunnerResult) => void;
+  readonly chunks: Buffer[];
+  bytes: number;
+}
+
+const LOST: Readonly<Record<string, string>> = {
+  input: "The runner could not store the command's input",
+  output: "The runner could not read the command's output",
+};
+
+/** The runner process exited; for ssh, exit code 255 means the connection failed. */
+export class RunnerExitError extends Error {
+  constructor(
+    readonly exitCode: number | null,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 /** Client side of a runner process (see `RUNNER_SCRIPT`). */
 export class Runner {
   private nextId = 1;
-  private readonly pending = new Map<number, Callback>();
+  private readonly pending = new Map<number, Pending>();
   private error: Error | null = null;
   private stderr = "";
   private onHello: (() => void) | null;
@@ -246,29 +407,22 @@ export class Runner {
   ) {
     this.onHello = onHello;
     const parser = new ResponseParser(
-      (event) => {
-        if (event.kind === "hello") {
-          this.onHello?.();
-          this.onHello = null;
-          this.onFailure = null;
-          return;
-        }
-        const cb = this.pending.get(event.id);
-        this.pending.delete(event.id);
-        cb?.(event);
-      },
+      (event) => this.onEvent(event),
       (error) => this.fail(error),
     );
     child.stdout!.on("data", (chunk: Buffer) => parser.push(chunk));
     child.stderr!.on("data", (chunk: Buffer) => {
-      if (this.stderr.length < 16384) this.stderr += chunk.toString("utf8");
+      // The end says why the runner failed; cancelled commands add noise before that.
+      this.stderr = (this.stderr + chunk.toString("utf8")).slice(-4096);
     });
     child.stdin!.on("error", () => {
       // The exit handler reports the failure.
     });
     child.on("error", (e) => this.fail(e));
     child.on("close", (code, signal) =>
-      this.fail(new Error(`Runner exited with ${signal ?? code}${this.stderrSuffix()}`)),
+      this.fail(
+        new RunnerExitError(code, `Runner exited with ${signal ?? code}${this.stderrSuffix()}`),
+      ),
     );
   }
 
@@ -277,16 +431,19 @@ export class Runner {
    * its stdin and stdout connected to ours. Interrupting kills the process.
    */
   static start(file: string, args: readonly string[]): Effect.Effect<Runner, Error> {
-    return Effect.callback<Runner, Error>((resume) => {
-      const child = nodeSpawn(file, args as string[], {
-        stdio: ["pipe", "pipe", "pipe"],
-        env: process.env,
-        windowsHide: true,
-      });
-      const runner: Runner = new Runner(child, () => resume(Effect.succeed(runner)));
-      runner.onFailure = (e) => resume(Effect.fail(e));
-      return Effect.sync(() => runner.close());
-    });
+    return Effect.andThen(
+      environmentReady,
+      Effect.callback<Runner, Error>((resume) => {
+        const child = nodeSpawn(file, args as string[], {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: process.env,
+          windowsHide: true,
+        });
+        const runner: Runner = new Runner(child, () => resume(Effect.succeed(runner)));
+        runner.onFailure = (e) => resume(Effect.fail(e));
+        return Effect.sync(() => runner.close());
+      }),
+    );
   }
 
   /** Called once when the runner dies before saying hello. */
@@ -296,15 +453,31 @@ export class Runner {
     return this.error === null;
   }
 
-  /** Runs `command`; `callback` receives the response or the runner's failure. */
-  run(command: string, stdin: Stdin | undefined, limit: number, callback: Callback) {
+  /**
+   * Runs `command`; `callback` receives the response or the runner's failure. With
+   * `onOutput`, stdout is streamed to it instead of collected. Output beyond `limit` ends the
+   * command early, with a truncated response.
+   */
+  run(
+    command: string,
+    request: RunRequest & { readonly onOutput?: (chunk: Buffer) => void },
+    callback: (result: RunnerResult) => void,
+  ): number {
     const id = this.nextId++;
     if (this.error) {
       callback(this.error);
       return id;
     }
-    this.pending.set(id, callback);
-    this.child.stdin!.write(encodeRequest(id, command, stdin, limit));
+    this.pending.set(id, {
+      limit: request.limit ?? 0,
+      onOutput: request.onOutput,
+      callback,
+      chunks: [],
+      bytes: 0,
+    });
+    this.child.stdin!.write(
+      encodeRequest(id, command, { ...request, stream: request.onOutput !== undefined }),
+    );
     return id;
   }
 
@@ -313,11 +486,12 @@ export class Runner {
    * command has exited (the runner still reports killed commands) or the runner is gone.
    */
   cancel(id: number, onSettled?: () => void): void {
-    if (!this.pending.has(id) || this.error) {
+    const p = this.pending.get(id);
+    if (!p || this.error) {
       onSettled?.();
       return;
     }
-    this.pending.set(id, () => onSettled?.());
+    p.callback = () => onSettled?.();
     this.child.stdin!.write(`K ${id}\n`);
   }
 
@@ -326,13 +500,56 @@ export class Runner {
     this.fail(new Error("Runner closed"));
   }
 
+  private onEvent(event: RunnerEvent): void {
+    if (event.kind === "hello") {
+      this.onHello?.();
+      this.onHello = null;
+      this.onFailure = null;
+      return;
+    }
+    const p = this.pending.get(event.id);
+    if (!p) return;
+    if (event.kind === "failed") {
+      this.pending.delete(event.id);
+      p.callback({ lost: LOST[event.reason] ?? `The runner lost the command (${event.reason})` });
+      return;
+    }
+    if (event.kind === "output") {
+      if (p.onOutput) {
+        p.onOutput(event.data);
+        return;
+      }
+      p.chunks.push(event.data);
+      p.bytes += event.data.length;
+      if (p.limit > 0 && p.bytes > p.limit) {
+        // Enough: answer now, and stop the command if it still runs (without waiting for it).
+        const callback = p.callback;
+        this.cancel(event.id);
+        callback({
+          stdout: Buffer.concat(p.chunks).subarray(0, p.limit),
+          stderr: Buffer.alloc(0),
+          exitCode: 0,
+          truncated: true,
+        });
+      }
+      return;
+    }
+    this.pending.delete(event.id);
+    p.callback({
+      stdout: Buffer.concat(p.chunks),
+      stderr: event.stderr,
+      exitCode: event.exitCode,
+      truncated: false,
+    });
+  }
+
   private fail(error: Error): void {
     if (this.error) return;
     this.error = error;
     this.onFailure?.(error);
     this.onFailure = null;
     this.onHello = null;
-    for (const cb of this.pending.values()) cb(error);
+    for (const p of this.pending.values()) p.callback(error);
     this.pending.clear();
     this.child.stdin!.end();
     if (this.child.exitCode === null && this.child.signalCode === null) {
@@ -349,7 +566,7 @@ export class Runner {
 
 /**
  * Runs a command on a runner as an Effect, with the same semantics as `spawn`
- * (`okCodes`, `maxBytes`, interruption kills the command). A runner failure is
+ * (`okCodes`, `maxBytes`, `onStdout`, interruption kills the command). A runner failure is
  * reported as an `SshError`.
  */
 export const runOnRunner = (
@@ -360,28 +577,48 @@ export const runOnRunner = (
     readonly stdin?: Stdin;
     readonly okCodes?: readonly number[];
     readonly maxBytes?: number;
+    readonly onStdout?: (chunk: Buffer) => void;
     readonly display: string;
   },
 ): Effect.Effect<SpawnResult, CommandError | SshError> =>
   Effect.callback<SpawnResult, CommandError | SshError>((resume) => {
-    const limit = options.maxBytes ?? 0;
     let sent = false;
-    const id = runner.run(command, options.stdin, limit, (r) => {
+    const request = { stdin: options.stdin, limit: options.maxBytes, onOutput: options.onStdout };
+    const id = runner.run(command, request, (r) => {
       if (r instanceof Error) {
         // A runner that was already dead never received the command.
         resume(
-          Effect.fail(new SshError({ message: r.message, host, stderr: "", mayHaveRun: sent })),
+          Effect.fail(
+            new SshError({
+              message: `Lost connection to ${host}`,
+              host,
+              stderr: r.message,
+              mayHaveRun: sent,
+            }),
+          ),
         );
         return;
       }
-      const truncated = limit > 0 && r.stdout.length > limit;
+      if ("lost" in r) {
+        resume(
+          Effect.fail(
+            new CommandError({
+              message: r.lost,
+              command: options.display,
+              exitCode: null,
+              stderr: "",
+            }),
+          ),
+        );
+        return;
+      }
       resume(
         completion(
           {
-            stdout: truncated ? r.stdout.subarray(0, limit) : r.stdout,
+            stdout: r.stdout,
             stderr: r.stderr.subarray(0, MAX_STDERR).toString("utf8"),
             code: r.exitCode,
-            truncated,
+            truncated: r.truncated,
           },
           options.okCodes ?? [0],
           options.display,
