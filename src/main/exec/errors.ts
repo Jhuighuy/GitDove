@@ -17,10 +17,12 @@ export class SshError extends Data.TaggedError("SshError")<{
   readonly mayHaveRun: boolean;
 }> {}
 
-/** A path is not inside a Git repository. */
+/** A path is not inside a Git repository (or Git refuses to open it). */
 export class NotARepositoryError extends Data.TaggedError("NotARepositoryError")<{
   readonly message: string;
   readonly path: string;
+  /** What Git said, sent to the renderer as the error's detail. */
+  readonly stderr: string;
 }> {}
 
 /** A repository was referenced that has not been opened. */

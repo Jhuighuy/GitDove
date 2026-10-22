@@ -44,4 +44,17 @@ describe("wordDiff", () => {
     expect(wordDiff("alpha beta gamma", "1 + 2 * 3")).toBeNull();
     expect(wordDiff("x".repeat(2000), "y")).toBeNull();
   });
+
+  it("finds a few changes among many tokens", () => {
+    const mid = "const value = compute(alpha, beta, gamma, delta) + other.call(x, y, z) * factor;";
+    const a = `let ${mid}${mid} // old`;
+    const b = `var ${mid}${mid} // new`;
+    expect(show(a, b)).toEqual([`[let] ${mid}${mid} // [old]`, `[var] ${mid}${mid} // [new]`]);
+    const words = Array.from({ length: 150 }, (_, i) => `w${i}`).join(" ");
+    const edited = words.replace("w10 ", "").replace("w100", "w100 extra");
+    expect(show(words, edited)!.map((s) => s.match(/\[[^\]]*\]/g))).toEqual([
+      ["[w10 ]"],
+      ["[ extra]"],
+    ]);
+  });
 });

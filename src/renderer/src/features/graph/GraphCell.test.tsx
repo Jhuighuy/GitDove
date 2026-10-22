@@ -28,7 +28,6 @@ const row = (extra: Partial<GraphRow> = {}): GraphRow => ({
   authorName: "A",
   authorEmail: "a@example.com",
   authorTime: 0,
-  committerTime: 0,
   lane: 0,
   color: 0,
   edges: [],
@@ -48,15 +47,15 @@ it("draws straight and curved edges in their lane colors", () => {
   // A straight edge in lane 0 (top to middle) and a curve from lane 0 to lane 1.
   render(
     <GraphCell
-      row={row({ edges: [0, 0, 0, 1, 2, 0, 1, 1, 2, 3] })}
-      width={40}
+      row={row({ edges: [0, 0, 0, 1, 2, 0, 1, 1, 2, 3], width: 2 })}
       isHead={false}
       isStash={false}
       wipAbove={false}
     />,
   );
   const svg = container.querySelector("svg")!;
-  expect(svg.getAttribute("width")).toBe("40");
+  // As wide as the row's lanes: the column cuts it off.
+  expect(svg.getAttribute("width")).toBe(String(graphWidthFor(2)));
   expect(svg.getAttribute("height")).toBe(String(ROW_HEIGHT));
   const paths = all("path");
   expect(paths.map((p) => p.getAttribute("d"))).toEqual([
@@ -75,21 +74,21 @@ it("marks merges, HEAD, stashes and a WIP row above", () => {
   render(
     <GraphCell
       row={row({ lane: 1, color: 4, parents: ["p1", "p2"] })}
-      width={40}
       isHead
       isStash={false}
       wipAbove
     />,
   );
   const circles = all("circle");
-  // A filled merge dot plus the HEAD dot.
-  expect(circles.map((c) => c.getAttribute("r"))).toEqual(["4", "2.5"]);
-  expect(circles.every((c) => c.getAttribute("fill") === laneColor(4))).toBe(true);
+  // A filled merge dot with a hole for HEAD, which would not show in the dot's color.
+  expect(circles.map((c) => c.getAttribute("r"))).toEqual(["4", "2"]);
+  expect(circles[0]!.getAttribute("fill")).toBe(laneColor(4));
+  expect(circles[1]!.getAttribute("class")).toBe("fill-background");
   const dashed = container.querySelector("path")!;
   expect(dashed.getAttribute("d")).toBe(`M30 0V${ROW_HEIGHT / 2}`);
   expect(dashed.getAttribute("stroke-dasharray")).toBe("3 3");
 
-  render(<GraphCell row={row()} width={40} isHead={false} isStash wipAbove={false} />);
+  render(<GraphCell row={row()} isHead={false} isStash wipAbove={false} />);
   expect(all("circle")).toHaveLength(0);
   const rect = container.querySelector("rect")!;
   expect(rect.getAttribute("stroke-dasharray")).toBe("2 2");
@@ -97,7 +96,8 @@ it("marks merges, HEAD, stashes and a WIP row above", () => {
 });
 
 it("draws the WIP node with a dashed line down to HEAD", () => {
-  render(<WipGraphCell lane={2} color={1} width={60} />);
+  render(<WipGraphCell lane={2} color={1} />);
+  expect(container.querySelector("svg")!.getAttribute("width")).toBe(String(graphWidthFor(3)));
   const path = container.querySelector("path")!;
   expect(path.getAttribute("d")).toBe(`M46 ${ROW_HEIGHT / 2}V${ROW_HEIGHT}`);
   expect(path.getAttribute("stroke")).toBe(laneColor(1));
@@ -106,11 +106,17 @@ it("draws the WIP node with a dashed line down to HEAD", () => {
   expect(circle.getAttribute("stroke-dasharray")).toBe("3 2");
 });
 
+it("marks HEAD on a regular commit with a dot in its color", () => {
+  render(<GraphCell row={row()} isHead isStash={false} wipAbove={false} />);
+  const circles = all("circle");
+  expect(circles.map((c) => c.getAttribute("r"))).toEqual(["6", "2.5"]);
+  expect(circles[1]!.getAttribute("fill")).toBe(laneColor(0));
+});
+
 it("draws a line from the ref pills to the dot", () => {
   render(
     <GraphCell
       row={row({ lane: 1, color: 2 })}
-      width={40}
       isHead={false}
       isStash={false}
       wipAbove={false}

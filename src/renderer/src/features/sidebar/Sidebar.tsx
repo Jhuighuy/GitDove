@@ -1,5 +1,5 @@
 import type { AvatarProvider } from "@shared/avatars";
-import type { Ref, Remote, RepoId, Stash, Submodule, Worktree } from "@shared/domain";
+import type { Ref, RefsSnapshot, Remote, RepoId, Stash, Submodule, Worktree } from "@shared/domain";
 import { stashKey } from "@shared/visibility";
 import {
   IconArchive,
@@ -23,21 +23,39 @@ import {
   IconUserOff,
   IconUsers,
 } from "@tabler/icons-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { Avatar, useAvatarProviders } from "@/components/Avatar";
-import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  isMenuKey,
+  openActiveMenu,
+  useContextMenuTarget,
+} from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { useRefs, useRepoInfo } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { commands } from "../commands";
 import { type SectionDef, SectionStack } from "./SectionStack";
 import { SidebarMenu, type SidebarTarget } from "./SidebarMenu";
+import { buildTree, type TreeNode } from "./tree";
+import { type Contributor, type ContributorEmail, useVisibility } from "./visibility";
 
 type SectionTarget = Extract<SidebarTarget, { kind: "section" }>;
-import { buildTree, type TreeNode } from "./tree";
-import { type Contributor, useVisibility } from "./visibility";
 
 /** `filtered`: hidden by the contributor filter, which its own eye cannot change. */
 type Visibility = "visible" | "hidden" | "filtered" | "partial" | "head" | "none";
@@ -47,9 +65,13 @@ interface FolderState {
   readonly collapsed: Readonly<Record<string, true>>;
   /** Contributors whose emails are listed, keyed by `folderKey` (default: collapsed). */
   readonly expanded: Readonly<Record<string, true>>;
-  toggle(key: string): void;
-  toggleExpanded(key: string): void;
+  readonly toggle: (key: string) => void;
+  readonly toggleExpanded: (key: string) => void;
+  /** Forgets the folders of `repo` that are gone, keeping those in `keep`. */
+  readonly prune: (repo: RepoId, keep: ReadonlySet<string>) => void;
 }
+
+const folderKey = (repo: RepoId, prefix: string) => `${repo}\n${prefix}`;
 
 const useFolderStore = create<FolderState>()(
   persist(
@@ -66,57 +88,187 @@ const useFolderStore = create<FolderState>()(
           const { [key]: was, ...rest } = s.expanded;
           return { expanded: was ? rest : { ...rest, [key]: true } };
         }),
+      prune: (repo, keep) =>
+        set((s) => {
+          const own = folderKey(repo, "");
+          const stale = (k: string) => k.startsWith(own) && !keep.has(k);
+          const drop = (r: Readonly<Record<string, true>>) =>
+            Object.keys(r).some(stale)
+              ? Object.fromEntries(Object.entries(r).filter(([k]) => !stale(k)))
+              : r;
+          const collapsed = drop(s.collapsed);
+          const expanded = drop(s.expanded);
+          return collapsed === s.collapsed && expanded === s.expanded ? s : { collapsed, expanded };
+        }),
     }),
     { name: "gitdove.sidebar-folders" },
   ),
 );
 
-const folderKey = (repo: RepoId, prefix: string) => `${repo}\n${prefix}`;
+// ---------------------------------------------------------------------------
+// Rows: the sections as flat lists, so that only the rows on screen are rendered
+// ---------------------------------------------------------------------------
 
-export function Sidebar({ repo }: { repo: RepoId }) {
-  const { data } = useRefs(repo);
-  const { data: info } = useRepoInfo(repo);
-  const vis = useVisibility(repo);
-  const providers = useAvatarProviders(repo);
-  const [filter, setFilter] = useState("");
-  const [menu, setMenu] = useState<SidebarTarget | null>(null);
-  const collapsed = useFolderStore((s) => s.collapsed);
-  const toggleFolder = useFolderStore((s) => s.toggle);
-  const expanded = useFolderStore((s) => s.expanded);
-  const toggleExpanded = useFolderStore((s) => s.toggleExpanded);
+type Row =
+  | {
+      readonly kind: "folder";
+      readonly key: string;
+      readonly depth: number;
+      readonly name: string;
+      readonly title: string;
+      readonly open: boolean;
+      /** Collapsed over the checked-out branch, which it stands in for. */
+      readonly hidesHead: boolean;
+      readonly count: number;
+      /** Full names of its branches, without the checked-out one (which is always shown). */
+      readonly names: readonly string[];
+      /** Full names of all its branches. */
+      readonly members: readonly string[];
+      /** The prefix it hides by, when it hides as a group. */
+      readonly prefix: string | undefined;
+      readonly folderKey: string;
+      readonly visibility: Visibility;
+    }
+  | {
+      readonly kind: "ref";
+      readonly key: string;
+      readonly depth: number;
+      readonly ref: Ref;
+      readonly label: string;
+      readonly menu: "branch" | "remote-branch" | "tag";
+      readonly visibility: Visibility;
+      /** Who works on the branch. */
+      readonly owner: Contributor | undefined;
+    }
+  | {
+      readonly kind: "remote";
+      readonly key: string;
+      readonly name: string;
+      readonly remote: Remote | undefined;
+      readonly names: readonly string[];
+      readonly visibility: Visibility;
+    }
+  | {
+      readonly kind: "contributor";
+      readonly key: string;
+      readonly contributor: Contributor;
+      /** Whether the emails are listed, for a contributor with several. */
+      readonly open: boolean | undefined;
+      readonly folderKey: string;
+      readonly visibility: Visibility;
+    }
+  | {
+      readonly kind: "email";
+      readonly key: string;
+      readonly contributor: Contributor;
+      readonly email: ContributorEmail;
+      readonly visibility: Visibility;
+    }
+  | {
+      readonly kind: "worktree";
+      readonly key: string;
+      readonly worktree: Worktree;
+      readonly current: boolean;
+    }
+  | {
+      readonly kind: "stash";
+      readonly key: string;
+      readonly stash: Stash;
+      readonly visibility: Visibility;
+    }
+  | { readonly kind: "submodule"; readonly key: string; readonly submodule: Submodule };
 
-  const f = filter.trim().toLowerCase();
+/** How many of a section's items the graph shows. */
+interface Count {
+  readonly shown: number;
+  readonly total: number;
+}
+
+type Vis = ReturnType<typeof useVisibility>;
+
+interface Groups {
+  readonly locals: { readonly refs: readonly Ref[]; readonly tree: readonly TreeNode<Ref>[] };
+  readonly remotes: ReadonlyMap<string, { refs: readonly Ref[]; tree: readonly TreeNode<Ref>[] }>;
+  /** Newest first. */
+  readonly tags: readonly Ref[];
+}
+
+const groupsOf = (data: RefsSnapshot | undefined): Groups => {
+  const refs = data?.refs ?? [];
+  const byRemote = new Map<string, Ref[]>();
+  for (const r of data?.remotes ?? []) byRemote.set(r.name, []);
+  for (const r of refs) {
+    if (r.kind !== "remote") continue;
+    const list = byRemote.get(r.remote ?? "") ?? [];
+    list.push(r);
+    byRemote.set(r.remote ?? "", list);
+  }
+  const remotes = new Map<string, { refs: Ref[]; tree: TreeNode<Ref>[] }>();
+  for (const [name, list] of byRemote) {
+    const tree = buildTree(list, (r) => r.short.slice(name.length + 1), `refs/remotes/${name}/`);
+    remotes.set(name, { refs: list, tree });
+  }
+  const branches = refs.filter((r) => r.kind === "branch");
+  return {
+    locals: { refs: branches, tree: buildTree(branches, (r) => r.short, "refs/heads/") },
+    remotes,
+    tags: refs.filter((r) => r.kind === "tag").toReversed(),
+  };
+};
+
+/** Every folder key of a repository's refs, to forget collapsed folders that are gone. */
+const folderKeysOf = (repo: RepoId, groups: Groups, contributors: readonly Contributor[]) => {
+  const keys = new Set<string>();
+  const walk = (nodes: readonly TreeNode<Ref>[]) => {
+    for (const n of nodes) {
+      if (n.kind === "folder") {
+        keys.add(folderKey(repo, n.prefix));
+        walk(n.children);
+      }
+    }
+  };
+  walk(groups.locals.tree);
+  for (const { tree } of groups.remotes.values()) walk(tree);
+  for (const c of contributors) keys.add(folderKey(repo, `contributor:${c.person}`));
+  return keys;
+};
+
+interface RowsInput {
+  readonly repo: RepoId;
+  readonly data: RefsSnapshot | undefined;
+  readonly groups: Groups;
+  /** Lowercase; empty for no filter. */
+  readonly filter: string;
+  readonly collapsed: FolderState["collapsed"];
+  readonly expanded: FolderState["expanded"];
+  readonly vis: Pick<
+    Vis,
+    | "isHidden"
+    | "isFiltered"
+    | "ownerOf"
+    | "contributors"
+    | "contributorVisibility"
+    | "isEmailHidden"
+  >;
+  readonly workTree: string | undefined;
+}
+
+/** The rows of each section, and how many of their items the graph shows. */
+const rowsOf = ({
+  repo,
+  data,
+  groups,
+  filter: f,
+  collapsed,
+  expanded,
+  vis,
+  workTree,
+}: RowsInput) => {
   const match = (s: string) => !f || s.toLowerCase().includes(f);
-
-  const { locals, remotes, tags } = useMemo(() => {
-    const refs = data?.refs ?? [];
-    const byRemote = new Map<string, Ref[]>();
-    for (const r of data?.remotes ?? []) byRemote.set(r.name, []);
-    for (const r of refs) {
-      if (r.kind !== "remote" || r.short.endsWith("/HEAD")) continue;
-      const list = byRemote.get(r.remote ?? "") ?? [];
-      list.push(r);
-      byRemote.set(r.remote ?? "", list);
-    }
-    const trees = new Map<string, { refs: Ref[]; tree: TreeNode<Ref>[] }>();
-    for (const [name, list] of byRemote) {
-      const tree = buildTree(list, (r) => r.short.slice(name.length + 1), `refs/remotes/${name}/`);
-      trees.set(name, { refs: list, tree });
-    }
-    const branches = refs.filter((r) => r.kind === "branch");
-    return {
-      locals: { refs: branches, tree: buildTree(branches, (r) => r.short, "refs/heads/") },
-      remotes: trees,
-      tags: refs.filter((r) => r.kind === "tag").toReversed(),
-    };
-  }, [data]);
-
-  const stashes = data?.stashes ?? [];
-  const worktrees = data?.worktrees ?? [];
-  const submodules = data?.submodules ?? [];
-  const remoteList = data?.remotes ?? [];
-  const reveal = (hash: string) => commands.selectCommit(repo, hash);
-
+  const count = (names: readonly string[]): Count => ({
+    shown: names.reduce((n, name) => (vis.isHidden(name) ? n : n + 1), 0),
+    total: names.length,
+  });
   const refVisibility = (r: Ref): Visibility =>
     r.isHead
       ? "head"
@@ -125,91 +277,335 @@ export function Sidebar({ repo }: { repo: RepoId }) {
         : vis.isHidden(r.name)
           ? "hidden"
           : "visible";
-  const contributors = vis.contributors;
-  const count = (names: readonly string[], hidden = vis.isHidden) => {
-    const shown = names.filter((n) => !hidden(n)).length;
-    return shown === names.length ? (
-      <span>{names.length}</span>
-    ) : (
-      <span className="font-medium text-sky-500">
-        {shown}/{names.length}
-      </span>
-    );
-  };
-  const all = vis.all;
-  const visibleTotal = all.filter((n) => !vis.isHidden(n)).length;
   const groupVisibility = (names: readonly string[]): Visibility => {
     if (names.length > 0 && names.every(vis.isFiltered)) return "filtered";
-    const hiddenCount = names.filter((n) => vis.isHidden(n)).length;
-    if (names.length === 0 || hiddenCount === 0) return "visible";
-    return hiddenCount === names.length ? "hidden" : "partial";
+    const hidden = names.reduce((n, name) => (vis.isHidden(name) ? n + 1 : n), 0);
+    if (names.length === 0 || hidden === 0) return "visible";
+    return hidden === names.length ? "hidden" : "partial";
   };
+  const refRow = (
+    r: Ref,
+    label: string,
+    depth: number,
+    menu: "branch" | "remote-branch" | "tag",
+  ): Row => ({
+    kind: "ref",
+    key: `ref:${r.name}`,
+    depth,
+    ref: r,
+    label,
+    menu,
+    visibility: refVisibility(r),
+    owner: vis.ownerOf(r.name),
+  });
 
   /**
-   * Renders a branch tree. Folders hide by prefix when `byPrefix` is set, else
-   * branch by branch (like the Local section, so new branches stay visible).
+   * Adds a branch tree's rows. Folders hide by prefix when `byPrefix` is set, else branch by
+   * branch (like the Local section, so new branches stay visible).
    */
   const tree = (
+    out: Row[],
     nodes: readonly TreeNode<Ref>[],
     depth: number,
     byPrefix: boolean,
-    leaf: (r: Ref, label: string, depth: number) => ReactNode,
-  ): ReactNode[] =>
-    nodes.flatMap((n) => {
-      if (n.kind === "leaf") return match(n.item.short) ? [leaf(n.item, n.name, depth)] : [];
-      if (f && !n.items.some((r) => match(r.short))) return [];
+    menu: "branch" | "remote-branch",
+  ) => {
+    for (const n of nodes) {
+      if (n.kind === "leaf") {
+        if (match(n.item.short)) out.push(refRow(n.item, n.name, depth, menu));
+        continue;
+      }
+      if (f && !n.items.some((r) => match(r.short))) continue;
       // The checked-out branch is always shown, so it does not count towards a folder's state.
       const names = n.items.filter((r) => !r.isHead).map((r) => r.name);
       const key = folderKey(repo, n.prefix);
       const open = !!f || !collapsed[key];
-      const prefix = byPrefix ? n.prefix : undefined;
-      // A collapsed folder stands in for the checked-out branch inside it.
-      const hidesHead = !open && n.items.some((r) => r.isHead);
-      return [
-        <Item
-          key={n.prefix}
-          depth={depth}
-          icon={open ? <IconFolderOpen /> : <IconFolder />}
-          label={n.name}
-          title={n.prefix.replace(/^refs\/(heads|remotes)\//, "")}
-          active={hidesHead}
-          visibility={groupVisibility(names)}
-          trailing={
-            !open && (
-              <>
-                {hidesHead && (
-                  <span
-                    className="flex shrink-0 text-primary"
-                    title="Contains the checked-out branch"
-                  >
-                    <IconSquareCheckFilled aria-hidden />
-                    <span className="sr-only">Contains the checked-out branch</span>
-                  </span>
-                )}
-                <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
-                  {n.items.length}
-                </span>
-              </>
-            )
-          }
-          onToggle={() => vis.toggleGroup(names, prefix)}
-          onClick={() => !f && toggleFolder(key)}
-          onContextMenu={() =>
-            setMenu({
-              kind: "folder",
-              name: n.name,
-              names,
-              members: n.items.map((r) => r.name),
-              prefix,
-            })
-          }
-        />,
-        ...(open ? tree(n.children, depth + 1, byPrefix, leaf) : []),
-      ];
-    });
+      out.push({
+        kind: "folder",
+        key: `folder:${n.prefix}`,
+        depth,
+        name: n.name,
+        title: n.prefix.replace(/^refs\/(heads|remotes)\//, ""),
+        open,
+        hidesHead: !open && n.items.some((r) => r.isHead),
+        count: n.items.length,
+        names,
+        members: n.items.map((r) => r.name),
+        prefix: byPrefix ? n.prefix : undefined,
+        folderKey: key,
+        visibility: groupVisibility(names),
+      });
+      if (open) tree(out, n.children, depth + 1, byPrefix, menu);
+    }
+  };
 
+  const local: Row[] = [];
+  tree(local, groups.locals.tree, 0, false, "branch");
+
+  const remote: Row[] = [];
+  // With a single remote its subtree adds nothing: its branches are listed flatly (and its
+  // own actions move to the section header menu).
+  const flat = groups.remotes.size === 1;
+  for (const [name, { refs, tree: nodes }] of groups.remotes) {
+    if (!flat) {
+      const names = refs.map((r) => r.name);
+      remote.push({
+        kind: "remote",
+        key: `remote:${name}`,
+        name,
+        remote: data?.remotes.find((r) => r.name === name),
+        names,
+        visibility: groupVisibility(names),
+      });
+    }
+    tree(remote, nodes, flat ? 0 : 1, true, "remote-branch");
+  }
+
+  const contributors: Row[] = [];
+  for (const c of vis.contributors) {
+    const emails = c.emails.filter((e) => match(e.email));
+    if (!match(c.name) && emails.length === 0) continue;
+    const multi = c.emails.length > 1;
+    const key = folderKey(repo, `contributor:${c.person}`);
+    // Searching by email shows the matching emails.
+    const open = multi && (!!expanded[key] || (!!f && emails.length > 0 && !match(c.name)));
+    contributors.push({
+      kind: "contributor",
+      key: `person:${c.person}`,
+      contributor: c,
+      open: multi ? open : undefined,
+      folderKey: key,
+      visibility: vis.contributorVisibility(c),
+    });
+    if (!open) continue;
+    for (const e of f && !match(c.name) ? emails : c.emails) {
+      contributors.push({
+        kind: "email",
+        key: `email:${c.person}\n${e.email}`,
+        contributor: c,
+        email: e,
+        visibility: vis.isEmailHidden(e.email) ? "hidden" : "visible",
+      });
+    }
+  }
+
+  const stashes = data?.stashes ?? [];
+  return {
+    local,
+    remote,
+    contributors,
+    worktrees: (data?.worktrees ?? [])
+      .filter((w) => match(w.path))
+      .map((w): Row => ({
+        kind: "worktree",
+        key: `worktree:${w.path}`,
+        worktree: w,
+        current: w.path === workTree,
+      })),
+    stashes: stashes
+      .filter((s) => match(s.message))
+      .map((s): Row => ({
+        kind: "stash",
+        key: `stash:${s.hash}`,
+        stash: s,
+        visibility: vis.isHidden(stashKey(s.hash)) ? "hidden" : "visible",
+      })),
+    tags: groups.tags.filter((r) => match(r.short)).map((r) => refRow(r, r.short, 0, "tag")),
+    submodules: (data?.submodules ?? [])
+      .filter((s) => match(s.path))
+      .map((s): Row => ({ kind: "submodule", key: `submodule:${s.path}`, submodule: s })),
+    counts: {
+      local: count(groups.locals.refs.map((r) => r.name)),
+      remote: count([...groups.remotes.values()].flatMap((t) => t.refs.map((r) => r.name))),
+      contributors: {
+        shown: vis.contributors.filter((c) => vis.contributorVisibility(c) !== "hidden").length,
+        total: vis.contributors.length,
+      },
+      stashes: count(stashes.map((s) => stashKey(s.hash))),
+      tags: count(groups.tags.map((t) => t.name)),
+    },
+  };
+};
+
+/** What a row's context menu is for; none for a row without one. */
+const targetOf = (row: Row): SidebarTarget | null => {
+  switch (row.kind) {
+    case "folder":
+      return {
+        kind: "folder",
+        name: row.name,
+        names: row.names,
+        members: row.members,
+        prefix: row.prefix,
+      };
+    case "ref":
+      return { kind: row.menu, ref: row.ref };
+    case "remote":
+      return row.remote ? { kind: "remote", remote: row.remote } : null;
+    case "contributor":
+      return { kind: "contributor", contributor: row.contributor };
+    case "email":
+      return { kind: "contributor", contributor: row.contributor, email: row.email.email };
+    case "worktree":
+      return { kind: "worktree", worktree: row.worktree };
+    case "stash":
+      return { kind: "stash", stash: row.stash };
+    case "submodule":
+      return { kind: "submodule", submodule: row.submodule };
+  }
+};
+
+/** What rows do when used. */
+interface RowActions {
+  /** The eye: shows or hides the row in the graph. */
+  toggle(row: Row): void;
+  click(row: Row): void;
+  doubleClick(row: Row): void;
+  /** Enter: the click's action, or the double-click's for rows that only open. */
+  activate(row: Row): void;
+  contextMenu(row: Row): void;
+}
+
+/** Runs a row action; stable for the sidebar's lifetime. */
+type OnAction = (action: keyof RowActions, row: Row) => void;
+
+// ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+
+const renderCount = ({ shown, total }: Count) =>
+  shown === total ? (
+    <span>{total}</span>
+  ) : (
+    <span className="font-medium text-sky-500">
+      {shown}/{total}
+    </span>
+  );
+
+export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
+  const { data } = useRefs(repo);
+  const { data: info } = useRepoInfo(repo);
+  const vis = useVisibility(repo);
+  const providers = useAvatarProviders(repo);
+  const [filter, setFilter] = useState("");
+  // The rows follow typing when there is time: the field never waits for them.
+  const f = useDeferredValue(filter.trim().toLowerCase());
+  const collapsed = useFolderStore((s) => s.collapsed);
+  const expanded = useFolderStore((s) => s.expanded);
+  const menu = useContextMenuTarget<SidebarTarget>();
+
+  const groups = useMemo(() => groupsOf(data), [data]);
+  const { isHidden, isFiltered, ownerOf, contributors, contributorVisibility, isEmailHidden } = vis;
+  const rows = useMemo(
+    () =>
+      rowsOf({
+        repo,
+        data,
+        groups,
+        filter: f,
+        collapsed,
+        expanded,
+        vis: {
+          isHidden,
+          isFiltered,
+          ownerOf,
+          contributors,
+          contributorVisibility,
+          isEmailHidden,
+        },
+        workTree: info?.workTree,
+      }),
+    [
+      repo,
+      data,
+      groups,
+      f,
+      collapsed,
+      expanded,
+      isHidden,
+      isFiltered,
+      ownerOf,
+      contributors,
+      contributorVisibility,
+      isEmailHidden,
+      info?.workTree,
+    ],
+  );
+
+  // Collapsed folders that are gone are forgotten.
+  useEffect(() => {
+    if (data) useFolderStore.getState().prune(repo, folderKeysOf(repo, groups, contributors));
+  }, [repo, data, groups, contributors]);
+
+  // Rows call the latest of these through `onAction`, which stays the same.
+  const handlers: RowActions = {
+    toggle(row) {
+      switch (row.kind) {
+        case "folder":
+          return vis.toggleGroup(row.names, row.prefix);
+        case "ref":
+          return vis.toggle(row.ref.name);
+        case "remote":
+          return vis.toggleGroup(row.names, `refs/remotes/${row.name}/`);
+        case "contributor":
+          return vis.toggleContributor(row.contributor);
+        case "email":
+          return vis.toggleEmail(row.contributor, row.email.email);
+        case "stash":
+          return vis.toggle(stashKey(row.stash.hash));
+      }
+    },
+    click(row) {
+      switch (row.kind) {
+        case "folder":
+          // While filtering, matching folders are open whatever their saved state.
+          if (!f) useFolderStore.getState().toggle(row.folderKey);
+          return;
+        case "ref":
+          return commands.selectCommit(repo, row.ref.hash);
+        case "contributor":
+          if (row.open !== undefined) useFolderStore.getState().toggleExpanded(row.folderKey);
+          return;
+        case "stash":
+          return commands.selectCommit(repo, row.stash.hash);
+      }
+    },
+    doubleClick(row) {
+      switch (row.kind) {
+        case "ref":
+          // A tag checks out its commit: a branch may have the same name.
+          return void commands.checkoutRef(repo, row.ref);
+        case "worktree":
+          if (!row.current) commands.openSibling(repo, row.worktree.path);
+          return;
+        case "stash":
+          return void commands.applyStash(repo, row.stash);
+        case "submodule":
+          return commands.openSibling(repo, row.submodule.path);
+      }
+    },
+    activate(row) {
+      if (row.kind === "worktree" || row.kind === "submodule") handlers.doubleClick(row);
+      else handlers.click(row);
+    },
+    contextMenu(row) {
+      const target = targetOf(row);
+      if (target) menu.capture(target);
+    },
+  };
+  const handlersRef = useRef(handlers);
+  useLayoutEffect(() => {
+    handlersRef.current = handlers;
+  });
+  const onAction = useCallback<OnAction>((action, row) => handlersRef.current[action](row), []);
+  const capture = menu.capture;
+  const list = (items: readonly Row[], label: string) => (
+    <RowList rows={items} label={label} onAction={onAction} providers={providers} />
+  );
+
+  // Every header offers to show or hide the sections.
   const sectionMenu = (section: SectionTarget["section"]): void =>
-    setMenu({
+    capture({
       kind: "section",
       section,
       sections: sections.map(({ id, title }) => ({ id, title })),
@@ -220,208 +616,62 @@ export function Sidebar({ repo }: { repo: RepoId }) {
       id: "local",
       title: "Local",
       icon: <IconDeviceLaptop />,
-      count: count(locals.refs.map((r) => r.name)),
+      count: renderCount(rows.counts.local),
       onHeaderContextMenu: () => sectionMenu("local"),
-      children: tree(locals.tree, 0, false, (r, label, depth) => (
-        <RefItem
-          key={r.name}
-          depth={depth}
-          refItem={r}
-          label={label}
-          title={r.short}
-          icon={<IconGitBranch />}
-          owner={vis.ownerOf(r.name)}
-          providers={providers}
-          visibility={refVisibility(r)}
-          onToggle={() => vis.toggle(r.name)}
-          onClick={() => reveal(r.hash)}
-          onDoubleClick={() => void commands.checkoutRef(repo, r)}
-          onContextMenu={() => setMenu({ kind: "branch", ref: r })}
-        />
-      )),
+      children: list(rows.local, "Local branches"),
     },
     {
       id: "remote",
       title: "Remote",
       icon: <IconCloud />,
-      count: count([...remotes.values()].flatMap((t) => t.refs.map((r) => r.name))),
+      count: renderCount(rows.counts.remote),
       onHeaderContextMenu: () => sectionMenu("remote"),
-      children: [...remotes].map(([name, { refs, tree: nodes }]) => {
-        const remote = remoteList.find((r) => r.name === name);
-        const names = refs.map((r) => r.name);
-        // With a single remote its subtree adds nothing: list its branches flatly
-        // (its own actions move to the section header menu).
-        const flat = remotes.size === 1;
-        return (
-          <div key={name}>
-            {!flat && (
-              <Item
-                icon={<RemoteIcon remote={remote} />}
-                label={name}
-                title={remote?.fetchUrl ?? name}
-                visibility={groupVisibility(names)}
-                onToggle={() => vis.toggleGroup(names, `refs/remotes/${name}/`)}
-                onContextMenu={() => remote && setMenu({ kind: "remote", remote })}
-              />
-            )}
-            {tree(nodes, flat ? 0 : 1, true, (r, label, depth) => (
-              <RefItem
-                key={r.name}
-                depth={depth}
-                refItem={r}
-                label={label}
-                title={r.short}
-                icon={<IconGitBranch />}
-                owner={vis.ownerOf(r.name)}
-                providers={providers}
-                visibility={refVisibility(r)}
-                onToggle={() => vis.toggle(r.name)}
-                onClick={() => reveal(r.hash)}
-                onDoubleClick={() => void commands.checkoutRef(repo, r)}
-                onContextMenu={() => setMenu({ kind: "remote-branch", ref: r })}
-              />
-            ))}
-          </div>
-        );
-      }),
+      children: list(rows.remote, "Remote branches"),
     },
     {
       id: "contributors",
       title: "Contributors",
       icon: <IconUsers />,
-      count: count(
-        contributors.map((c) => c.person),
-        (person) =>
-          contributors.some(
-            (c) => c.person === person && vis.contributorVisibility(c) === "hidden",
-          ),
-      ),
+      count: renderCount(rows.counts.contributors),
       onHeaderContextMenu: () => sectionMenu("contributors"),
-      children: contributors.flatMap((c) => {
-        const emails = c.emails.filter((e) => match(e.email));
-        if (!match(c.name) && emails.length === 0) return [];
-        const multi = c.emails.length > 1;
-        const key = folderKey(repo, `contributor:${c.person}`);
-        // Searching by email shows the matching emails.
-        const open = multi && (expanded[key] || (!!f && emails.length > 0 && !match(c.name)));
-        return [
-          <ContributorItem
-            key={c.person}
-            contributor={c}
-            providers={providers}
-            open={multi ? open : undefined}
-            visibility={vis.contributorVisibility(c)}
-            onToggle={() => vis.toggleContributor(c)}
-            onClick={() => multi && toggleExpanded(key)}
-            onContextMenu={() => setMenu({ kind: "contributor", contributor: c })}
-          />,
-          ...(open
-            ? (f && !match(c.name) ? emails : c.emails).map((e) => (
-                <Item
-                  key={`${c.person}\n${e.email}`}
-                  depth={1}
-                  icon={<Avatar name={e.name} email={e.email} providers={providers} size={14} />}
-                  label={e.email}
-                  title={e.email}
-                  visibility={vis.isEmailHidden(e.email) ? "hidden" : "visible"}
-                  trailing={
-                    <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
-                      {e.branches}
-                    </span>
-                  }
-                  onToggle={() => vis.toggleEmail(c, e.email)}
-                  onContextMenu={() =>
-                    setMenu({ kind: "contributor", contributor: c, email: e.email })
-                  }
-                />
-              ))
-            : []),
-        ];
-      }),
+      children: list(rows.contributors, "Contributors"),
     },
     {
       id: "worktrees",
       title: "Worktrees",
       icon: <IconFolders />,
-      count: <span>{worktrees.length}</span>,
+      count: <span>{data?.worktrees.length ?? 0}</span>,
       defaultOpen: false,
       onHeaderContextMenu: () => sectionMenu("worktrees"),
-      children: worktrees
-        .filter((w) => match(w.path))
-        .map((w) => (
-          <WorktreeItem
-            key={w.path}
-            worktree={w}
-            current={w.path === info?.workTree}
-            onDoubleClick={() => {
-              if (w.path !== info?.workTree) commands.openSibling(repo, w.path);
-            }}
-            onContextMenu={() => setMenu({ kind: "worktree", worktree: w })}
-          />
-        )),
+      children: list(rows.worktrees, "Worktrees"),
     },
     {
       id: "stashes",
       title: "Stashes",
       icon: <IconArchive />,
-      count: count(stashes.map((s) => stashKey(s.hash))),
+      count: renderCount(rows.counts.stashes),
       onHeaderContextMenu: () => sectionMenu("stashes"),
-      children: stashes
-        .filter((s) => match(s.message))
-        .map((s) => (
-          <StashItem
-            key={s.hash}
-            stash={s}
-            visibility={vis.isHidden(stashKey(s.hash)) ? "hidden" : "visible"}
-            onToggle={() => vis.toggle(stashKey(s.hash))}
-            onClick={() => reveal(s.hash)}
-            onDoubleClick={() => void commands.applyStash(repo, s.index)}
-            onContextMenu={() => setMenu({ kind: "stash", stash: s })}
-          />
-        )),
+      children: list(rows.stashes, "Stashes"),
     },
     {
       id: "tags",
       title: "Tags",
       icon: <IconTag />,
-      count: count(tags.map((t) => t.name)),
+      count: renderCount(rows.counts.tags),
       defaultOpen: false,
       onHeaderContextMenu: () => sectionMenu("tags"),
-      children: tags
-        .filter((r) => match(r.short))
-        .slice(0, 1000)
-        .map((r) => (
-          <RefItem
-            key={r.name}
-            refItem={r}
-            icon={<IconTag />}
-            visibility={refVisibility(r)}
-            onToggle={() => vis.toggle(r.name)}
-            onClick={() => reveal(r.hash)}
-            onDoubleClick={() => void commands.checkout(repo, r.short)}
-            onContextMenu={() => setMenu({ kind: "tag", ref: r })}
-          />
-        )),
+      children: list(rows.tags, "Tags"),
     },
-    ...(submodules.length > 0
+    ...((data?.submodules.length ?? 0) > 0
       ? [
           {
             id: "submodules",
             title: "Submodules",
             icon: <IconBox />,
-            count: <span>{submodules.length}</span>,
+            count: <span>{data?.submodules.length}</span>,
             defaultOpen: false,
             onHeaderContextMenu: () => sectionMenu("submodules"),
-            children: submodules
-              .filter((s) => match(s.path))
-              .map((s) => (
-                <SubmoduleItem
-                  key={s.path}
-                  submodule={s}
-                  onDoubleClick={() => commands.openSibling(repo, s.path)}
-                  onContextMenu={() => setMenu({ kind: "submodule", submodule: s })}
-                />
-              )),
+            children: list(rows.submodules, "Submodules"),
           },
         ]
       : []),
@@ -434,7 +684,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
           <span className="text-muted-foreground">
             Viewing{" "}
             <span className={cn("tabular-nums", vis.anyHidden && "font-medium text-sky-500")}>
-              {visibleTotal}/{all.length}
+              {vis.visibleCount}/{vis.all.length}
             </span>
           </span>
           {vis.anyHidden && (
@@ -449,19 +699,20 @@ export function Sidebar({ repo }: { repo: RepoId }) {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter"
+            aria-label="Filter branches, tags and more"
             className="h-7 rounded-lg pl-7 text-xs"
           />
         </div>
       </div>
-      <ContextMenu>
+      <ContextMenu {...menu.rootProps}>
         <ContextMenuTrigger render={<div className="flex min-h-0 flex-1 flex-col border-t" />}>
           <SectionStack sections={sections} />
         </ContextMenuTrigger>
-        <SidebarMenu repo={repo} target={menu} vis={vis} />
+        {menu.target && <SidebarMenu repo={repo} target={menu.target} vis={vis} />}
       </ContextMenu>
     </div>
   );
-}
+});
 
 function RemoteIcon({ remote }: { remote: Remote | undefined }) {
   const url = remote?.fetchUrl ?? "";
@@ -472,13 +723,279 @@ function RemoteIcon({ remote }: { remote: Remote | undefined }) {
 }
 
 // ---------------------------------------------------------------------------
+// A section's rows
+// ---------------------------------------------------------------------------
+
+const ITEM_HEIGHT = 24;
+
+/**
+ * A section's rows as a tree, rendering only those on screen. The keyboard moves a cursor over
+ * the rows (the list keeps focus): Enter uses a row, Space toggles its eye, Left and Right
+ * collapse and expand, and the menu key opens its context menu.
+ */
+const RowList = memo(function RowList({
+  rows,
+  label,
+  onAction,
+  providers,
+}: {
+  rows: readonly Row[];
+  label: string;
+  onAction: OnAction;
+  providers: readonly AvatarProvider[];
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const id = useId();
+  // Stable while the rows are: a new function makes the virtualizer measure every row again.
+  const getItemKey = useCallback((i: number) => rows[i]!.key, [rows]);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ITEM_HEIGHT,
+    getItemKey,
+    overscan: 12,
+    paddingEnd: 4,
+  });
+  // The keyboard cursor, by row key so that it stays on its row when rows come and go.
+  const [cursor, setCursor] = useState<string | null>(null);
+  const cursorIndex = useMemo(
+    () => (cursor === null ? -1 : rows.findIndex((r) => r.key === cursor)),
+    [rows, cursor],
+  );
+  const rowId = (index: number) => `${id}-${index}`;
+  const items = virtualizer.getVirtualItems();
+
+  const moveTo = (index: number) => {
+    const row = rows[Math.min(rows.length - 1, Math.max(0, index))];
+    if (!row) return;
+    setCursor(row.key);
+    virtualizer.scrollToIndex(rows.indexOf(row), { align: "auto" });
+  };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const row = rows[cursorIndex];
+    if (isMenuKey(e)) {
+      e.preventDefault();
+      if (row) {
+        openActiveMenu(scrollRef.current, rowId(cursorIndex), () =>
+          virtualizer.scrollToIndex(cursorIndex, { align: "auto" }),
+        );
+      }
+      return;
+    }
+    const page = Math.max(1, Math.floor((virtualizer.scrollRect?.height ?? 0) / ITEM_HEIGHT) - 1);
+    const open = row?.kind === "folder" || row?.kind === "contributor" ? row.open : undefined;
+    switch (e.key) {
+      case "ArrowDown":
+        moveTo(cursorIndex + 1);
+        break;
+      case "ArrowUp":
+        moveTo(cursorIndex < 0 ? 0 : cursorIndex - 1);
+        break;
+      case "PageDown":
+        moveTo(cursorIndex + page);
+        break;
+      case "PageUp":
+        moveTo(cursorIndex - page);
+        break;
+      case "Home":
+        moveTo(0);
+        break;
+      case "End":
+        moveTo(rows.length - 1);
+        break;
+      case "Enter":
+        if (row) onAction("activate", row);
+        break;
+      case " ":
+        if (row) onAction("toggle", row);
+        break;
+      case "ArrowRight":
+        if (row && open === false) onAction("click", row);
+        break;
+      case "ArrowLeft":
+        if (row && open === true) onAction("click", row);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+  };
+
+  return (
+    <div
+      ref={scrollRef}
+      role="tree"
+      aria-label={label}
+      tabIndex={0}
+      aria-activedescendant={
+        items.some((i) => i.index === cursorIndex) ? rowId(cursorIndex) : undefined
+      }
+      className="group/tree min-h-0 flex-1 overflow-y-auto outline-none"
+      onKeyDown={onKeyDown}
+      onFocus={(e) => {
+        // Tabbing in starts at the first row, unless a click put the cursor somewhere.
+        const first = rows[0];
+        if (e.target === e.currentTarget && first)
+          setCursor((c) => (c !== null && rows.some((r) => r.key === c) ? c : first.key));
+      }}
+      onMouseDown={(e) => {
+        // The cursor goes on from the row clicked.
+        const key = (e.target as HTMLElement).closest<HTMLElement>("[data-key]")?.dataset.key;
+        if (key !== undefined) setCursor(key);
+      }}
+    >
+      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+        {items.map((item) => (
+          <SidebarItem
+            key={item.key}
+            id={rowId(item.index)}
+            top={item.start}
+            row={rows[item.index]!}
+            cursor={item.index === cursorIndex}
+            onAction={onAction}
+            providers={providers}
+          />
+        ))}
+      </div>
+    </div>
+  );
+});
+
+const SidebarItem = memo(function SidebarItem({
+  id,
+  top,
+  row,
+  cursor,
+  onAction,
+  providers,
+}: {
+  id: string;
+  top: number;
+  row: Row;
+  cursor: boolean;
+  onAction: OnAction;
+  providers: readonly AvatarProvider[];
+}) {
+  const common = {
+    id,
+    rowKey: row.key,
+    top,
+    cursor,
+    onToggle: () => onAction("toggle", row),
+    onClick: () => onAction("click", row),
+    onDoubleClick: () => onAction("doubleClick", row),
+    onContextMenu: () => onAction("contextMenu", row),
+  };
+  switch (row.kind) {
+    case "folder":
+      return (
+        <Item
+          {...common}
+          depth={row.depth}
+          expanded={row.open}
+          icon={row.open ? <IconFolderOpen /> : <IconFolder />}
+          label={row.name}
+          title={row.title}
+          active={row.hidesHead}
+          visibility={row.visibility}
+          trailing={
+            !row.open && (
+              <>
+                {row.hidesHead && (
+                  <span
+                    className="flex shrink-0 text-primary"
+                    title="Contains the checked-out branch"
+                  >
+                    <IconSquareCheckFilled aria-hidden />
+                    <span className="sr-only">Contains the checked-out branch</span>
+                  </span>
+                )}
+                <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
+                  {row.count}
+                </span>
+              </>
+            )
+          }
+        />
+      );
+    case "ref":
+      return (
+        <RefItem
+          {...common}
+          depth={row.depth}
+          refItem={row.ref}
+          label={row.label}
+          title={row.ref.short}
+          icon={row.menu === "tag" ? <IconTag /> : <IconGitBranch />}
+          owner={row.owner}
+          providers={providers}
+          visibility={row.visibility}
+        />
+      );
+    case "remote":
+      return (
+        <Item
+          {...common}
+          icon={<RemoteIcon remote={row.remote} />}
+          label={row.name}
+          title={row.remote?.fetchUrl ?? row.name}
+          visibility={row.visibility}
+        />
+      );
+    case "contributor":
+      return (
+        <ContributorItem
+          {...common}
+          contributor={row.contributor}
+          providers={providers}
+          open={row.open}
+          visibility={row.visibility}
+        />
+      );
+    case "email":
+      return (
+        <Item
+          {...common}
+          depth={1}
+          icon={
+            <Avatar name={row.email.name} email={row.email.email} providers={providers} size={14} />
+          }
+          label={row.email.email}
+          title={row.email.email}
+          visibility={row.visibility}
+          trailing={
+            <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">
+              {row.email.branches}
+            </span>
+          }
+        />
+      );
+    case "worktree":
+      return <WorktreeItem {...common} worktree={row.worktree} current={row.current} />;
+    case "stash":
+      return <StashItem {...common} stash={row.stash} visibility={row.visibility} />;
+    case "submodule":
+      return <SubmoduleItem {...common} submodule={row.submodule} />;
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Items
 // ---------------------------------------------------------------------------
 
 interface ItemProps {
+  readonly id: string;
+  /** The row's key, for the list to find the row clicked. */
+  readonly rowKey: string;
+  /** Where the row is in the list, in pixels. */
+  readonly top: number;
+  /** The keyboard cursor is on it. */
+  readonly cursor: boolean;
   readonly icon: ReactNode;
   readonly label: string;
   readonly depth?: number;
+  /** Whether its children are shown, for a row that has some. */
+  readonly expanded?: boolean;
   readonly visibility?: Visibility;
   /** Who hides a `filtered` item, for its tooltip. */
   readonly filteredBy?: string;
@@ -492,9 +1009,14 @@ interface ItemProps {
 }
 
 function Item({
+  id,
+  rowKey,
+  top,
+  cursor,
   icon,
   label,
   depth = 0,
+  expanded,
   visibility = "none",
   filteredBy,
   active,
@@ -508,16 +1030,30 @@ function Item({
   const dim = visibility === "hidden" || visibility === "filtered";
   return (
     <div
+      id={id}
+      role="treeitem"
+      aria-level={depth + 1}
+      aria-expanded={expanded}
+      aria-selected={cursor}
+      data-key={rowKey}
       className={cn(
-        "group hover:bg-sidebar-accent flex h-6 cursor-default items-center gap-1.5 pr-2 pl-1 text-[12px] select-none [&_svg]:size-3.5 [&_svg]:shrink-0",
+        "group hover:bg-sidebar-accent absolute inset-x-0 top-0 flex h-6 cursor-default items-center gap-1.5 pr-2 pl-1 text-[12px] select-none [&_svg]:size-3.5 [&_svg]:shrink-0",
         active && "bg-primary/20 hover:bg-primary/25 font-semibold",
+        cursor &&
+          "group-focus-visible/tree:ring-ring/60 group-focus-visible/tree:ring-1 group-focus-visible/tree:ring-inset",
       )}
+      style={{ transform: `translateY(${top}px)` }}
       title={title ?? label}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
     >
-      <VisibilityToggle visibility={visibility} filteredBy={filteredBy} onToggle={onToggle} />
+      <VisibilityToggle
+        label={label}
+        visibility={visibility}
+        filteredBy={filteredBy}
+        onToggle={onToggle}
+      />
       <span
         className={cn("text-muted-foreground flex", dim && "opacity-50")}
         style={{ marginLeft: depth * 14 }}
@@ -533,10 +1069,12 @@ function Item({
 }
 
 function VisibilityToggle({
+  label,
   visibility,
   filteredBy = "its owner",
   onToggle,
 }: {
+  label: string;
   visibility: Visibility;
   filteredBy?: string;
   onToggle?: () => void;
@@ -563,14 +1101,20 @@ function VisibilityToggle({
       </span>
     );
   }
+  const action = visibility === "hidden" ? "Show in graph" : "Hide from graph";
   return (
+    // The list's Space key toggles it, so it stays out of the tab order.
     <button
       type="button"
-      title={visibility === "hidden" ? "Show in graph" : "Hide from graph"}
+      tabIndex={-1}
+      title={action}
+      aria-label={`${action}: ${label}`}
       className={cn(
         "text-muted-foreground hover:text-foreground flex w-5 shrink-0 justify-center",
-        !off && "opacity-0 group-hover:opacity-100",
+        !off && "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
       )}
+      // The focus stays with the list, whose keys go on from this row.
+      onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => {
         e.stopPropagation();
         onToggle?.();
@@ -584,16 +1128,14 @@ function VisibilityToggle({
 
 function RefItem({
   refItem: r,
-  label,
   owner,
-  providers = [],
+  providers,
   ...rest
-}: Omit<ItemProps, "label" | "active" | "trailing"> & {
+}: Omit<ItemProps, "active" | "trailing"> & {
   refItem: Ref;
-  label?: string;
   /** Who works on the branch. */
-  owner?: Contributor;
-  providers?: readonly AvatarProvider[];
+  owner: Contributor | undefined;
+  providers: readonly AvatarProvider[];
 }) {
   const track = r.upstreamGone
     ? "gone"
@@ -602,7 +1144,6 @@ function RefItem({
     <Item
       {...rest}
       filteredBy={owner?.name}
-      label={label ?? r.short}
       active={r.isHead}
       trailing={
         <>
@@ -628,7 +1169,7 @@ function ContributorItem({
   providers,
   open,
   ...rest
-}: Omit<ItemProps, "label" | "icon" | "trailing"> & {
+}: Omit<ItemProps, "label" | "icon" | "trailing" | "expanded"> & {
   contributor: Contributor;
   providers: readonly AvatarProvider[];
   /** Whether the emails are listed, for a contributor with several. */
@@ -638,6 +1179,7 @@ function ContributorItem({
   return (
     <Item
       {...rest}
+      expanded={open}
       icon={
         <span className={cn("flex", dim && "grayscale")}>
           <Avatar name={c.name} email={c.avatarEmail} providers={providers} size={14} />

@@ -1,37 +1,99 @@
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AppState } from "@shared/domain";
+import { isRepoId } from "@shared/ipc";
 import { app } from "electron";
+import log from "electron-log/main";
 
-const EMPTY: AppState = { tabs: [], activeTab: null, recent: [] };
+/** Writes are coalesced: tab switches and visibility toggles come in bursts. */
+const WRITE_DELAY = 250;
 
-const file = () => join(app.getPath("userData"), "state.json");
+/**
+ * A JSON file in the user data directory. It is read once and normalized, so a hand-edited or
+ * older file cannot break the app, and written atomically and durably (temporary file, fsync,
+ * rename). A file that is not JSON is kept aside as `<name>.corrupt-<time>` for inspection.
+ */
+const jsonStore = <T>(name: string, normalize: (raw: unknown) => T) => {
+  let value: T | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  const path = () => join(app.getPath("userData"), name);
 
-let cached: AppState | null = null;
+  const read = (): T => {
+    let text: string;
+    try {
+      text = readFileSync(path(), "utf8");
+    } catch {
+      return normalize(undefined);
+    }
+    try {
+      return normalize(JSON.parse(text));
+    } catch {
+      const aside = `${path()}.corrupt-${Date.now()}`;
+      log.warn(`${name} is corrupt; moved to ${aside}`);
+      try {
+        renameSync(path(), aside);
+      } catch {
+        // Overwritten on the next save.
+      }
+      return normalize(undefined);
+    }
+  };
 
-export const loadState = (): AppState => {
-  if (cached) return cached;
-  try {
-    const parsed = JSON.parse(readFileSync(file(), "utf8")) as Partial<AppState>;
-    cached = {
-      tabs: Array.isArray(parsed.tabs) ? parsed.tabs.filter((t) => typeof t === "string") : [],
-      activeTab: typeof parsed.activeTab === "string" ? parsed.activeTab : null,
-      recent: Array.isArray(parsed.recent)
-        ? parsed.recent.filter((t) => typeof t === "string")
-        : [],
-    };
-  } catch {
-    cached = EMPTY;
-  }
-  return cached;
+  const write = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    const tmp = `${path()}.tmp`;
+    try {
+      writeFileSync(tmp, JSON.stringify(value, null, 2), { flush: true });
+      renameSync(tmp, path());
+    } catch (e) {
+      log.warn(`Cannot save ${name}`, e);
+    }
+  };
+
+  return {
+    get: (): T => (value ??= read()),
+    set: (next: T) => {
+      value = next;
+      timer ??= setTimeout(write, WRITE_DELAY);
+    },
+    /** Writes a pending change now. */
+    flush: () => {
+      if (timer) write();
+    },
+  };
 };
 
-export const saveState = (state: AppState): void => {
-  cached = { ...state, recent: state.recent.slice(0, 30) };
-  const tmp = `${file()}.tmp`;
-  writeFileSync(tmp, JSON.stringify(cached, null, 2));
-  renameSync(tmp, file());
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+
+const record = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+
+// ---------------------------------------------------------------------------
+// App state
+// ---------------------------------------------------------------------------
+
+/** Most recent repositories remembered. */
+const MAX_RECENT = 30;
+
+/** Keeps well-formed repository ids only: a bad one must not break the window on every launch. */
+export const normalizeState = (raw: unknown): AppState => {
+  const r = record(raw);
+  const ids = (v: unknown) => [...new Set(strings(v).filter(isRepoId))];
+  const tabs = ids(r.tabs);
+  return {
+    tabs,
+    activeTab: typeof r.activeTab === "string" && tabs.includes(r.activeTab) ? r.activeTab : null,
+    recent: ids(r.recent).slice(0, MAX_RECENT),
+  };
 };
+
+const stateStore = jsonStore("state.json", normalizeState);
+
+export const loadState = (): AppState => stateStore.get();
+
+export const saveState = (state: AppState): void => stateStore.set(normalizeState(state));
 
 // ---------------------------------------------------------------------------
 // Per-repository settings
@@ -42,30 +104,25 @@ export interface RepoSettingsData {
   readonly hidden: readonly string[];
 }
 
-const settingsFile = () => join(app.getPath("userData"), "repo-settings.json");
-let settings: Record<string, RepoSettingsData> | null = null;
+const normalizeSettings = (raw: unknown): RepoSettingsData => ({
+  hidden: strings(record(raw).hidden),
+});
 
-const loadSettings = (): Record<string, RepoSettingsData> => {
-  if (settings) return settings;
-  try {
-    const parsed = JSON.parse(readFileSync(settingsFile(), "utf8")) as unknown;
-    settings =
-      parsed && typeof parsed === "object" ? (parsed as Record<string, RepoSettingsData>) : {};
-  } catch {
-    settings = {};
-  }
-  return settings;
-};
+const settingsStore = jsonStore("repo-settings.json", (raw): Record<string, RepoSettingsData> =>
+  Object.fromEntries(Object.entries(record(raw)).map(([id, s]) => [id, normalizeSettings(s)])),
+);
 
-export const repoSettings = (id: string): RepoSettingsData => {
-  const s = loadSettings()[id];
-  return { hidden: Array.isArray(s?.hidden) ? s.hidden.filter((h) => typeof h === "string") : [] };
-};
+export const repoSettings = (id: string): RepoSettingsData =>
+  (Object.hasOwn(settingsStore.get(), id) && settingsStore.get()[id]) || { hidden: [] };
 
 export const updateRepoSettings = (id: string, patch: Partial<RepoSettingsData>): void => {
-  const all = loadSettings();
-  all[id] = { ...repoSettings(id), ...patch };
-  const tmp = `${settingsFile()}.tmp`;
-  writeFileSync(tmp, JSON.stringify(all, null, 2));
-  renameSync(tmp, settingsFile());
+  const all = settingsStore.get();
+  const next = normalizeSettings({ ...repoSettings(id), ...patch });
+  settingsStore.set({ ...all, [id]: next });
+};
+
+/** Writes pending changes now, e.g. before quitting. */
+export const flushState = (): void => {
+  stateStore.flush();
+  settingsStore.flush();
 };

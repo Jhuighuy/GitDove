@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import type { GraphInfo, GraphRow, Ref } from "@shared/domain";
+import type { GraphInfo, GraphRow, Ref, RepoInfo } from "@shared/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -7,6 +7,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   api: vi.fn(),
+  signals: [] as (AbortSignal | undefined)[],
+  bridge: [] as unknown[][],
   listeners: new Map<string, (payload: unknown) => void>(),
 }));
 vi.mock("./api", () => ({
@@ -16,10 +18,23 @@ vi.mock("./api", () => ({
     }
   },
   api: mocks.api,
+  apiWithSignal: (signal: AbortSignal | undefined, ...args: unknown[]) => {
+    mocks.signals.push(signal);
+    return mocks.api(...args);
+  },
   useEvent: (event: string, listener: (payload: unknown) => void) => {
     mocks.listeners.set(event, listener);
   },
 }));
+
+// A bridge that can cancel requests: queries go through `apiWithSignal`.
+(window as unknown as { gitdove: object }).gitdove = {
+  invokeCancellable: () => {},
+  invoke: (...args: unknown[]) => {
+    mocks.bridge.push(args);
+    return Promise.resolve({ ok: true, value: undefined });
+  },
+};
 
 const q = await import("./queries");
 const { ApiError } = (await import("./api")) as unknown as {
@@ -34,6 +49,8 @@ let client: QueryClient;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.api.mockReset();
+  mocks.signals.length = 0;
+  mocks.bridge.length = 0;
   mocks.listeners.clear();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root = createRoot(document.createElement("div"));
@@ -93,9 +110,12 @@ it("nests all keys under the repository", () => {
     keys.commit(repo, "h"),
     keys.diff(repo, target),
     keys.search(repo, "x"),
+    keys.hidden(repo),
   ]) {
     expect(key.slice(0, 2)).toEqual(keys.repo(repo));
   }
+  // Opening a repository is not refreshed with its data.
+  expect(keys.open(repo)).not.toEqual(expect.arrayContaining(["repo"]));
   // File versions go stale with diffs.
   expect(keys.fileVersions(repo, target).slice(0, 3)).toEqual(["repo", repo, "diff"]);
 });
@@ -136,6 +156,19 @@ it("fetches repository data through the api", async () => {
       ["repo.fileVersions", repo, target],
     ]),
   );
+  // Each with its query's signal, so that the main process stops what nobody waits for.
+  expect(mocks.signals).toHaveLength(calls().length);
+  expect(mocks.signals.every((s) => s instanceof AbortSignal)).toBe(true);
+});
+
+it("cancels a query that no view waits for any more", async () => {
+  mocks.api.mockReturnValue(new Promise(() => {}));
+  await renderHook(() => q.useCommitDetails(repo, "abc"), null);
+  await until(() => expect(mocks.signals).toHaveLength(1));
+  expect(mocks.signals[0]!.aborted).toBe(false);
+  await act(async () => root.unmount());
+  root = createRoot(document.createElement("div"));
+  expect(mocks.signals[0]!.aborted).toBe(true);
 });
 
 it("does not fetch commit details or diffs without a target", async () => {
@@ -172,7 +205,6 @@ const row = (hash: string): GraphRow => ({
   authorName: "a",
   authorEmail: "a@x",
   authorTime: 0,
-  committerTime: 0,
   lane: 0,
   color: 0,
   edges: [],
@@ -355,36 +387,145 @@ it("keeps the checked-out branch even when it is hidden", async () => {
   ]);
 });
 
-it("invalidates queries on repository change events", async () => {
+it("invalidates what a repository change event outdates", async () => {
   const invalidated: unknown[] = [];
   vi.spyOn(client, "invalidateQueries").mockImplementation(async (f) => {
     invalidated.push(f?.queryKey);
   });
   await renderHook(() => q.useRepoEvents(), null);
-  const changed = (...scopes: string[]) => {
+  const changed = async (...scopes: string[]) => {
     invalidated.length = 0;
     mocks.listeners.get("repo.changed")!({ repo, scopes });
+    await act(async () => {});
     return [...invalidated];
   };
   const refsKeys = [keys.info(repo), keys.refs(repo)];
-  const wtKeys = [keys.status(repo), ["repo", repo, "diff"]];
-  expect(changed("refs")).toEqual(refsKeys);
-  expect(changed("config")).toEqual(refsKeys);
-  expect(changed("index")).toEqual(wtKeys);
-  expect(changed("worktree")).toEqual(wtKeys);
-  expect(changed("head")).toEqual([...refsKeys, ...wtKeys]);
-  expect(changed()).toEqual([]);
+  const wtKeys = [keys.status(repo), keys.diffs(repo)];
+  expect(await changed("refs")).toEqual([...refsKeys, keys.searches(repo)]);
+  expect(await changed("config")).toEqual(refsKeys);
+  expect(await changed("index")).toEqual(wtKeys);
+  expect(await changed("worktree")).toEqual(wtKeys);
+  expect(await changed("head")).toEqual([...refsKeys, keys.searches(repo), ...wtKeys]);
+  expect(await changed()).toEqual([]);
+});
+
+it("leaves commit diffs alone on working tree changes", async () => {
+  await renderHook(() => q.useRepoEvents(), null);
+  const commit = { kind: "commit", hash: "c", path: "f" } as const;
+  const unstaged = { kind: "unstaged", path: "f" } as const;
+  for (const key of [
+    keys.diff(repo, commit),
+    keys.fileVersions(repo, commit),
+    keys.diff(repo, unstaged),
+    keys.fileVersions(repo, unstaged),
+    keys.commit(repo, "c"),
+  ])
+    client.setQueryData(key, "data");
+  mocks.listeners.get("repo.changed")!({ repo, scopes: ["worktree"] });
+  const stale = (key: readonly unknown[]) => client.getQueryState(key)?.isInvalidated;
+  expect(stale(keys.diff(repo, unstaged))).toBe(true);
+  expect(stale(keys.fileVersions(repo, unstaged))).toBe(true);
+  expect(stale(keys.diff(repo, commit))).toBe(false);
+  expect(stale(keys.fileVersions(repo, commit))).toBe(false);
+  expect(stale(keys.commit(repo, "c"))).toBe(false);
+});
+
+it("coalesces bursts of changes into one more refetch after the running one", async () => {
+  let release!: () => void;
+  let statusCalls = 0;
+  mocks.api.mockImplementation(async (method: string) => {
+    if (method !== "repo.status") return null;
+    statusCalls++;
+    await new Promise<void>((r) => (release = r));
+    return `status ${statusCalls}`;
+  });
+  const view = await renderHook(() => [q.useRepoEvents(), q.useStatus(repo).data][1], null);
+  await act(async () => release());
+  await until(() => expect(view.result.current).toBe("status 1"));
+
+  for (let i = 0; i < 5; i++) mocks.listeners.get("repo.changed")!({ repo, scopes: ["index"] });
+  await act(async () => {});
+  expect(statusCalls).toBe(2);
+  // The changes made while it ran need one more run, not five, and none was cancelled.
+  await act(async () => release());
+  await until(() => expect(statusCalls).toBe(3));
+  await act(async () => release());
+  await until(() => expect(view.result.current).toBe("status 3"));
+  expect(statusCalls).toBe(3);
+});
+
+it("holds change events back while an operation runs in the repository", async () => {
+  const { useBusyStore } = await import("@/stores/busy");
+  const spy = vi.spyOn(client, "invalidateQueries").mockResolvedValue();
+  await renderHook(() => q.useRepoEvents(), null);
+  useBusyStore.getState().start(repo, { label: "Rebasing…", cancellable: false });
+  mocks.listeners.get("repo.changed")!({ repo, scopes: ["refs"] });
+  mocks.listeners.get("repo.changed")!({ repo, scopes: ["index"] });
+  expect(spy).not.toHaveBeenCalled();
+  expect([...q.takeHeldChanges(repo)].toSorted()).toEqual(
+    ["info", "refs", "search", "status", "workingDiffs"].toSorted(),
+  );
+  expect(q.takeHeldChanges(repo).size).toBe(0);
+  // Network operations take long, and change refs only at the end: they hold nothing back.
+  useBusyStore.getState().start(repo, { label: "Fetching…", cancellable: true });
+  mocks.listeners.get("repo.changed")!({ repo, scopes: ["index"] });
+  expect(spy).toHaveBeenCalled();
+  useBusyStore.getState().finish(repo);
+});
+
+it("only marks data of background repositories stale, and refetches it when shown", async () => {
+  mocks.api.mockResolvedValue("status");
+  const statusCalls = () => calls().filter(([method]) => method === "repo.status");
+  const visibility = () => mocks.bridge.filter(([method]) => method === "repo.setVisible");
+  await renderHook(() => [q.useRepoEvents(), q.useStatus(repo)], null);
+  await until(() => expect(statusCalls()).toHaveLength(1));
+  q.setBackgroundRepos([repo], client);
+  q.setBackgroundRepos([repo], client);
+  await act(async () => q.refreshRepo(repo, ["status"], client));
+  expect(statusCalls()).toHaveLength(1);
+  expect(client.getQueryState(keys.status(repo))?.isInvalidated).toBe(true);
+  q.setBackgroundRepos([], client);
+  await until(() => expect(statusCalls()).toHaveLength(2));
+  // The main process is told only about changes.
+  expect(visibility()).toEqual([
+    ["repo.setVisible", repo, false],
+    ["repo.setVisible", repo, true],
+  ]);
+});
+
+it("refreshes everything but the opening and commits on request", async () => {
+  const filters: unknown[] = [];
+  const spy = vi.spyOn(q.queryClient, "invalidateQueries").mockImplementation(async (f) => {
+    filters.push(f?.queryKey);
+  });
+  await q.refreshRepo(repo);
+  expect(filters).toEqual([
+    keys.info(repo),
+    keys.refs(repo),
+    keys.searches(repo),
+    keys.status(repo),
+    keys.diffs(repo),
+    keys.graphInfo(repo),
+    keys.hidden(repo),
+  ]);
+  spy.mockRestore();
+});
+
+it("seeds the caches from opening a repository, and forgets them on close", () => {
+  const info = { id: repo } as RepoInfo;
+  q.seedOpenedRepo(info, client);
+  expect(client.getQueryData(keys.open(repo))).toBe(info);
+  expect(client.getQueryData(keys.info(repo))).toBe(info);
+  client.setQueryData(keys.status(repo), "status");
+  client.setQueryData(keys.open("local:/other"), "other");
+  q.forgetRepoQueries(repo, client);
+  expect(client.getQueryData(keys.open(repo))).toBeUndefined();
+  expect(client.getQueryData(keys.status(repo))).toBeUndefined();
+  expect(client.getQueryData(keys.open("local:/other"))).toBe("other");
 });
 
 it("stores graph progress from events", async () => {
   await renderHook(() => q.useRepoEvents(), null);
   mocks.listeners.get("repo.graphProgress")!({ repo, info: graphInfo({ count: 42 }) });
   expect(client.getQueryData(keys.graphInfo(repo))).toEqual(graphInfo({ count: 42 }));
-});
-
-it("refreshes everything of a repository", async () => {
-  const spy = vi.spyOn(q.queryClient, "invalidateQueries").mockResolvedValue();
-  await q.refreshRepo(repo);
-  expect(spy).toHaveBeenCalledWith({ queryKey: ["repo", repo] });
-  spy.mockRestore();
 });

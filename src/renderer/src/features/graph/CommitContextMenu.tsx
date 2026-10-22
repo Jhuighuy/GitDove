@@ -1,4 +1,5 @@
 import type { GraphRow, Ref, RepoId, Stash } from "@shared/domain";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ContextMenuContent,
   ContextMenuItem,
@@ -8,42 +9,63 @@ import {
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import { shortHash } from "@/lib/format";
-import { useRepoInfo } from "@/lib/queries";
+import { keys, useRepoInfo } from "@/lib/queries";
 import { WriteMenuItem } from "@/components/busy";
+import type { PickedCommit } from "@/stores/repo-ui";
 import { commands } from "../commands";
 import { useVisibility } from "../sidebar/visibility";
 import { api } from "@/lib/api";
-import { runAction } from "@/lib/actions";
 
 export type MenuTarget =
   | { readonly kind: "wip" }
-  | {
-      readonly kind: "commit";
-      readonly row: GraphRow;
-      readonly refs: readonly Ref[];
-      readonly stashIndex: number | null;
-    };
+  | { readonly kind: "commit"; readonly row: GraphRow; readonly refs: readonly Ref[] }
+  /** A multi-selection, newest first. */
+  | { readonly kind: "commits"; readonly commits: readonly PickedCommit[] };
 
+/** The menu for a right-clicked graph row; rendered only while it is open. */
 export function CommitContextMenu({
   repo,
   target,
   stashes,
 }: {
   repo: RepoId;
-  target: MenuTarget | null;
+  target: MenuTarget;
   stashes: readonly Stash[];
 }) {
   const { data: info } = useRepoInfo(repo);
   const vis = useVisibility(repo);
-  if (!target) return <ContextMenuContent className="hidden" />;
+  const client = useQueryClient();
+
+  if (target.kind === "commits") {
+    const hashes = target.commits.map((c) => c.row.hash);
+    // Stashes are not commits to apply elsewhere.
+    const commitsOnly = !hashes.some((h) => stashes.some((s) => s.hash === h));
+    return (
+      <ContextMenuContent className="min-w-56">
+        {commitsOnly && (
+          <>
+            <WriteMenuItem repo={repo} onClick={() => void commands.cherryPick(repo, hashes)}>
+              Cherry-pick {hashes.length} commits
+            </WriteMenuItem>
+            <WriteMenuItem repo={repo} onClick={() => void commands.revert(repo, hashes)}>
+              Revert {hashes.length} commits
+            </WriteMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        <ContextMenuItem
+          onClick={() => commands.copy(hashes.join("\n"), `${hashes.length} commit SHAs copied`)}
+        >
+          Copy {hashes.length} commit SHAs
+        </ContextMenuItem>
+      </ContextMenuContent>
+    );
+  }
 
   if (target.kind === "wip") {
     return (
       <ContextMenuContent className="min-w-56">
-        <WriteMenuItem
-          repo={repo}
-          onClick={() => void runAction(repo, "Stage all", () => api("repo.stageAll", repo))}
-        >
+        <WriteMenuItem repo={repo} onClick={() => void commands.stageAll(repo)}>
           Stage all changes
         </WriteMenuItem>
         <WriteMenuItem repo={repo} onClick={() => void commands.stash(repo)}>
@@ -63,17 +85,20 @@ export function CommitContextMenu({
   if (stash) {
     return (
       <ContextMenuContent className="min-w-56">
-        <WriteMenuItem repo={repo} onClick={() => void commands.applyStash(repo, stash.index)}>
+        <WriteMenuItem repo={repo} onClick={() => void commands.applyStash(repo, stash)}>
           Apply stash
         </WriteMenuItem>
-        <WriteMenuItem repo={repo} onClick={() => void commands.pop(repo, stash.index)}>
+        <WriteMenuItem repo={repo} onClick={() => void commands.pop(repo, stash)}>
           Pop stash
+        </WriteMenuItem>
+        <WriteMenuItem repo={repo} onClick={() => void commands.stashBranch(repo, stash)}>
+          Create branch here…
         </WriteMenuItem>
         <ContextMenuSeparator />
         <WriteMenuItem
           repo={repo}
           variant="destructive"
-          onClick={() => void commands.dropStash(repo, stash.index)}
+          onClick={() => void commands.dropStash(repo, stash)}
         >
           Delete stash
         </WriteMenuItem>
@@ -81,6 +106,7 @@ export function CommitContextMenu({
     );
   }
 
+  // Git arguments name refs in full: a branch and a tag can share a short name.
   return (
     <ContextMenuContent className="min-w-64">
       {branchRefs.map((ref) => (
@@ -93,12 +119,12 @@ export function CommitContextMenu({
               </WriteMenuItem>
             )}
             {!ref.isHead && (
-              <WriteMenuItem repo={repo} onClick={() => void commands.merge(repo, ref.short)}>
+              <WriteMenuItem repo={repo} onClick={() => void commands.merge(repo, ref.name)}>
                 Merge {ref.short} into {headName}
               </WriteMenuItem>
             )}
             {!ref.isHead && (
-              <WriteMenuItem repo={repo} onClick={() => void commands.rebase(repo, ref.short)}>
+              <WriteMenuItem repo={repo} onClick={() => void commands.rebase(repo, ref.name)}>
                 Rebase {headName} onto {ref.short}
               </WriteMenuItem>
             )}
@@ -165,10 +191,10 @@ export function CommitContextMenu({
         Create tag here…
       </WriteMenuItem>
       <ContextMenuSeparator />
-      <WriteMenuItem repo={repo} onClick={() => void commands.cherryPick(repo, hash)}>
+      <WriteMenuItem repo={repo} onClick={() => void commands.cherryPick(repo, [hash])}>
         Cherry-pick commit
       </WriteMenuItem>
-      <WriteMenuItem repo={repo} onClick={() => void commands.revert(repo, hash)}>
+      <WriteMenuItem repo={repo} onClick={() => void commands.revert(repo, [hash])}>
         Revert commit
       </WriteMenuItem>
       <ContextMenuSub>
@@ -193,7 +219,21 @@ export function CommitContextMenu({
       <ContextMenuItem onClick={() => commands.copy(hash, "Commit SHA copied")}>
         Copy commit SHA
       </ContextMenuItem>
-      <ContextMenuItem onClick={() => commands.copy(row.subject, "Message copied")}>
+      <ContextMenuItem
+        onClick={() => {
+          // The graph has the subject only: copy the whole message (the subject, without one).
+          void client
+            .query({
+              queryKey: keys.commit(repo, hash),
+              queryFn: () => api("repo.commitDetails", repo, hash),
+            })
+            .then(
+              (d) => (!d ? row.subject : d.body ? `${d.subject}\n\n${d.body}` : d.subject),
+              () => row.subject,
+            )
+            .then((message) => commands.copy(message, "Message copied"));
+        }}
+      >
         Copy commit message
       </ContextMenuItem>
     </ContextMenuContent>

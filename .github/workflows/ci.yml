@@ -8,22 +8,47 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its older runs. Runs on main never share a group: every
+# push there becomes a release.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+# Actions are pinned by commit SHA (a moved tag cannot change what runs next to the secrets or the
+# release); .github/dependabot.yml keeps the pins current.
 jobs:
-  sonarcloud:
-    name: SonarCloud
-    # Repository secrets are unavailable to pull requests from forks.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+  # Platform-independent checks, once.
+  lint:
+    name: Lint, typecheck and build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      # The repository tests also run over SSH to this machine, which covers the remote paths.
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+
+  # The full test suite on Linux, also over SSH to this machine, with coverage for SonarCloud.
+  test:
+    name: Test (Linux, SSH) and SonarCloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # SonarCloud blames new code from the history; the integration smoke test reads it too.
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
       - name: Set up SSH to localhost
         run: |
           sudo apt-get install -y -qq openssh-server > /dev/null
@@ -39,55 +64,60 @@ jobs:
           GITDOVE_INT_LOCAL: ${{ github.workspace }}
           GITDOVE_INT_SSH: localhost:${{ github.workspace }}
       - name: Scan and check quality gate
+        # Repository secrets are unavailable to pull requests from forks and Dependabot.
+        if: >-
+          github.event_name != 'pull_request' ||
+          (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: -Dsonar.qualitygate.wait=true
 
-  check:
+  # Process spawning, paths and file watching differ per platform.
+  test-platforms:
+    name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run format:check
-      - run: npm run lint
-      - run: npm run typecheck
       - run: npm test
-      - run: npm run build
 
   # Pull requests package only when they touch packaging or updates; main always does.
   changes:
     name: Packaging changes
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       packaging: ${{ steps.diff.outputs.packaging }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: diff
         env:
           BASE: ${{ github.base_ref }}
         run: |
-          if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(\.github/workflows/|build/|native/|scripts/(before-pack|after-pack|build-icons|release|sparkle|test-updates)|electron-builder\.yml|package(-lock)?\.json|src/main/(index|sparkle|updater)\.ts)'; then
+          if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(\.github/workflows/|build/|native/|resources/|scripts/(before-pack|after-pack|build-icons|release|sparkle|test-updates)|electron-builder\.yml|electron\.vite\.config\.ts|package(-lock)?\.json|src/main/(index|sparkle|updater)\.ts)'; then
             echo "packaging=true" >> "$GITHUB_OUTPUT"
           fi
 
   package:
     name: Package (${{ matrix.platform }}, ${{ matrix.arch }})
-    needs: [check, changes]
+    needs: [lint, test, test-platforms, changes]
     if: >-
-      !cancelled() && needs.check.result == 'success' &&
+      !cancelled() && needs.lint.result == 'success' && needs.test.result == 'success' &&
+      needs.test-platforms.result == 'success' &&
       (github.event_name == 'push' || needs.changes.outputs.packaging == 'true')
     strategy:
       fail-fast: false
@@ -97,13 +127,28 @@ jobs:
           - { os: windows-latest, platform: win, arch: x64 }
           - { os: ubuntu-latest, platform: linux, arch: x64 }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+      # Electron and electron-builder's tools (NSIS, AppImage, dmg) download into these per-OS
+      # caches, Sparkle into node_modules/.cache; all of them are checksum-verified on download.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+            node_modules/.cache/sparkle
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json', 'build/sparkle.json') }}
+          restore-keys: electron-${{ runner.os }}-
       - id: version
         run: node scripts/release.mjs version
       - run: npm run build
@@ -113,10 +158,14 @@ jobs:
           # Ad-hoc signing needs no credentials; electron-builder skips signing on pull requests otherwise.
           CSC_FOR_PULL_REQUEST: "true"
         run: npm run package -- --${{ matrix.platform }} --${{ matrix.arch }} -c.extraMetadata.version=${{ steps.version.outputs.version }}
+      - name: Check the macOS signature
+        if: matrix.platform == 'mac'
+        run: codesign --verify --deep --strict --verbose=2 release/*/mac-arm64/GitDove.app
       - name: Test updates
         if: matrix.platform == 'mac'
+        timeout-minutes: 15
         run: node scripts/test-updates.mjs release/*/mac-arm64/GitDove.app
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: packages-${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: error
@@ -141,20 +190,24 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main'
     # sign_update (Sparkle's signing tool) is a macOS binary.
     runs-on: macos-latest
+    timeout-minutes: 30
+    # SPARKLE_PRIVATE_KEY is a secret of this environment, which only main can deploy to.
+    environment: release
     concurrency:
       group: release
       cancel-in-progress: false
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      # No `npm ci`: the release scripts use only Node built-ins, so no third-party code runs here.
-      - uses: actions/download-artifact@v5
+      # No `npm ci` and no caches: the release scripts use only Node built-ins, and Sparkle is
+      # downloaded fresh and checksum-verified, so no third-party code or state is reused here.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: packages-*
           merge-multiple: true
@@ -171,6 +224,8 @@ jobs:
             exit 1
           fi
           ls -l dist
+      - name: Check update manifests
+        run: node scripts/release.mjs check dist
       - id: version
         run: node scripts/release.mjs version
       - name: Sign the macOS update
@@ -187,7 +242,8 @@ jobs:
             echo "$TAG is already published."
             exit 0
           elif [ -n "$latest" ] && [ "$(printf '%s\n' "$latest" "$TAG" | sort -V | tail -n 1)" = "$latest" ]; then
-            echo "$latest is newer than $TAG; leaving it as the latest release."
+            # E.g. after renaming the workflow, which restarts the run numbers (docs/updates.md).
+            echo "::warning::$latest is newer than $TAG; leaving it as the latest release."
             exit 0
           fi
           # A failed earlier attempt (e.g. an interrupted upload) leaves a draft behind.

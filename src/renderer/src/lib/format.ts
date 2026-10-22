@@ -31,11 +31,21 @@ export const absoluteTime = (seconds: number): string => dtf.format(new Date(sec
 
 export const shortHash = (hash: string): string => hash.slice(0, 7);
 
+const graphemes = new Intl.Segmenter();
+
+/**
+ * Up to two letters for a name: by grapheme, so that a character (an accented letter, an emoji
+ * sequence) is never split in half.
+ */
 export const initials = (name: string): string => {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
-  return (parts[0]![0]! + parts.at(-1)![0]!).toUpperCase();
+  const letters = (s: string, n: number) =>
+    Array.from(graphemes.segment(s), (g) => g.segment)
+      .slice(0, n)
+      .join("");
+  if (parts.length === 1) return letters(parts[0]!, 2).toUpperCase();
+  return (letters(parts[0]!, 1) + letters(parts.at(-1)!, 1)).toUpperCase();
 };
 
 /** Deterministic hue for a string (e.g. author email). */
@@ -59,9 +69,10 @@ export const formatBytes = (bytes: number): string => {
   if (bytes < 1024) return `${bytes} B`;
   let n = bytes / 1024;
   let unit = 0;
-  while (n >= 1024 && unit < BYTE_UNITS.length - 1) {
+  // By the number shown: 1023.9 KB would show as 1024 KB.
+  while (Math.round(n) >= 1024 && unit < BYTE_UNITS.length - 1) {
     n /= 1024;
     unit++;
   }
-  return `${n < 10 ? n.toFixed(1) : Math.round(n)} ${BYTE_UNITS[unit]}`;
+  return `${n < 9.95 ? n.toFixed(1) : Math.round(n)} ${BYTE_UNITS[unit]}`;
 };

@@ -42,15 +42,18 @@ interface ConfirmOptions {
   readonly destructive?: boolean;
 }
 
-type Request =
+type Request = { readonly id: number } & (
   | {
       kind: "prompt";
       options: PromptOptions;
       resolve: (v: PromptResult | null) => void;
     }
-  | { kind: "confirm"; options: ConfirmOptions; resolve: (v: boolean) => void };
+  | { kind: "confirm"; options: ConfirmOptions; resolve: (v: boolean) => void }
+);
 
 const useDialogs = create<{ current: Request | null }>()(() => ({ current: null }));
+
+let nextId = 0;
 
 const show = (request: Request) => {
   const prev = useDialogs.getState().current;
@@ -61,11 +64,13 @@ const show = (request: Request) => {
 
 /** Asks the user for a line of text. Resolves to `null` when cancelled. */
 export const prompt = (options: PromptOptions) =>
-  new Promise<PromptResult | null>((resolve) => show({ kind: "prompt", options, resolve }));
+  new Promise<PromptResult | null>((resolve) =>
+    show({ id: ++nextId, kind: "prompt", options, resolve }),
+  );
 
 /** Asks the user to confirm an action. */
 export const confirm = (options: ConfirmOptions) =>
-  new Promise<boolean>((resolve) => show({ kind: "confirm", options, resolve }));
+  new Promise<boolean>((resolve) => show({ id: ++nextId, kind: "confirm", options, resolve }));
 
 export function DialogHost() {
   const current = useDialogs((s) => s.current);
@@ -83,6 +88,8 @@ export function DialogHost() {
     >
       {current?.kind === "prompt" && (
         <PromptBody
+          // Each prompt starts from its own values, also when it follows another one at once.
+          key={current.id}
           options={current.options}
           onDone={(v) => {
             current.resolve(v);
@@ -91,7 +98,7 @@ export function DialogHost() {
         />
       )}
       {current?.kind === "confirm" && (
-        <DialogContent className="sm:max-w-md" showCloseButton={false}>
+        <DialogContent key={current.id} className="sm:max-w-md" showCloseButton={false}>
           <DialogHeader>
             <DialogTitle>{current.options.title}</DialogTitle>
             {current.options.description && (
@@ -102,6 +109,8 @@ export function DialogHost() {
           </DialogHeader>
           <DialogFooter>
             <Button
+              // A stray Enter must not delete or discard anything.
+              autoFocus={current.options.destructive === true}
               variant="ghost"
               onClick={() => {
                 current.resolve(false);
@@ -111,7 +120,7 @@ export function DialogHost() {
               Cancel
             </Button>
             <Button
-              autoFocus
+              autoFocus={current.options.destructive !== true}
               variant={current.options.destructive ? "destructive" : "default"}
               onClick={() => {
                 current.resolve(true);
@@ -198,7 +207,7 @@ function PromptBody({
         )}
         {options.checkbox && (
           <Label className="flex items-center gap-2 font-normal">
-            <Checkbox checked={checked} onCheckedChange={(c) => setChecked(c === true)} />
+            <Checkbox checked={checked} onCheckedChange={(c) => setChecked(c)} />
             {options.checkbox.label}
           </Label>
         )}
@@ -215,12 +224,17 @@ function PromptBody({
   );
 }
 
-/** Validation for branch and tag names (a subset of `git check-ref-format`). */
+/** Validation for branch and tag names (the rules of `git check-ref-format --branch`). */
 export const validateRefName = (name: string): string | null => {
   if (/\s/.test(name)) return "Names cannot contain spaces";
-  if (/[~^:?*[\\]|\.\.|@\{/.test(name)) return "Name contains invalid characters";
+  // oxlint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f~^:?*[\\]|\.\.|@\{/.test(name) || name === "@")
+    return "Name contains invalid characters";
   if (name.startsWith("-") || name.startsWith("/") || name.endsWith("/") || name.endsWith("."))
     return "Invalid name";
-  if (name.endsWith(".lock")) return "Names cannot end with .lock";
+  if (name.includes("//")) return "Names cannot contain empty parts (//)";
+  const parts = name.split("/");
+  if (parts.some((p) => p.startsWith("."))) return "Name parts cannot start with a dot";
+  if (parts.some((p) => p.endsWith(".lock"))) return "Name parts cannot end with .lock";
   return null;
 };

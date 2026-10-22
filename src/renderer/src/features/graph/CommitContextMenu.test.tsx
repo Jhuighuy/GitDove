@@ -11,6 +11,8 @@ import { CommitContextMenu, type MenuTarget } from "./CommitContextMenu";
 const mocks = vi.hoisted(() => ({
   calls: [] as unknown[][],
   api: [] as unknown[][],
+  /** What `repo.commitDetails` answers. */
+  details: { subject: "Fix the thing", body: "Because it was broken." } as object | null,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -34,6 +36,8 @@ vi.mock("@/lib/api", () => ({
       case "repo.setHiddenRefs":
       case "repo.stageAll":
         return undefined;
+      case "repo.commitDetails":
+        return mocks.details;
     }
     throw new Error(`unexpected ${method}`);
   },
@@ -60,7 +64,6 @@ const row: GraphRow = {
   authorName: "A",
   authorEmail: "a@example.com",
   authorTime: 0,
-  committerTime: 0,
   lane: 0,
   color: 0,
   edges: [],
@@ -100,7 +103,7 @@ const unmount = async () => {
 
 afterEach(unmount);
 
-async function open(target: MenuTarget | null, stashes: Stash[] = []) {
+async function open(target: MenuTarget, stashes: Stash[] = []) {
   await unmount();
   const container = document.createElement("div");
   document.body.append(container);
@@ -156,40 +159,60 @@ const sub = async (label: string) => {
   await act(async () => new Promise((r) => setTimeout(r, 0)));
 };
 
-it("renders no items without a target", async () => {
-  await open(null);
-  expect(items()).toEqual([]);
+it("acts on a multi-selection at once", async () => {
+  const commits = [0, 1].map((i) => ({ index: i, row: { ...row, hash: `h${i}` } }));
+  const labels = ["Cherry-pick 2 commits", "Revert 2 commits", "Copy 2 commit SHAs"];
+  for (const label of labels) {
+    await open({ kind: "commits", commits });
+    expect(items()).toEqual(labels);
+    await click(label);
+  }
+  // In graph order, newest first: the main process orders them for git.
+  expect(mocks.calls).toEqual([
+    ["cherryPick", ["h0", "h1"]],
+    ["revert", ["h0", "h1"]],
+    ["copy", "h0\nh1", "2 commit SHAs copied"],
+  ]);
+});
+
+it("does not cherry-pick or revert a multi-selection with stashes", async () => {
+  const commits = [0, 1].map((i) => ({ index: i, row: { ...row, hash: `h${i}` } }));
+  const stash: Stash = { index: 0, name: "stash@{0}", hash: "h1", message: "WIP", time: 0 };
+  await open({ kind: "commits", commits }, [stash]);
+  expect(items()).toEqual(["Copy 2 commit SHAs"]);
 });
 
 it("stages or stashes everything from the WIP row", async () => {
   await open({ kind: "wip" });
   expect(items()).toEqual(["Stage all changes", "Stash all changes"]);
   await click("Stage all changes");
-  await act(() => vi.waitFor(() => expect(mocks.api.at(-1)).toEqual(["repo.stageAll"])));
   await open({ kind: "wip" });
   await click("Stash all changes");
-  expect(mocks.calls).toEqual([["stash"]]);
+  expect(mocks.calls).toEqual([["stageAll"], ["stash"]]);
 });
 
 it("offers stash actions on stash commits", async () => {
   const stash: Stash = { index: 2, name: "stash@{2}", hash: HASH, message: "WIP", time: 0 };
-  const target: MenuTarget = { kind: "commit", row, refs: [], stashIndex: 2 };
-  for (const label of ["Apply stash", "Pop stash", "Delete stash"]) {
+  const target: MenuTarget = { kind: "commit", row, refs: [] };
+  const labels = ["Apply stash", "Pop stash", "Create branch here…", "Delete stash"];
+  for (const label of labels) {
     await open(target, [stash]);
-    expect(items()).toEqual(["Apply stash", "Pop stash", "Delete stash"]);
+    expect(items()).toEqual(labels);
     await click(label);
   }
+  // By index and hash, so that a stash pushed meanwhile is not taken for this one.
   expect(mocks.calls).toEqual([
-    ["applyStash", 2],
-    ["pop", 2],
-    ["dropStash", 2],
+    ["applyStash", stash],
+    ["pop", stash],
+    ["stashBranch", stash],
+    ["dropStash", stash],
   ]);
 });
 
 it("disables changing actions while another operation runs", async () => {
   useBusyStore.getState().start(REPO, { label: "Checking out feature…", cancellable: false });
   try {
-    await open({ kind: "commit", row, refs: [], stashIndex: null });
+    await open({ kind: "commit", row, refs: [] });
     const disabled = (label: string) => find(label).getAttribute("aria-disabled") === "true";
     for (const label of [
       "Checkout this commit (detached)",
@@ -210,8 +233,20 @@ it("disables changing actions while another operation runs", async () => {
   }
 });
 
+it("copies the subject when the commit's details are not found", async () => {
+  mocks.details = null;
+  try {
+    await open({ kind: "commit", row, refs: [] });
+    await click("Copy commit message");
+    await act(() => vi.waitFor(() => expect(mocks.calls).toHaveLength(1)));
+    expect(mocks.calls).toEqual([["copy", "Fix the thing", "Message copied"]]);
+  } finally {
+    mocks.details = { subject: "Fix the thing", body: "Because it was broken." };
+  }
+});
+
 it("offers commit actions", async () => {
-  const target: MenuTarget = { kind: "commit", row, refs: [], stashIndex: null };
+  const target: MenuTarget = { kind: "commit", row, refs: [] };
   await open(target);
   expect(items()).toEqual([
     "Checkout this commit (detached)",
@@ -239,15 +274,16 @@ it("offers commit actions", async () => {
     ["checkout", HASH],
     ["createBranch", HASH, "0123456"],
     ["createTag", HASH],
-    ["cherryPick", HASH],
-    ["revert", HASH],
+    ["cherryPick", [HASH]],
+    ["revert", [HASH]],
     ["copy", HASH, "Commit SHA copied"],
-    ["copy", "Fix the thing", "Message copied"],
+    // The whole message, not just the subject the graph has.
+    ["copy", "Fix the thing\n\nBecause it was broken.", "Message copied"],
   ]);
 });
 
 it("resets HEAD to the commit", async () => {
-  const target: MenuTarget = { kind: "commit", row, refs: [], stashIndex: null };
+  const target: MenuTarget = { kind: "commit", row, refs: [] };
   for (const label of [
     "Soft — keep all changes staged",
     "Mixed — keep working copy, reset index",
@@ -266,7 +302,7 @@ it("resets HEAD to the commit", async () => {
 
 it("offers branch actions for refs on the commit", async () => {
   const feature = ref("refs/heads/feature");
-  const target: MenuTarget = { kind: "commit", row, refs: [feature], stashIndex: null };
+  const target: MenuTarget = { kind: "commit", row, refs: [feature] };
   const labels = [
     "Checkout feature",
     "Merge feature into main",
@@ -284,8 +320,9 @@ it("offers branch actions for refs on the commit", async () => {
   }
   expect(mocks.calls).toEqual([
     ["checkoutRef", feature],
-    ["merge", "feature"],
-    ["rebase", "feature"],
+    // Full names: a tag can have the same short name.
+    ["merge", "refs/heads/feature"],
+    ["rebase", "refs/heads/feature"],
     ["renameBranch", "feature"],
     ["copy", "feature", "Branch name copied"],
     ["deleteBranch", feature],
@@ -298,7 +335,7 @@ it("offers branch actions for refs on the commit", async () => {
 it("offers fewer actions for the checked-out branch and remote branches", async () => {
   const head = ref("refs/heads/main", { isHead: true });
   const remote = ref("refs/remotes/origin/main");
-  await open({ kind: "commit", row, refs: [head, remote], stashIndex: null });
+  await open({ kind: "commit", row, refs: [head, remote] });
   await sub("main");
   const headItems = items();
   expect(headItems).toContain("Rename main…");
@@ -306,7 +343,7 @@ it("offers fewer actions for the checked-out branch and remote branches", async 
   expect(headItems).not.toContain("Checkout main");
   expect(headItems).not.toContain("Delete main");
 
-  await open({ kind: "commit", row, refs: [head, remote], stashIndex: null });
+  await open({ kind: "commit", row, refs: [head, remote] });
   await sub("origin/main");
   expect(items()).toContain("Checkout origin/main");
   expect(items()).not.toContain("Rename origin/main…");
@@ -314,7 +351,7 @@ it("offers fewer actions for the checked-out branch and remote branches", async 
 
 it("offers tag actions", async () => {
   const tag = ref("refs/tags/v1.0");
-  const target: MenuTarget = { kind: "commit", row, refs: [tag], stashIndex: null };
+  const target: MenuTarget = { kind: "commit", row, refs: [tag] };
   for (const label of ["Copy tag name", "Delete tag v1.0", "Hide from graph"]) {
     await open(target);
     await sub("Tag v1.0");

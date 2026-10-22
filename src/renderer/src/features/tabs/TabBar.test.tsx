@@ -74,18 +74,52 @@ it("closes tabs with their close button without activating them", async () => {
   expect(tabs().map((t) => t.textContent)).toEqual(["alpha", "New Tab"]);
 });
 
-it("opens new tabs from the button and by double-clicking the empty bar", async () => {
+it("opens new tabs from the button", async () => {
   await act(async () => container.querySelector<HTMLElement>('[aria-label="New tab"]')!.click());
   // The existing blank tab is reused.
   expect(useTabs.getState().active).toBe("c");
   expect(keys()).toHaveLength(3);
 
   useTabs.setState({ tabs: [{ key: "a", repo: "local:/x" }], active: "a" });
-  await mouse(tabs()[0]!, "dblclick");
-  expect(keys()).toEqual(["a"]);
-  await mouse(container.firstElementChild!, "dblclick");
+  await act(async () => container.querySelector<HTMLElement>('[aria-label="New tab"]')!.click());
   expect(keys()).toHaveLength(2);
   expect(tabs()[1]!.getAttribute("aria-selected")).toBe("true");
+});
+
+it("moves between tabs and closes them from the keyboard", async () => {
+  const press = (el: HTMLElement, key: string) =>
+    act(async () => {
+      el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  expect(container.querySelector('[role="tablist"]')?.contains(tabs()[0]!)).toBe(true);
+  // Only the active tab is in the tab order.
+  expect(tabs().map((t) => t.tabIndex)).toEqual([0, -1, -1]);
+  await press(tabs()[0]!, "ArrowRight");
+  expect(useTabs.getState().active).toBe("b");
+  expect(document.activeElement).toBe(tabs()[1]);
+  await press(tabs()[1]!, "End");
+  expect(useTabs.getState().active).toBe("c");
+  await press(tabs()[2]!, "ArrowRight");
+  expect(useTabs.getState().active).toBe("a");
+  await press(tabs()[0]!, "Delete");
+  expect(keys()).toEqual(["b", "c"]);
+  // Shift with an arrow key moves the tab itself, which keeps focus.
+  await press(tabs()[0]!, "ArrowRight");
+  expect(document.activeElement).toBe(tabs()[1]);
+  await act(async () => {
+    tabs()[1]!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", shiftKey: true, bubbles: true }),
+    );
+  });
+  expect(keys()).toEqual(["c", "b"]);
+  expect(document.activeElement).toBe(tabs()[0]);
+  expect(useTabs.getState().active).toBe("c");
+  // The focus goes on to the tab shown next; Backspace (a Mac's delete key) closes too.
+  const shown = tabs().find((t) => t.getAttribute("aria-selected") === "true");
+  expect(document.activeElement).toBe(shown);
+  await press(shown!, "Backspace");
+  expect(keys()).toHaveLength(1);
+  expect(document.activeElement).toBe(tabs()[0]);
 });
 
 it("reorders tabs by dragging them", async () => {

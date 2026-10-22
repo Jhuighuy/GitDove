@@ -18,8 +18,8 @@ it("keeps selection and diff per repository", () => {
   const { select, openDiff } = useRepoUiStore.getState();
   select(A, { kind: "wip" });
   openDiff(B, { kind: "unstaged", path: "x" });
-  expect(ui(A)).toEqual({ selection: { kind: "wip" }, diff: null, revealToken: 0 });
-  expect(ui(B)).toEqual({ selection: null, diff: { kind: "unstaged", path: "x" }, revealToken: 0 });
+  expect(ui(A)).toMatchObject({ selection: { kind: "wip" }, diff: null, revealToken: 0 });
+  expect(ui(B)).toMatchObject({ selection: null, diff: { kind: "unstaged", path: "x" } });
 });
 
 it("closes the diff when the selection changes, but not when it is re-selected", () => {
@@ -57,7 +57,7 @@ it("exposes a repository's UI state through a hook", async () => {
   };
   const root = createRoot(document.createElement("div"));
   await act(async () => root.render(createElement(Probe)));
-  expect(seen.at(-1)).toEqual({ selection: null, diff: null, revealToken: 0 });
+  expect(seen.at(-1)).toMatchObject({ selection: null, diff: null, revealToken: 0 });
   await act(async () => useRepoUiStore.getState().select(A, { kind: "wip" }));
   expect(seen.at(-1)).toMatchObject({ selection: { kind: "wip" } });
   await act(async () => root.unmount());
@@ -102,4 +102,45 @@ it("keeps the diff of several commits while the same ones stay selected", () => 
   expect([...selectedHashes(ui(A)!.selection)]).toEqual(["a", "c"]);
   expect([...selectedHashes({ kind: "commit", hash: "x" })]).toEqual(["x"]);
   expect(selectedHashes({ kind: "wip" }).size).toBe(0);
+});
+
+it("asks for the commit box from any selection, closing a commit's diff", () => {
+  const { select, openDiff, focusCommit } = useRepoUiStore.getState();
+  select(A, { kind: "commit", hash: "c1" });
+  openDiff(A, { kind: "commit", hash: "c1", path: "f" });
+  focusCommit(A);
+  expect(ui(A)).toMatchObject({ selection: { kind: "wip" }, diff: null });
+  const first = ui(A)!.commitFocusToken;
+  expect(first).toBeGreaterThan(0);
+  // A working tree diff stays open.
+  openDiff(A, { kind: "unstaged", path: "g" });
+  focusCommit(A);
+  expect(ui(A)).toMatchObject({ diff: { kind: "unstaged", path: "g" } });
+  expect(ui(A)!.commitFocusToken).toBeGreaterThan(first);
+  // Requests never repeat, also after the repository was forgotten.
+  useRepoUiStore.getState().forget(A);
+  focusCommit(A);
+  expect(ui(A)!.commitFocusToken).toBeGreaterThan(first + 1);
+});
+
+it("forgets a repository", () => {
+  const { select, forget } = useRepoUiStore.getState();
+  select(A, { kind: "wip" });
+  select(B, { kind: "wip" });
+  forget(A);
+  expect(Object.keys(useRepoUiStore.getState().byRepo)).toEqual([B]);
+});
+
+it("remembers panel sizes and collapsed sections", () => {
+  const s = () => useLayout.getState();
+  s().setPanels({ sidebar: 20 });
+  s().setPanels({ details: 30 });
+  s().setCollapsed("Staged Files", true);
+  s().toggleDetails();
+  s().showDetails();
+  expect(s()).toMatchObject({
+    panels: { sidebar: 20, details: 30 },
+    collapsed: { "Staged Files": true },
+    details: true,
+  });
 });

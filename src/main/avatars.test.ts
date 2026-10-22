@@ -148,6 +148,24 @@ describe("avatar lookup", () => {
     expect(fetched()).toContain(`${gravatar("unknown@x.org")}64`);
   });
 
+  it("asks for GitHub's default identicon again after a network failure", async () => {
+    await load();
+    let probes = 0;
+    serve({
+      [GITHUB_DEFAULT]: () => (++probes === 1 ? status(502) : png("identicon")),
+      "https://avatars.githubusercontent.com/u/e?email=": png("identicon"),
+      "https://www.gravatar.com/": png("gravatar"),
+    });
+    // Unsure whether this is the identicon: serve something, but do not cache it.
+    expect((await request("a@x.org", ["github"])).body).toBe("png:gravatar");
+    expect((await request("a@x.org", ["github"])).body).toBe("png:gravatar");
+    expect(probes).toBe(2);
+    expect(existsSync(join(electron.userData, "avatars"))).toBe(true);
+    // The identicon is recognized, not cached as a's avatar.
+    expect((await request("b@x.org", ["github"])).body).toBe("png:gravatar");
+    expect(probes).toBe(2);
+  });
+
   it("uses GitHub's answer when its default identicon is unavailable", async () => {
     await load();
     serve({
@@ -240,7 +258,7 @@ describe("avatar lookup", () => {
       [gravatar("a@x.org")]: png("gravatar"),
     });
     expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).body).toBe("png:gravatar");
-    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
+    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(204);
     expect(fetched().filter((u) => u.includes("/api/v4/"))).toHaveLength(1);
     expect(log.warn).toHaveBeenCalledWith(
       "avatars: https://gitlab.corp.example is GitLab but refuses anonymous avatar lookups " +
@@ -252,8 +270,8 @@ describe("avatar lookup", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     await load();
     serve({ "https://gitlab.corp.example/": () => Promise.reject(new TypeError("offline")) });
-    expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
-    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(404);
+    expect((await request("a@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(204);
+    expect((await request("b@x.org", ["gitlab:gitlab.corp.example"])).status).toBe(204);
     expect(fetched().filter((u) => u.includes("gitdove-probe"))).toHaveLength(1);
     // Nothing was cached, so the same avatar is asked for again once GitLab is up.
     vi.advanceTimersByTime(61_000);
@@ -321,7 +339,13 @@ describe("avatar lookup", () => {
         headers: { "content-type": "text/plain" },
       }),
     });
-    expect((await request("a@x.org")).status).toBe(404);
+    // An empty answer: the image fails to load (showing initials) without an error logged.
+    expect(await request("a@x.org")).toEqual({
+      status: 204,
+      type: null,
+      cache: "max-age=600",
+      body: null,
+    });
   });
 
   it("tries the sources in order and stops at the first avatar", async () => {
@@ -363,13 +387,13 @@ describe("avatar cache", () => {
     const start = Date.now();
     await load();
     serve({});
-    expect((await request("miss@x.org")).status).toBe(404);
+    expect((await request("miss@x.org")).status).toBe(204);
     serve({ "https://www.gravatar.com/": png("g") });
     expect((await request("hit@x.org")).status).toBe(200);
     expect(fetch).toHaveBeenCalledTimes(2);
 
     vi.setSystemTime(start + 47 * 3600 * 1000);
-    expect((await request("miss@x.org")).status).toBe(404);
+    expect((await request("miss@x.org")).status).toBe(204);
     expect(fetch).toHaveBeenCalledTimes(2);
 
     vi.setSystemTime(start + 49 * 3600 * 1000);
@@ -392,6 +416,7 @@ describe("avatar cache", () => {
   });
 
   it("does not cache transient failures", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     await load();
     let n = 0;
     serve({
@@ -403,9 +428,12 @@ describe("avatar cache", () => {
         return png("g");
       },
     });
-    expect((await request("a@x.org")).status).toBe(404);
-    expect((await request("a@x.org")).status).toBe(404);
-    expect((await request("a@x.org")).status).toBe(404);
+    expect((await request("a@x.org")).status).toBe(204);
+    expect((await request("a@x.org")).status).toBe(204);
+    // A host that is unavailable or rate-limits is left alone for a while.
+    vi.advanceTimersByTime(61_000);
+    expect((await request("a@x.org")).status).toBe(204);
+    vi.advanceTimersByTime(61_000);
     expect((await request("a@x.org")).body).toBe("png:g");
     expect(existsSync(join(electron.userData, "avatars"))).toBe(true);
   });
@@ -416,7 +444,7 @@ describe("avatar cache", () => {
       [GITHUB_DEFAULT]: png("identicon"),
       "https://avatars.githubusercontent.com/u/e?email=": status(502),
     });
-    expect((await request("a@x.org", ["github"])).status).toBe(404);
+    expect((await request("a@x.org", ["github"])).status).toBe(204);
     serve({
       [GITHUB_DEFAULT]: png("identicon"),
       "https://avatars.githubusercontent.com/u/e?email=": png("late"),
@@ -431,7 +459,7 @@ describe("avatar cache", () => {
     const pending = request("a@x.org");
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(8000);
-    expect((await pending).status).toBe(404);
+    expect((await pending).status).toBe(204);
     const signal = fetch.mock.calls[0]![1]!.signal!;
     expect(signal.aborted).toBe(true);
     // Not cached as a miss.
@@ -446,13 +474,97 @@ describe("avatar cache", () => {
       "https://www.gravatar.com/": () => {
         n++;
         if (n > 1) return png("g");
-        const res = png("broken");
-        vi.spyOn(res, "arrayBuffer").mockRejectedValue(new Error("reset"));
-        return res;
+        const body = new ReadableStream({ start: (c) => c.error(new Error("reset")) });
+        return new Response(body, { headers: { "content-type": "image/png" } });
       },
     });
-    expect((await request("a@x.org")).status).toBe(404);
+    expect((await request("a@x.org")).status).toBe(204);
     expect((await request("a@x.org")).body).toBe("png:g");
+  });
+
+  it("gives up on bodies that stall", async () => {
+    vi.useFakeTimers();
+    await load();
+    let cancelled = false;
+    electron.route = () =>
+      new Response(new ReadableStream({ cancel: () => void (cancelled = true) }), {
+        headers: { "content-type": "image/png" },
+      });
+    const pending = request("a@x.org");
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(8000);
+    expect((await pending).status).toBe(204);
+    expect(cancelled).toBe(true);
+  });
+
+  it("refuses oversized images", async () => {
+    await load();
+    const big = new Uint8Array(3 * 1024 * 1024);
+    serve({
+      "https://www.gravatar.com/": () =>
+        new Response(big, { headers: { "content-type": "image/png" } }),
+    });
+    expect((await request("a@x.org")).status).toBe(204);
+    serve({
+      "https://www.gravatar.com/": () =>
+        new Response("x", {
+          headers: { "content-type": "image/png", "content-length": "9999999" },
+        }),
+    });
+    expect((await request("b@x.org")).status).toBe(204);
+  });
+
+  it("leaves a rate-limiting host alone for as long as it asks", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await load();
+    serve({
+      "https://www.gravatar.com/": new Response(null, {
+        status: 429,
+        headers: { "retry-after": "300" },
+      }),
+    });
+    expect((await request("a@x.org")).status).toBe(204);
+    expect((await request("b@x.org")).status).toBe(204);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      "avatars: www.gravatar.com answered HTTP 429; leaving it alone for 300s",
+    );
+    vi.advanceTimersByTime(301_000);
+    serve({ "https://www.gravatar.com/": png("g") });
+    expect((await request("b@x.org")).body).toBe("png:g");
+  });
+
+  it("prunes expired and broken entries", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    const m = await load();
+    serve({ "https://www.gravatar.com/": png("g") });
+    await request("old@x.org");
+    vi.setSystemTime(start + 6 * 24 * 3600 * 1000);
+    await request("new@x.org");
+    const dir = join(electron.userData, "avatars");
+    writeFileSync(join(dir, "broken.json"), "{");
+    writeFileSync(join(dir, "orphan.img"), "x");
+    vi.setSystemTime(start + 8 * 24 * 3600 * 1000);
+    await m.pruneAvatarCache();
+    expect(readdirSync(dir).toSorted()).toHaveLength(2);
+    expect((await request("new@x.org")).body).toBe("png:g");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores cache entries with a bad image type", async () => {
+    await load();
+    serve({ "https://www.gravatar.com/": png("g") });
+    await request("a@x.org");
+    const dir = join(electron.userData, "avatars");
+    for (const f of readdirSync(dir)) {
+      if (f.endsWith(".json")) {
+        writeFileSync(join(dir, f), JSON.stringify({ type: "text/html", at: Date.now() }));
+      }
+    }
+    await load();
+    expect((await request("a@x.org")).type).toBe("image/png");
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("shares concurrent lookups", async () => {

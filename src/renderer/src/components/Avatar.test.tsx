@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { Avatar, useAvatarProviders } from "./Avatar";
+import { Avatar, MISSING_RETRY_MS, useAvatarProviders } from "./Avatar";
 
 const mocks = vi.hoisted(() => ({ remotes: [] as { fetchUrl: string }[] }));
 
@@ -62,14 +62,16 @@ it("shows initials until the picture has loaded", () => {
   );
   expect(image.style.opacity).toBe("0");
 
-  act(() => image.dispatchEvent(new Event("load")));
+  act(() => {
+    image.dispatchEvent(new Event("load"));
+  });
   expect(avatar().textContent).toBe("");
   expect(img()!.style.opacity).toBe("1");
 });
 
-it("requests larger pictures for large avatars", () => {
-  render(<Avatar name="Ada" email="ada@example.com" providers={[]} size={32} />);
-  expect(img()!.getAttribute("src")).toContain("&s=128");
+it("requests one picture size whatever the avatar's size, to fetch it once", () => {
+  render(<Avatar name="Ada" email="ada@example.com" providers={[]} size={28} />);
+  expect(img()!.getAttribute("src")).toContain("&s=64");
   expect(avatar().textContent).toBe("AD");
 });
 
@@ -81,7 +83,9 @@ it("shows only initials without an email address", () => {
 
 it("falls back to initials when the picture fails, and does not retry it", () => {
   render(<Avatar name="Bob Builder" email="bob@example.com" providers={[]} />);
-  act(() => img()!.dispatchEvent(new Event("error")));
+  act(() => {
+    img()!.dispatchEvent(new Event("error"));
+  });
   expect(img()).toBeNull();
   expect(avatar().textContent).toBe("BB");
   // Another avatar for the same address (e.g. a recycled row) skips the picture.
@@ -89,6 +93,24 @@ it("falls back to initials when the picture fails, and does not retry it", () =>
   root = createRoot(container);
   render(<Avatar name="Bob Builder" email="bob@example.com" providers={[]} />);
   expect(img()).toBeNull();
+});
+
+it("retries a failed picture after a while", () => {
+  vi.useFakeTimers();
+  try {
+    render(<Avatar name="Cy" email="cy@example.com" providers={[]} />);
+    expect(img()!.getAttribute("loading")).toBe("lazy");
+    act(() => {
+      img()!.dispatchEvent(new Event("error"));
+    });
+    act(() => root.unmount());
+    vi.advanceTimersByTime(MISSING_RETRY_MS);
+    root = createRoot(container);
+    render(<Avatar name="Cy" email="cy@example.com" providers={[]} />);
+    expect(img()).not.toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("derives avatar providers from the remotes", async () => {

@@ -1,8 +1,8 @@
-import type { ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import { groupHasLiveMember } from "./terminate";
+import { groupHasLiveMember, killUnlessGone } from "./terminate";
 
 describe("groupHasLiveMember", () => {
   const ps = ["  100 Ss", "  100 Z", "  200 S+", "  300 Z+", "", "garbage"].join("\n");
@@ -52,5 +52,37 @@ describe("terminateTree on Windows", () => {
       vi.doUnmock("node:child_process");
       vi.resetModules();
     }
+  });
+});
+
+describe.skipIf(process.platform === "win32")("killUnlessGone", () => {
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /** A process that runs until killed; reaped once it exits, so `alive` sees it gone. */
+  const sleeper = () => spawn("sleep", ["30"], { stdio: "ignore" }).pid!;
+
+  it("kills the processes once the time is up, if the first still runs", async () => {
+    const [main, helper] = [sleeper(), sleeper()];
+    killUnlessGone([main, helper], 500);
+    await new Promise((r) => setTimeout(r, 300));
+    expect([alive(main), alive(helper)]).toEqual([true, true]);
+    await vi.waitFor(() => expect([alive(main), alive(helper)]).toEqual([false, false]), {
+      timeout: 5000,
+    });
+  });
+
+  it("leaves them alone when the first one exited meanwhile", async () => {
+    const [main, helper] = [sleeper(), sleeper()];
+    killUnlessGone([main, helper], 500);
+    process.kill(main);
+    await new Promise((r) => setTimeout(r, 2000));
+    expect(alive(helper)).toBe(true);
+    process.kill(helper);
   });
 });

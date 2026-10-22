@@ -173,8 +173,7 @@
     font-feature-settings: "cv11", "ss01";
   }
   input,
-  textarea,
-  .select-text {
+  textarea {
     user-select: text;
   }
   ::-webkit-scrollbar {
@@ -225,4 +224,16 @@
     height: 100%;
     background: transparent;
   }
+}
+
+/*
+ * Error toasts carry git's output: keep its lines, let it be selected and copied, and keep long
+ * output (e.g. from hooks) within the window. Unlayered, to win over Sonner's own styles.
+ */
+[data-sonner-toast] [data-description] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  max-height: 40vh;
+  overflow-y: auto;
 }

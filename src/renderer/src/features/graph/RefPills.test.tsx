@@ -90,7 +90,9 @@ it("shows the first pill and counts the rest", () => {
   expect(pill.querySelectorAll("svg")).toHaveLength(3);
   expect(container.textContent).toContain("+2");
 
-  act(() => pill.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  act(() => {
+    pill.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
   expect(onDoubleClick).toHaveBeenCalledWith(head);
   // The row below does not see the double click.
   expect(parent).not.toHaveBeenCalled();
@@ -104,7 +106,9 @@ it("shows a lone tag or remote pill with its icon", () => {
   expect(pill.querySelectorAll("svg")).toHaveLength(1);
   expect(container.textContent).not.toContain("+");
   // Without a handler a double click is harmless.
-  act(() => pill.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  act(() => {
+    pill.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
 });
 
 it("expands the other pills in place, and checks them out on double click", async () => {
@@ -128,7 +132,9 @@ it("expands the other pills in place, and checks them out on double click", asyn
   const pills = [...popup.querySelectorAll<HTMLElement>("[title]")];
   // All of them, the first one again on top.
   expect(pills.map((p) => p.textContent)).toEqual(["main", "dev", "v1"]);
-  act(() => pills[1]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  act(() => {
+    pills[1]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
   expect(onDoubleClick).toHaveBeenCalledWith(dev);
 });
 

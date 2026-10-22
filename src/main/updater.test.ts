@@ -108,6 +108,35 @@ describe("updater on macOS", () => {
     expect(log.warn).toHaveBeenCalledWith("updater: hello");
   });
 
+  it("answers a check with the current status when the helper stays silent", async () => {
+    vi.useFakeTimers();
+    try {
+      const { updater } = await load("darwin");
+      const outcome = updater.check();
+      sparkle.instance?.onStatus({ kind: "checking" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(outcome).resolves.toEqual({ kind: "checking" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says the check goes on, not that GitDove is up to date, when it times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const { checkForUpdatesFromMenu } = await load("darwin");
+      const done = checkForUpdatesFromMenu();
+      sparkle.instance?.onStatus({ kind: "checking" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await done;
+      expect(electron.dialog.showMessageBox).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Still checking for updates" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("answers a check at once when the helper is gone", async () => {
     const { updater } = await load("darwin");
     sparkle.instance?.onStatus({ kind: "error", message: "Updater stopped unexpectedly (1)" });
@@ -153,9 +182,9 @@ describe("updater on macOS", () => {
 
 describe("updater elsewhere", () => {
   it("checks through electron-updater", async () => {
-    const { updater, checkForUpdatesFromMenu, statuses } = await load("linux");
+    const { updater, checkForUpdatesFromMenu } = await load("linux");
     await expect(updater.check()).resolves.toEqual({ kind: "idle" });
-    expect(statuses.at(-1)).toEqual({ kind: "idle" });
+    expect(updater.status()).toEqual({ kind: "idle" });
     await checkForUpdatesFromMenu();
     expect(electron.dialog.showMessageBox).toHaveBeenCalledWith(
       expect.objectContaining({ message: "GitDove is up to date" }),
@@ -172,9 +201,26 @@ describe("updater elsewhere", () => {
     await expect(updater.check()).resolves.toEqual({ kind: "idle" });
   });
 
-  it("reports a failed check", async () => {
-    const { updater } = await load("linux");
-    mocked.autoUpdater.checkForUpdates.mockRejectedValueOnce(new Error("offline"));
+  it("reports a failed check, once", async () => {
+    const { updater, statuses } = await load("linux");
+    mocked.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      // electron-updater emits the error and also rejects.
+      mocked.autoUpdater.emit("error", new Error("offline"));
+      throw new Error("offline");
+    });
     await expect(updater.check()).resolves.toEqual({ kind: "error", message: "offline" });
+    expect(statuses.filter((s) => s.kind === "error")).toHaveLength(1);
+  });
+
+  it("relays download progress in whole percents", async () => {
+    const { statuses } = await load("linux");
+    for (const percent of [1.2, 1.7, 2.1, 2.9, 3]) {
+      mocked.autoUpdater.emit("download-progress", { percent });
+    }
+    expect(statuses.filter((s) => s.kind === "downloading")).toEqual([
+      { kind: "downloading", percent: 1 },
+      { kind: "downloading", percent: 2 },
+      { kind: "downloading", percent: 3 },
+    ]);
   });
 });

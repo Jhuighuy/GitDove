@@ -1,11 +1,28 @@
 import type { GraphRow, Ref, RepoId } from "@shared/domain";
+import { MAX_GRAPH_ROWS } from "@shared/ipc";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { toast } from "sonner";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { AvatarProvider } from "@shared/avatars";
 import { Avatar, useAvatarProviders } from "@/components/Avatar";
-import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  isMenuKey,
+  openActiveMenu,
+  useContextMenuTarget,
+} from "@/components/ui/context-menu";
 import { Spinner } from "@/components/ui/spinner";
 import { api, isMac } from "@/lib/api";
 import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
@@ -23,7 +40,6 @@ import {
   type PickedCommit,
   type Selection,
   selectedHashes,
-  useRepoUi,
   useRepoUiStore,
 } from "@/stores/repo-ui";
 import { commands } from "../commands";
@@ -37,7 +53,9 @@ import {
   WipGraphCell,
 } from "./GraphCell";
 import { RefPills } from "./RefPills";
-import { rangeIndexes, selectionOf, toggled } from "./selection";
+import { MAX_RANGE, rangeIndexes, selectionOf, toggled } from "./selection";
+
+type Column = "refs" | "graph" | "author" | "date";
 
 interface ColumnsState {
   readonly refs: number;
@@ -45,7 +63,7 @@ interface ColumnsState {
   readonly author: number;
   readonly date: number;
   /** Sets a column's width; `null` sizes the graph column to fit its lanes again. */
-  set(col: "refs" | "graph" | "author" | "date", width: number | null): void;
+  readonly set: (col: Column, width: number | null) => void;
 }
 
 /**
@@ -89,14 +107,29 @@ const EMPTY_REFS: readonly Ref[] = [];
 
 /**
  * Where each repository's graph was, so that it comes back there after a diff replaced it:
- * the scroll offset, the fitted graph width and the last reveal request it handled.
+ * the scroll offset, the fitted graph width and the reveal request it is handling.
  */
-const views = new Map<RepoId, { scroll: number; fit: number; revealed: number }>();
-const viewOf = (repo: RepoId) => {
-  const v = views.get(repo) ?? { scroll: 0, fit: 0, revealed: 0 };
-  views.set(repo, v);
+interface GraphView {
+  scroll: number;
+  /** The fitted graph width, for the graph version it was fitted to. */
+  fit: { readonly width: number; readonly version: number | null };
+  /** The last reveal request seen, and the commit it still has to scroll to (if any). */
+  readonly reveal: { token: number; hash: string | null };
+}
+const views = new Map<RepoId, GraphView>();
+const viewOf = (repo: RepoId): GraphView => {
+  let v = views.get(repo);
+  if (!v) {
+    v = { scroll: 0, fit: { width: 0, version: null }, reveal: { token: 0, hash: null } };
+    views.set(repo, v);
+  }
   return v;
 };
+// A closed repository's graph starts afresh when reopened (its reveal requests count from 0).
+useRepoUiStore.subscribe((s, prev) => {
+  if (s.byRepo === prev.byRepo) return;
+  for (const repo of views.keys()) if (prev.byRepo[repo] && !s.byRepo[repo]) views.delete(repo);
+});
 
 /** The commit last clicked in `selection`, where ranges and arrow keys start. */
 const anchorOf = (selection: Selection | null) =>
@@ -106,16 +139,40 @@ const anchorOf = (selection: Selection | null) =>
       ? selection.anchor
       : null;
 
-export function CommitGraph({ repo }: { repo: RepoId }) {
+/** Seconds since the epoch, updated every minute so that relative dates move on. */
+const useMinuteClock = () => {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now() / 1000), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+};
+
+/** `then` for a value that may not be a promise yet, staying synchronous when it is not. */
+const andThen = <T, U>(v: T | Promise<T>, f: (t: T) => U | Promise<U>): U | Promise<U> =>
+  v instanceof Promise ? v.then(f) : f(v);
+
+/** A change of the selection; `undefined` leaves it as it is. */
+type Step = (base: Selection | null) => Selection | undefined | Promise<Selection | undefined>;
+
+export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId }) {
   const { data: info, isPending, error } = useGraphInfo(repo);
   const { data: status } = useStatus(repo);
   const { data: repoInfo } = useRepoInfo(repo);
   const { data: refsData } = useRefs(repo);
   const refsByHash = useRefsByHash(repo);
-  const { selection, revealToken } = useRepoUi(repo);
+  const selection = useRepoUiStore((s) => s.byRepo[repo]?.selection ?? null);
+  const revealToken = useRepoUiStore((s) => s.byRepo[repo]?.revealToken ?? 0);
   const select = useRepoUiStore((s) => s.select);
   const columns = useColumns();
+  // Widths being dragged, saved when the drag ends.
+  const [draft, setDraft] = useState<Partial<Record<Column, number>>>({});
   const avatarProviders = useAvatarProviders(repo);
+  const now = useMinuteClock();
+  const listId = useId();
+  /** The element id of the WIP row ("wip") or a commit's row. */
+  const rowId = (key: string) => `${listId}-${key}`;
 
   const changes = status
     ? status.staged.length + status.unstaged.length + status.conflicted.length
@@ -153,11 +210,16 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   const firstIndex = Math.max(0, (items[0]?.index ?? 0) - offset);
   const lastIndex = Math.max(0, (items.at(-1)?.index ?? 0) - offset + 1);
   const { rows, current } = useGraphRows(repo, info, firstIndex, lastIndex);
-  const headRow = rows.get(0);
+
+  // What callbacks and queued steps (below) see: the latest render's rows and graph version,
+  // not those of the render that made them.
+  const latest = useRef({ info, current, offset, total, refsByHash });
+  latest.current = { info, current, offset, total, refsByHash };
 
   // Fit the lanes on screen. The width only grows while scrolling, so the columns don't jump
-  // back and forth; double-clicking the column border fits it to the rows on screen again.
-  // Only rows in the viewport count, not the overscan rendered around it.
+  // back and forth; double-clicking the column border, or a new graph (e.g. after hiding
+  // branches), fits it to the rows on screen again. Only rows in the viewport count, not the
+  // overscan rendered around it.
   const top = virtualizer.scrollOffset ?? 0;
   const bottom = top + (virtualizer.scrollRect?.height ?? Infinity);
   let widestRow = 0;
@@ -167,39 +229,59 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     if (row) widestRow = Math.max(widestRow, rowGraphWidth(row));
   }
   const visibleWidth = Math.max(widestRow, graphWidthFor(MIN_AUTO_LANES));
-  const [fitWidth, setFitWidth] = useState(() => views.get(repo)?.fit ?? 0);
+  // The fitted width belongs to one graph: a new one (e.g. after hiding branches) fits again.
+  const [fit, setFit] = useState(() => views.get(repo)?.fit ?? { width: 0, version: null });
+  const fitWidth = fit.version === (info?.version ?? null) ? fit.width : 0;
   useLayoutEffect(() => {
-    if (visibleWidth > fitWidth) setFitWidth(visibleWidth);
-  }, [visibleWidth, fitWidth]);
-  const graphWidth =
-    columns.graph ?? Math.min(Math.max(fitWidth, visibleWidth), graphWidthFor(MAX_AUTO_LANES));
-  const clipped = widestRow > graphWidth;
-  const refit = () => {
-    columns.set("graph", null);
-    setFitWidth(0);
+    if (visibleWidth > fitWidth) setFit({ width: visibleWidth, version: info?.version ?? null });
+  }, [visibleWidth, fitWidth, info?.version]);
+  const widths = {
+    refs: draft.refs ?? columns.refs,
+    graph:
+      draft.graph ??
+      columns.graph ??
+      Math.min(Math.max(fitWidth, visibleWidth), graphWidthFor(MAX_AUTO_LANES)),
+    author: draft.author ?? columns.author,
+    date: draft.date ?? columns.date,
   };
+  const clipped = widestRow > widths.graph;
+  const onResize = useCallback((col: Column, width: number, done: boolean) => {
+    if (done) {
+      useColumns.getState().set(col, width);
+      setDraft({});
+    } else setDraft({ [col]: width });
+  }, []);
+  const refit = useCallback(() => {
+    useColumns.getState().set("graph", null);
+    setFit({ width: 0, version: null });
+  }, []);
 
   useEffect(() => {
-    viewOf(repo).fit = fitWidth;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repo, fitWidth]);
+    viewOf(repo).fit = fit;
+  }, [repo, fit]);
 
   // Scroll the selected commit into view when asked to (e.g. from the sidebar), once: coming
-  // back from a diff keeps the place instead.
+  // back from a diff keeps the place instead. A lookup cut short (e.g. by a diff replacing the
+  // graph) runs again, and a commit that has not streamed in yet is looked for again as the
+  // graph grows.
   useEffect(() => {
-    if (!revealToken || selection?.kind !== "commit" || !info) return;
-    if (viewOf(repo).revealed === revealToken) return;
+    const r = viewOf(repo).reveal;
+    if (r.token !== revealToken) {
+      r.token = revealToken;
+      r.hash = selection?.kind === "commit" ? selection.hash : null;
+    }
+    const hash = r.hash;
+    if (hash === null || !info) return;
     let cancelled = false;
-    void api("repo.findCommit", repo, info.version, selection.hash).then(
+    void api("repo.findCommit", repo, info.version, hash).then(
       (index) => {
-        // Handled once it got here: a lookup cut short (e.g. by a diff) runs again, and so
-        // does one for a commit that has not streamed in yet, as the history grows.
-        if (cancelled || (index < 0 && !info.complete)) return;
-        viewOf(repo).revealed = revealToken;
-        if (index < 0) return;
-        // Going to the commit replaces going back to where the graph was.
-        restore.current = 0;
-        virtualizer.scrollToIndex(index + offset, { align: "center" });
+        if (cancelled || r.hash !== hash) return;
+        if (index >= 0) {
+          r.hash = null;
+          // Going to the commit replaces going back to where the graph was.
+          restore.current = 0;
+          virtualizer.scrollToIndex(index + latest.current.offset, { align: "center" });
+        } else if (info.complete) r.hash = null;
       },
       () => {},
     );
@@ -209,25 +291,31 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     // A request made before the graph loaded waits for it, and one for a commit not loaded yet
     // looks again as more arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revealToken, !info, info?.count, info?.complete]);
+  }, [revealToken, info]);
 
   const hashes = useMemo(() => selectedHashes(selection), [selection]);
-  // Arrows move on from the commit last clicked.
-  const anchor = anchorOf(selection);
-  const selectedIndex = useMemo(() => {
-    if (selection?.kind === "wip") return 0;
-    if (anchor === null) return -1;
-    for (const [i, r] of rows) if (r.hash === anchor) return i + offset;
-    return -1;
-  }, [selection, anchor, rows, offset]);
 
-  // The platform key adds or removes a commit, Shift selects a range from the last clicked.
-  // Rows may have to be fetched first, so these presses run one after another, each from the
-  // selection the one before left; a selection made any other way drops those still pending.
-  const presses = useRef({ tail: Promise.resolve(), epoch: 0, owned: null as Selection | null });
-  const press = (row: GraphRow, index: number, e: React.MouseEvent) => {
-    const toggle = isMac ? e.metaKey : e.ctrlKey;
-    if (!toggle && !e.shiftKey) return select(repo, { kind: "commit", hash: row.hash });
+  /** Where a commit was last seen, for when its row is not loaded any more. */
+  const seenAt = useRef<{ hash: string; version: number; index: number } | null>(null);
+  /** The moving end of a Shift+arrow range (its anchor stays), with the selection it made. */
+  const cursor = useRef<{ selection: Selection; hash: string } | null>(null);
+  const see = (row: GraphRow, index: number) => {
+    const { info: i, current: loaded } = latest.current;
+    if (i && loaded.get(index)?.hash === row.hash)
+      seenAt.current = { hash: row.hash, version: i.version, index };
+  };
+
+  // Clicks with the platform key or Shift, and arrow keys, may have to fetch rows first, so
+  // they run one after another, each from the selection the one before left; a selection made
+  // any other way drops those still pending.
+  const presses = useRef({
+    tail: Promise.resolve(),
+    epoch: 0,
+    owned: null as Selection | null,
+    pending: 0,
+  });
+  /** Runs `step` on the current selection: right away, unless steps are pending. */
+  const enqueue = (step: Step) => {
     const selected = () => useRepoUiStore.getState().byRepo[repo]?.selection ?? null;
     const q = presses.current;
     if (selected() !== q.owned) {
@@ -236,14 +324,69 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     }
     const epoch = q.epoch;
     const live = () => q.epoch === epoch && selected() === q.owned;
-    q.tail = q.tail.then(async () => {
-      if (!live()) return;
-      const next = await extendRef.current(selected(), row, index, toggle);
-      if (!live()) return;
+    const apply = (next: Selection | undefined) => {
+      if (next === undefined || !live()) return;
       select(repo, next);
       q.owned = selected();
-    });
+    };
+    let result: Promise<void>;
+    if (q.pending === 0) {
+      const next = step(selected());
+      if (!(next instanceof Promise)) return apply(next);
+      result = next.then(apply);
+    } else {
+      result = q.tail.then(async () => {
+        if (live()) apply(await step(selected()));
+      });
+    }
+    q.pending++;
+    q.tail = result.catch(() => {}).finally(() => q.pending--);
   };
+
+  /**
+   * The rows from `from` to `to` (inclusive) of graph `version`: those not loaded are fetched,
+   * in runs of at most {@link MAX_GRAPH_ROWS}.
+   */
+  const rowsIn = async (version: number, from: number, to: number) => {
+    const out = new Map<number, GraphRow>();
+    const loaded = latest.current.info?.version === version ? latest.current.current : null;
+    const missing: [number, number][] = [];
+    for (let i = from; i <= to; i++) {
+      const r = loaded?.get(i);
+      if (r) out.set(i, r);
+      else {
+        const last = missing.at(-1);
+        if (last?.[1] === i && last[1] - last[0] < MAX_GRAPH_ROWS) last[1] = i + 1;
+        else missing.push([i, i + 1]);
+      }
+    }
+    const fetched = await Promise.all(
+      missing.map(([start, end]) => api("repo.graphRows", repo, version, start, end)),
+    );
+    fetched.forEach((run, k) => run.forEach((r, j) => out.set(missing[k]![0] + j, r)));
+    return out;
+  };
+  /** Where a commit is in graph `version` (-1 when not in it), looked up when not loaded. */
+  const indexOf = (version: number, hash: string): number | Promise<number> => {
+    const { info: i, current: loaded } = latest.current;
+    if (i?.version === version) for (const [index, r] of loaded) if (r.hash === hash) return index;
+    const seen = seenAt.current;
+    if (seen?.hash === hash && seen.version === version) return seen.index;
+    return api("repo.findCommit", repo, version, hash);
+  };
+  /** Where several commits are in graph `version` (-1 when not), in one lookup at most. */
+  const indexesOf = async (version: number, wanted: readonly string[]): Promise<number[]> => {
+    const { info: i, current: loaded } = latest.current;
+    const known = new Map<string, number>();
+    if (i?.version === version) for (const [index, r] of loaded) known.set(r.hash, index);
+    const unknown = wanted.filter((h) => !known.has(h));
+    if (unknown.length > 0) {
+      const found = await api("repo.findCommits", repo, version, unknown);
+      unknown.forEach((h, k) => known.set(h, found[k] ?? -1));
+    }
+    return wanted.map((h) => known.get(h)!);
+  };
+
   /** The selection `base` becomes with the commit at `index` toggled, or the range up to it. */
   const extend = async (
     base: Selection | null,
@@ -252,60 +395,53 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     toggle: boolean,
   ): Promise<Selection> => {
     const single = { kind: "commit", hash: row.hash } as const;
+    const i = latest.current.info;
     const start = anchorOf(base);
-    if (!info || start === null) return single;
-    // Only rows loaded for this graph version are where they show: rows of a previous version
-    // shown while the graph reloads, or commits far off screen, are asked for.
-    const fetchRows = async (from: number, to: number) => {
-      const out = new Map<number, GraphRow>();
-      let missing = false;
-      for (let i = from; i <= to; i++) {
-        const r = current.get(i);
-        if (r) out.set(i, r);
-        else missing = true;
-      }
-      if (missing) {
-        const fetched = await api("repo.graphRows", repo, info.version, from, to + 1);
-        fetched.forEach((r, j) => out.set(from + j, r));
-      }
-      return out;
-    };
-    const loadedAt = new Map([...current].map(([i, r]) => [r.hash, i]));
-    const indexOf = async (hash: string) =>
-      loadedAt.get(hash) ?? api("repo.findCommit", repo, info.version, hash);
+    if (!i || start === null) return single;
+    const v = i.version;
     // After a reload, commits picked before may have moved, or gone.
     const reindexed = async (picked: readonly PickedCommit[]) => {
-      const moved = await Promise.all(
-        picked.map(async (p) => ({ ...p, index: await indexOf(p.row.hash) })),
+      const indexes = await indexesOf(
+        v,
+        picked.map((p) => p.row.hash),
       );
-      return moved.filter((p) => p.index >= 0);
+      return picked.map((p, k) => ({ ...p, index: indexes[k]! })).filter((p) => p.index >= 0);
     };
     try {
-      const at = current.get(index)?.hash === row.hash ? index : await indexOf(row.hash);
+      // Only rows loaded for this graph version are where they show: rows of a previous
+      // version shown while the graph reloads, or commits far off screen, are asked for.
+      const at =
+        latest.current.current.get(index)?.hash === row.hash ? index : await indexOf(v, row.hash);
       if (at < 0) return single;
       if (toggle) {
         let picked: readonly PickedCommit[] = [];
         if (base?.kind === "commits")
-          picked = base.version === info.version ? base.commits : await reindexed(base.commits);
+          picked = base.version === v ? base.commits : await reindexed(base.commits);
         else if (base?.kind === "commit") {
-          const i = await indexOf(base.hash);
-          const r = i >= 0 ? (await fetchRows(i, i)).get(i) : undefined;
-          if (r) picked = [{ index: i, row: r }];
+          const b = await indexOf(v, base.hash);
+          const r = b >= 0 ? (await rowsIn(v, b, b)).get(b) : undefined;
+          if (r) picked = [{ index: b, row: r }];
         }
-        return selectionOf(toggled(picked, { index: at, row }), row.hash, info.version) ?? single;
+        return selectionOf(toggled(picked, { index: at, row }), row.hash, v) ?? single;
       }
-      const a = await indexOf(start);
+      const a = await indexOf(v, start);
       if (a < 0) return single;
       const [from, to] = rangeIndexes(a, at);
-      const range = [...(await fetchRows(from, to))].map(([i, r]) => ({ index: i, row: r }));
-      return selectionOf(range, start, info.version) ?? single;
+      if (Math.abs(at - a) >= MAX_RANGE)
+        toast.info(`Selected the ${MAX_RANGE.toLocaleString()} commits nearest the one clicked`);
+      const range = [...(await rowsIn(v, from, to))].map(([j, r]) => ({ index: j, row: r }));
+      return selectionOf(range, start, v) ?? single;
     } catch {
       return single;
     }
   };
-  // Queued presses use the rows and graph version of the latest render.
-  const extendRef = useRef(extend);
-  extendRef.current = extend;
+
+  const press = (row: GraphRow, index: number, e: React.MouseEvent) => {
+    const toggle = isMac ? e.metaKey : e.ctrlKey;
+    see(row, index);
+    if (!toggle && !e.shiftKey) return select(repo, { kind: "commit", hash: row.hash });
+    enqueue((base) => extend(base, row, index, toggle));
+  };
   const pressRef = useRef(press);
   pressRef.current = press;
   const onPress = useCallback(
@@ -313,33 +449,105 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     [],
   );
 
+  /**
+   * Moves the selection to the row `move` picks from where it is (a position in the list,
+   * WIP row included, or -1 for none). With `range`, the end of a range moves instead.
+   */
+  const navigate = (move: (at: number) => number, range: boolean) =>
+    enqueue((base) => {
+      const { info: i, offset: off, total: count } = latest.current;
+      if (!i || count === 0) return undefined;
+      const v = i.version;
+      const end = cursor.current?.selection === base ? cursor.current.hash : anchorOf(base);
+      const at =
+        base?.kind === "wip"
+          ? off > 0
+            ? 0
+            : -1
+          : end === null
+            ? -1
+            : andThen(indexOf(v, end), (g) => (g < 0 ? -1 : g + off));
+      return andThen(at, (from) => {
+        const next = Math.min(count - 1, Math.max(0, move(from)));
+        virtualizer.scrollToIndex(next, { align: "auto" });
+        if (next < off) return { kind: "wip" } as const;
+        const index = next - off;
+        const done = (row: GraphRow | undefined): Selection | undefined | Promise<Selection> => {
+          if (!row) return undefined;
+          seenAt.current = { hash: row.hash, version: v, index };
+          if (!range || (base?.kind !== "commit" && base?.kind !== "commits"))
+            return { kind: "commit", hash: row.hash };
+          return extend(base, row, index, false).then((sel) => {
+            cursor.current = { selection: sel, hash: row.hash };
+            return sel;
+          });
+        };
+        const loaded = latest.current.current.get(index);
+        return loaded ? done(loaded) : rowsIn(v, index, index).then((r) => done(r.get(index)));
+      });
+    });
+
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    e.preventDefault();
-    const base = selectedIndex < 0 ? -1 : selectedIndex;
-    const next = Math.min(total - 1, Math.max(0, base + (e.key === "ArrowDown" ? 1 : -1)));
-    if (next < offset) {
-      select(repo, { kind: "wip" });
-    } else {
-      const row = rows.get(next - offset);
-      if (row) select(repo, { kind: "commit", hash: row.hash });
+    if (isMenuKey(e)) {
+      e.preventDefault();
+      const key = selection?.kind === "wip" ? "wip" : anchorOf(selection);
+      if (key === null) return;
+      openActiveMenu(scrollRef.current, rowId(key), () => {
+        const i = latest.current.info;
+        if (key === "wip") virtualizer.scrollToIndex(0, { align: "auto" });
+        else if (i) {
+          void Promise.resolve(indexOf(i.version, key)).then(
+            (index) => {
+              if (index >= 0)
+                virtualizer.scrollToIndex(index + latest.current.offset, { align: "auto" });
+            },
+            () => {},
+          );
+        }
+      });
+      return;
     }
-    virtualizer.scrollToIndex(next, { align: "auto" });
+    const page = Math.max(1, Math.floor((virtualizer.scrollRect?.height ?? 0) / ROW_HEIGHT) - 1);
+    const moves: Partial<Record<string, (at: number) => number>> = {
+      ArrowDown: (at) => at + 1,
+      ArrowUp: (at) => at - 1,
+      PageDown: (at) => at + page,
+      PageUp: (at) => at - page,
+      Home: () => 0,
+      End: () => Infinity,
+    };
+    const move = moves[e.key];
+    if (!move) return;
+    e.preventDefault();
+    navigate(move, e.shiftKey);
   };
 
-  const [menu, setMenu] = useState<MenuTarget | null>(null);
+  const menu = useContextMenuTarget<MenuTarget>();
+  const capture = menu.capture;
   const onRowContextMenu = useCallback(
     (row: GraphRow | null) => {
-      if (row) {
-        select(repo, { kind: "commit", hash: row.hash });
-        setMenu({ kind: "commit", row, refs: refsByHash.get(row.hash) ?? [], stashIndex: null });
-      } else {
+      if (!row) {
         select(repo, { kind: "wip" });
-        setMenu({ kind: "wip" });
+        return capture({ kind: "wip" });
       }
+      // Right-clicking a commit of a multi-selection keeps it, for actions on all of them.
+      const selected = useRepoUiStore.getState().byRepo[repo]?.selection;
+      if (selected?.kind === "commits" && selected.commits.some((c) => c.row.hash === row.hash))
+        return capture({ kind: "commits", commits: selected.commits });
+      select(repo, { kind: "commit", hash: row.hash });
+      capture({ kind: "commit", row, refs: latest.current.refsByHash.get(row.hash) ?? [] });
     },
-    [repo, refsByHash, select],
+    [repo, select, capture],
   );
+  const onSelectWip = useCallback(() => select(repo, { kind: "wip" }), [repo, select]);
+  const onRefDoubleClick = useCallback((r: Ref) => void commands.checkoutRef(repo, r), [repo]);
+
+  // The WIP row continues HEAD's lane.
+  const headRow = useMemo(() => {
+    if (offset === 0 || headHash === null) return undefined;
+    for (const r of rows.values()) if (r.hash === headHash) return r;
+    return undefined;
+  }, [rows, headHash, offset]);
 
   if (error && !info) {
     return (
@@ -349,15 +557,78 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     );
   }
 
+  const active = selection?.kind === "wip" ? "wip" : anchorOf(selection);
+  let activeShown = false;
+  const rendered = items.map((item) => {
+    const index = item.index - offset;
+    if (index < 0) {
+      activeShown ||= active === "wip";
+      return (
+        <WipRow
+          key="wip"
+          id={rowId("wip")}
+          top={item.start}
+          changes={changes}
+          lane={headRow?.lane ?? 0}
+          color={headRow?.color ?? 0}
+          clipped={clipped}
+          selected={selection?.kind === "wip"}
+          onSelect={onSelectWip}
+          onContextMenu={onRowContextMenu}
+        />
+      );
+    }
+    const row = rows.get(index);
+    if (!row) return <PlaceholderRow key={item.key} top={item.start} />;
+    activeShown ||= active === row.hash;
+    return (
+      // Keyed by position: while the graph reloads, rows of two versions can show a commit
+      // twice, and rows that moved only need moving.
+      <CommitRow
+        key={item.key}
+        id={rowId(row.hash)}
+        top={item.start}
+        row={row}
+        refs={refsByHash.get(row.hash) ?? EMPTY_REFS}
+        clipped={clipped}
+        isHead={row.hash === headHash}
+        isStash={stashes.has(row.hash)}
+        wipAbove={offset > 0 && index === 0 && row.hash === headHash}
+        index={index}
+        selected={hashes.has(row.hash)}
+        now={now}
+        onPress={onPress}
+        onContextMenu={onRowContextMenu}
+        onRefDoubleClick={onRefDoubleClick}
+        avatarProviders={avatarProviders}
+      />
+    );
+  });
+
   return (
-    <div className="flex h-full min-w-0 flex-col">
-      <Header graphWidth={graphWidth} onFitGraph={refit} />
-      <ContextMenu>
+    <div
+      className="flex h-full min-w-0 flex-col"
+      // Rows size their cells from these, so that resizing a column does not render them.
+      style={
+        {
+          "--col-refs": `${widths.refs}px`,
+          "--col-graph": `${widths.graph}px`,
+          "--col-author": `${widths.author}px`,
+          "--col-date": `${widths.date}px`,
+        } as React.CSSProperties
+      }
+    >
+      <Header widths={widths} onResize={onResize} onFitGraph={refit} />
+      <ContextMenu {...menu.rootProps}>
         <ContextMenuTrigger
           render={
             <div
               ref={scrollRef}
               tabIndex={0}
+              role="listbox"
+              aria-label="Commits"
+              aria-multiselectable
+              aria-activedescendant={activeShown && active !== null ? rowId(active) : undefined}
               onKeyDown={(e) => {
                 scrolledByUser();
                 onKeyDown(e);
@@ -368,53 +639,11 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
               }}
               onWheel={scrolledByUser}
               onPointerDown={scrolledByUser}
-              className="relative min-h-0 flex-1 overflow-auto outline-none [contain:strict]"
+              className="focus-visible:ring-ring/50 relative min-h-0 flex-1 overflow-auto outline-none [contain:strict] focus-visible:ring-2 focus-visible:ring-inset"
             />
           }
         >
-          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-            {items.map((item) => {
-              const index = item.index - offset;
-              const style = { transform: `translateY(${item.start}px)`, height: ROW_HEIGHT };
-              if (index < 0) {
-                return (
-                  <WipRow
-                    key="wip"
-                    style={style}
-                    changes={changes}
-                    lane={headRow?.hash === headHash ? (headRow?.lane ?? 0) : 0}
-                    color={headRow?.hash === headHash ? (headRow?.color ?? 0) : 0}
-                    graphWidth={graphWidth}
-                    clipped={clipped}
-                    selected={selection?.kind === "wip"}
-                    onSelect={() => select(repo, { kind: "wip" })}
-                    onContextMenu={() => onRowContextMenu(null)}
-                  />
-                );
-              }
-              const row = rows.get(index);
-              if (!row) return <PlaceholderRow key={item.key} style={style} />;
-              return (
-                <CommitRow
-                  key={row.hash}
-                  repo={repo}
-                  style={style}
-                  row={row}
-                  refs={refsByHash.get(row.hash) ?? EMPTY_REFS}
-                  graphWidth={graphWidth}
-                  clipped={clipped}
-                  isHead={row.hash === headHash}
-                  isStash={stashes.has(row.hash)}
-                  wipAbove={offset > 0 && index === 0 && row.hash === headHash}
-                  index={index}
-                  selected={hashes.has(row.hash)}
-                  onPress={onPress}
-                  onContextMenu={onRowContextMenu}
-                  avatarProviders={avatarProviders}
-                />
-              );
-            })}
-          </div>
+          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>{rendered}</div>
           {(isPending || (info && !info.complete && info.count === 0)) && (
             <div className="text-muted-foreground absolute inset-0 flex items-center justify-center gap-2 text-sm">
               <Spinner /> Loading history…
@@ -426,41 +655,68 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
             </div>
           )}
         </ContextMenuTrigger>
-        <CommitContextMenu repo={repo} target={menu} stashes={refsData?.stashes ?? []} />
+        {menu.target && (
+          <CommitContextMenu repo={repo} target={menu.target} stashes={refsData?.stashes ?? []} />
+        )}
       </ContextMenu>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Header with resizable columns
 // ---------------------------------------------------------------------------
 
-function Header({ graphWidth, onFitGraph }: { graphWidth: number; onFitGraph: () => void }) {
-  const columns = useColumns();
+type Widths = Readonly<Record<Column, number>>;
+type OnResize = (col: Column, width: number, done: boolean) => void;
+
+function Header({
+  widths,
+  onResize,
+  onFitGraph,
+}: {
+  widths: Widths;
+  onResize: OnResize;
+  onFitGraph: () => void;
+}) {
   return (
     <div className="text-muted-foreground bg-background flex h-7 shrink-0 items-center border-b text-[10px] font-semibold tracking-wider uppercase select-none">
-      <div className="relative shrink-0 truncate px-3" style={{ width: columns.refs }}>
+      <div className="relative shrink-0 truncate px-3" style={{ width: widths.refs }}>
         Branch / Tag
-        <Resizer width={columns.refs} min={MIN_REFS} onResize={(w) => columns.set("refs", w)} />
+        <Resizer
+          label="Branch / Tag"
+          col="refs"
+          width={widths.refs}
+          min={MIN_REFS}
+          onResize={onResize}
+        />
       </div>
-      <div className="relative shrink-0 truncate px-2" style={{ width: graphWidth }}>
+      <div className="relative shrink-0 truncate px-2" style={{ width: widths.graph }}>
         Graph
         <Resizer
-          width={graphWidth}
+          label="Graph"
+          col="graph"
+          width={widths.graph}
           min={LANE_WIDTH * 2}
-          onResize={(w) => columns.set("graph", w)}
+          onResize={onResize}
           onReset={onFitGraph}
           title="Drag to resize, double-click to fit the lanes"
         />
       </div>
       <div className="min-w-0 flex-1 truncate px-2">Commit message</div>
-      <div className="relative shrink-0 truncate px-2" style={{ width: columns.author }}>
-        <Resizer left width={columns.author} min={40} onResize={(w) => columns.set("author", w)} />
+      <div className="relative shrink-0 truncate px-2" style={{ width: widths.author }}>
+        <Resizer
+          left
+          label="Author"
+          col="author"
+          width={widths.author}
+          min={40}
+          onResize={onResize}
+        />
         Author
       </div>
-      <div className="relative shrink-0 truncate px-2" style={{ width: columns.date }}>
-        <Resizer left width={columns.date} min={40} onResize={(w) => columns.set("date", w)} />
+      <div className="relative shrink-0 truncate px-2" style={{ width: widths.date }}>
+        <Resizer left label="Date" col="date" width={widths.date} min={40} onResize={onResize} />
         Date
       </div>
       <div className="w-[76px] shrink-0 truncate px-2">SHA</div>
@@ -468,8 +724,16 @@ function Header({ graphWidth, onFitGraph }: { graphWidth: number; onFitGraph: ()
   );
 }
 
-/** Drag handle on a column's edge; `left` handles grow the column when dragged left. */
+/** Pixels an arrow key resizes a column by. */
+const KEY_STEP = 16;
+
+/**
+ * Drag handle on a column's edge; `left` handles grow the column when dragged left. The width
+ * is reported while dragging, then once more with `done` when the drag ends.
+ */
 function Resizer({
+  label,
+  col,
   width,
   min,
   onResize,
@@ -477,38 +741,66 @@ function Resizer({
   left,
   title,
 }: {
+  label: string;
+  col: Column;
   width: number;
   min: number;
-  onResize: (width: number) => void;
+  onResize: OnResize;
   onReset?: () => void;
   left?: boolean;
   title?: string;
 }) {
   return (
     <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Resize the ${label} column`}
+      aria-valuenow={Math.round(width)}
+      aria-valuemin={min}
+      tabIndex={0}
       className={cn(
-        "hover:bg-primary/60 absolute top-0 z-10 h-full w-1 cursor-col-resize",
+        "hover:bg-primary/60 focus-visible:bg-primary/60 absolute top-0 z-10 h-full w-1 cursor-col-resize outline-none",
         left ? "left-0" : "right-0",
       )}
       title={title}
       onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        const grow = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (grow !== 0) {
+          e.preventDefault();
+          onResize(col, Math.max(min, width + (left ? -grow : grow) * KEY_STEP), true);
+        } else if (e.key === "Enter" && onReset) {
+          e.preventDefault();
+          onReset();
+        }
+      }}
       onPointerDown={(e) => {
+        if (e.button !== 0) return;
         e.preventDefault();
         const target = e.currentTarget;
         target.setPointerCapture(e.pointerId);
         // Measure from where the drag started: this handler outlives the render it came from.
         const start = width;
         const x0 = e.clientX;
+        let last = start;
         const move = (ev: PointerEvent) => {
           const delta = ev.clientX - x0;
-          onResize(Math.max(min, start + (left ? -delta : delta)));
+          last = Math.max(min, start + (left ? -delta : delta));
+          onResize(col, last, false);
         };
-        const up = () => {
+        // A cancelled drag, or one that lost its capture, ends too: otherwise hovering over
+        // the handle would go on resizing.
+        const end = () => {
           target.removeEventListener("pointermove", move);
-          target.removeEventListener("pointerup", up);
+          target.removeEventListener("pointerup", end);
+          target.removeEventListener("pointercancel", end);
+          target.removeEventListener("lostpointercapture", end);
+          onResize(col, last, true);
         };
         target.addEventListener("pointermove", move);
-        target.addEventListener("pointerup", up);
+        target.addEventListener("pointerup", end);
+        target.addEventListener("pointercancel", end);
+        target.addEventListener("lostpointercapture", end);
       }}
     />
   );
@@ -524,12 +816,17 @@ const rowClass = (selected: boolean) =>
     selected ? "bg-primary/25" : "hover:bg-muted/60",
   );
 
+const rowStyle = (top: number): React.CSSProperties => ({
+  transform: `translateY(${top}px)`,
+  height: ROW_HEIGHT,
+});
+
 interface CommitRowProps {
-  readonly repo: RepoId;
-  readonly style: React.CSSProperties;
+  readonly id: string;
+  /** Where the row is in the list, in pixels. */
+  readonly top: number;
   readonly row: GraphRow;
   readonly refs: readonly Ref[];
-  readonly graphWidth: number;
   /** The graph column cuts off rows on screen. */
   readonly clipped: boolean;
   readonly isHead: boolean;
@@ -537,46 +834,43 @@ interface CommitRowProps {
   readonly wipAbove: boolean;
   readonly index: number;
   readonly selected: boolean;
+  /** The time dates are relative to, in seconds. */
+  readonly now: number;
   readonly onPress: (row: GraphRow, index: number, e: React.MouseEvent) => void;
   readonly onContextMenu: (row: GraphRow) => void;
+  readonly onRefDoubleClick: (ref: Ref) => void;
   readonly avatarProviders: readonly AvatarProvider[];
 }
 
+/** A commit's row; its props stay the same from render to render, so scrolling skips it. */
 const CommitRow = memo(function CommitRow(p: CommitRowProps) {
-  const columns = useColumns();
   const { row } = p;
   // Stashes have no pill.
   const hasPills = p.refs.some((r) => r.kind !== "stash");
   return (
     <div
+      id={p.id}
+      role="option"
+      aria-selected={p.selected}
       className={rowClass(p.selected)}
-      style={p.style}
+      style={rowStyle(p.top)}
       onMouseDown={(e) => {
         if (e.button === 0) p.onPress(row, p.index, e);
       }}
       onContextMenu={() => p.onContextMenu(row)}
     >
       {/* A query container: pills drop their icons as the column narrows. */}
-      <div
-        className="@container flex shrink-0 items-center overflow-hidden pl-2"
-        style={{ width: columns.refs }}
-      >
-        <RefPills
-          refs={p.refs}
-          color={row.color}
-          onDoubleClick={(r) => void commands.checkoutRef(p.repo, r)}
-        />
+      <div className="@container flex w-(--col-refs) shrink-0 items-center overflow-hidden pl-2">
+        <RefPills refs={p.refs} color={row.color} onDoubleClick={p.onRefDoubleClick} />
         {hasPills && (
           <div className="h-0.5 min-w-2 flex-1" style={{ backgroundColor: laneColor(row.color) }} />
         )}
       </div>
       <div
-        className={cn("relative shrink-0 overflow-hidden", p.clipped && CLIPPED)}
-        style={{ width: p.graphWidth }}
+        className={cn("relative w-(--col-graph) shrink-0 overflow-hidden", p.clipped && CLIPPED)}
       >
         <GraphCell
           row={row}
-          width={p.graphWidth}
           isHead={p.isHead}
           isStash={p.isStash}
           wipAbove={p.wipAbove}
@@ -592,19 +886,15 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
       >
         {row.subject}
       </div>
-      <div
-        className="flex shrink-0 items-center gap-1.5 overflow-hidden px-2"
-        style={{ width: columns.author }}
-      >
+      <div className="flex w-(--col-author) shrink-0 items-center gap-1.5 overflow-hidden px-2">
         <Avatar name={row.authorName} email={row.authorEmail} providers={p.avatarProviders} />
         <span className="text-muted-foreground truncate text-xs">{row.authorName}</span>
       </div>
       <div
-        className="text-muted-foreground shrink-0 truncate px-2 text-xs tabular-nums"
-        style={{ width: columns.date }}
+        className="text-muted-foreground w-(--col-date) shrink-0 truncate px-2 text-xs tabular-nums"
         title={absoluteTime(row.authorTime)}
       >
-        {relativeTime(row.authorTime)}
+        {relativeTime(row.authorTime, p.now)}
       </div>
       <div className="text-muted-foreground w-[76px] shrink-0 truncate px-2 font-mono text-[11px]">
         {shortHash(row.hash)}
@@ -613,31 +903,32 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
   );
 });
 
-function WipRow(p: {
-  style: React.CSSProperties;
+const WipRow = memo(function WipRow(p: {
+  id: string;
+  top: number;
   changes: number;
   lane: number;
   color: number;
-  graphWidth: number;
   clipped: boolean;
   selected: boolean;
   onSelect: () => void;
-  onContextMenu: () => void;
+  onContextMenu: (row: null) => void;
 }) {
-  const columns = useColumns();
   return (
     <div
+      id={p.id}
+      role="option"
+      aria-selected={p.selected}
       className={rowClass(p.selected)}
-      style={p.style}
+      style={rowStyle(p.top)}
       onMouseDown={(e) => e.button === 0 && p.onSelect()}
-      onContextMenu={p.onContextMenu}
+      onContextMenu={() => p.onContextMenu(null)}
     >
-      <div className="shrink-0" style={{ width: columns.refs }} />
+      <div className="w-(--col-refs) shrink-0" />
       <div
-        className={cn("relative shrink-0 overflow-hidden", p.clipped && CLIPPED)}
-        style={{ width: p.graphWidth }}
+        className={cn("relative w-(--col-graph) shrink-0 overflow-hidden", p.clipped && CLIPPED)}
       >
-        <WipGraphCell lane={p.lane} color={p.color} width={p.graphWidth} />
+        <WipGraphCell lane={p.lane} color={p.color} />
       </div>
       <div className="text-muted-foreground flex min-w-0 flex-1 items-center gap-2 px-2 italic">
         <span>{"// WIP"}</span>
@@ -647,11 +938,15 @@ function WipRow(p: {
       </div>
     </div>
   );
-}
+});
 
-function PlaceholderRow({ style }: { style: React.CSSProperties }) {
+function PlaceholderRow({ top }: { top: number }) {
   return (
-    <div className="absolute top-0 left-0 flex w-full items-center px-3" style={style}>
+    <div
+      className="absolute top-0 left-0 flex w-full items-center px-3"
+      style={rowStyle(top)}
+      aria-hidden
+    >
       <div className="bg-muted/50 h-2.5 w-1/3 rounded" />
     </div>
   );

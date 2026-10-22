@@ -30,6 +30,8 @@ export default defineConfig({
     plugins: [react(), tailwindcss()],
     // ES module workers can code-split (shiki loads grammars on demand).
     worker: { format: "es" },
-    build: { minify: true, sourcemap: true },
+    // Hidden maps: written for local debugging but not referenced from the bundles, and
+    // electron-builder.yml leaves them out of the packages.
+    build: { minify: true, sourcemap: "hidden" },
   },
 });

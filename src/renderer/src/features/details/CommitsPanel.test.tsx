@@ -7,7 +7,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { type PickedCommit, useRepoUiStore } from "@/stores/repo-ui";
 import { CommitsPanel } from "./CommitsPanel";
 
-const mocks = vi.hoisted(() => ({ compared: [] as unknown[][] }));
+const mocks = vi.hoisted(() => ({
+  compared: [] as unknown[][],
+  more: {} as Partial<Comparison>,
+}));
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
@@ -32,6 +35,7 @@ vi.mock("@/lib/api", () => ({
           },
           { path: "b.ts", oldPath: null, kind: "added", additions: 2, deletions: 0, binary: false },
         ],
+        ...mocks.more,
       } satisfies Comparison;
     }
     throw new Error(`unexpected ${method}`);
@@ -48,7 +52,6 @@ const picked = (i: number, parents = [`p${i}`]): PickedCommit => ({
     authorName: "Ada",
     authorEmail: "ada@example.com",
     authorTime: 1_700_000_000,
-    committerTime: 0,
     lane: 0,
     color: 0,
     edges: [],
@@ -60,8 +63,11 @@ let root: Root;
 let container: HTMLElement;
 
 beforeEach(() => {
+  // Gives the virtualized file lists a viewport, so that rows render.
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.compared = [];
+  mocks.more = {};
   useRepoUiStore.setState({ byRepo: {} });
   container = document.createElement("div");
   document.body.append(container);
@@ -71,6 +77,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
 });
 
 async function render(commits: PickedCommit[]) {
@@ -95,7 +102,7 @@ it("lists the commits and the changes from the oldest one's parent to the newest
   expect(container.textContent).toContain("+5 -1");
 
   // Files open as diffs over the range; a commit opens on its own.
-  const file = [...container.querySelectorAll("li")].find((li) =>
+  const file = [...container.querySelectorAll<HTMLElement>("[role=option]")].find((li) =>
     li.textContent?.includes("b.ts"),
   )!;
   await act(async () => file.click());
@@ -113,6 +120,13 @@ it("lists the commits and the changes from the oldest one's parent to the newest
     kind: "commit",
     hash: "4".repeat(40),
   });
+});
+
+it("says how many files a truncated comparison leaves out", async () => {
+  mocks.more = { truncated: true, totalFiles: 10_002 };
+  await render([picked(1), picked(4)]);
+  expect(container.textContent).toContain("10,002 files changed");
+  expect(container.textContent).toContain("…and 10,000 more files");
 });
 
 it("compares a root commit with the empty tree", async () => {

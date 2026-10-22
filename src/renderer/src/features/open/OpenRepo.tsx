@@ -1,5 +1,5 @@
 import type { RepoId, RepoLocation } from "@shared/domain";
-import { repoDisplayName, repoLocationOf } from "@shared/domain";
+import { repoDisplayName, repoIdOf, repoLocationOf } from "@shared/domain";
 import {
   IconArrowUp,
   IconFolder,
@@ -9,7 +9,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,28 +26,64 @@ import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 import logo from "@/assets/icon.svg";
 import { api, ApiError, modKey, useEvent } from "@/lib/api";
+import { seedOpenedRepo } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { useStatusStore } from "@/stores/status";
 import { useTabs } from "@/stores/tabs";
 
-/** Opens a repository location in the active tab, reporting failures. */
-export const openLocation = async (location: RepoLocation, tabKey?: string): Promise<boolean> => {
+/**
+ * Opens running per location. The main process shares one open between them, so one that was
+ * cancelled must not close a repository that another one still opens.
+ */
+const inFlight = new Map<RepoId, number>();
+
+/** Whether an open other than the caller's own (of `location`) may still show `id`. */
+const openedElsewhere = (location: RepoLocation, id: RepoId) =>
+  useTabs.getState().tabs.some((t) => t.repo === id) ||
+  (inFlight.get(repoIdOf(location)) ?? 0) > 1 ||
+  (id !== repoIdOf(location) && (inFlight.get(id) ?? 0) > 0);
+
+/**
+ * Opens a repository location in the active tab, reporting failures. Once `signal` aborts (the
+ * user cancelled), a repository that opens anyway is not shown.
+ */
+export const openLocation = async (
+  location: RepoLocation,
+  tabKey?: string,
+  signal?: AbortSignal,
+): Promise<boolean> => {
   // Opening first gives the tab the repository's own id (e.g. for a subdirectory).
   const done = useStatusStore
     .getState()
     .startActivity(
       location.kind === "ssh" ? `Connecting to ${location.host}…` : "Opening repository…",
     );
+  // Once cancelled, it is no longer the user's business, even while the connection settles.
+  signal?.addEventListener("abort", done, { once: true });
+  const key = repoIdOf(location);
+  inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
   try {
     const info = await api("repo.open", location);
+    if (signal?.aborted) {
+      // Nothing shows it: close it again, unless something else does or is about to.
+      if (!openedElsewhere(location, info.id)) void api("repo.close", info.id).catch(() => {});
+      return false;
+    }
+    // The tab shows the repository without asking for it again.
+    seedOpenedRepo(info);
     useTabs.getState().openRepo(info.id, tabKey);
     return true;
   } catch (e) {
+    if (signal?.aborted) return false;
     toast.error("Could not open repository", {
       description: e instanceof ApiError ? e.message : String(e),
     });
     return false;
   } finally {
+    const left = inFlight.get(key)! - 1;
+    if (left > 0) inFlight.set(key, left);
+    else inFlight.delete(key);
+    signal?.removeEventListener("abort", done);
     done();
   }
 };
@@ -60,8 +96,8 @@ export const pickLocalRepository = async (tabKey?: string) => {
 export const useRemoteDialog = create<{
   open: boolean;
   tabKey: string | undefined;
-  show(tabKey?: string): void;
-  hide(): void;
+  show: (tabKey?: string) => void;
+  hide: () => void;
 }>()((set) => ({
   open: false,
   tabKey: undefined,
@@ -158,27 +194,28 @@ function RecentItem({
 }) {
   const loc = repoLocationOf(id);
   return (
-    <li
-      className="group hover:bg-muted flex h-10 cursor-default items-center gap-3 rounded-lg px-3"
-      onClick={onOpen}
-    >
-      {loc.kind === "ssh" ? (
-        <IconServer className="size-4 shrink-0 text-sky-400" />
-      ) : (
-        <IconFolder className="text-muted-foreground size-4 shrink-0" />
-      )}
-      <span className="text-sm font-medium">{repoDisplayName(loc)}</span>
-      <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
-        {loc.kind === "ssh" ? `${loc.host}:${loc.path}` : loc.path}
-      </span>
+    <li className="group hover:bg-muted focus-within:bg-muted flex h-10 items-center gap-1 rounded-lg pr-2">
       <button
         type="button"
-        className="hover:bg-background flex size-6 items-center justify-center rounded opacity-0 group-hover:opacity-100"
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
+        className="flex h-full min-w-0 flex-1 cursor-default items-center gap-3 rounded-lg pl-3 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        onClick={onOpen}
+      >
+        {loc.kind === "ssh" ? (
+          <IconServer className="size-4 shrink-0 text-sky-400" />
+        ) : (
+          <IconFolder className="text-muted-foreground size-4 shrink-0" />
+        )}
+        <span className="text-sm font-medium">{repoDisplayName(loc)}</span>
+        <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+          {loc.kind === "ssh" ? `${loc.host}:${loc.path}` : loc.path}
+        </span>
+      </button>
+      <button
+        type="button"
+        className="hover:bg-background flex size-6 shrink-0 items-center justify-center rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        onClick={onRemove}
         aria-label="Remove from recent"
+        title="Remove from recent"
       >
         <IconX className="size-3.5" />
       </button>
@@ -208,9 +245,13 @@ function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone
   const [path, setPathValue] = useState<string | null>(null);
   const [pathDraft, setPathDraft] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
-  // Until the user picks a host, default to the first one from ~/.ssh/config.
+  // Suggest the first host from ~/.ssh/config, but connect only when asked: connecting can
+  // prompt for a key touch or a second factor, or reach a host the user did not mean.
   const host = hostDraft || hosts.data?.[0] || "";
-  const browseHost = chosenHost ?? (hosts.data?.[0] || null);
+  const browseHost = chosenHost;
+  // Cancelling (or closing the dialog) gives up an open that is still running.
+  const pending = useRef<AbortController | null>(null);
+  useEffect(() => () => pending.current?.abort(), []);
   const setPath = (p: string | null) => {
     setPathValue(p);
     setPathDraft(null);
@@ -227,10 +268,18 @@ function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone
   const pathInput = pathDraft ?? listing.data?.path ?? "";
 
   const open = async (target: string) => {
-    if (!browseHost) return;
+    if (!browseHost || pending.current) return;
+    const controller = new AbortController();
+    pending.current = controller;
     setOpening(true);
     localStorage.setItem(LAST_HOST_KEY, browseHost);
-    const ok = await openLocation({ kind: "ssh", host: browseHost, path: target }, tabKey);
+    const ok = await openLocation(
+      { kind: "ssh", host: browseHost, path: target },
+      tabKey,
+      controller.signal,
+    );
+    if (controller.signal.aborted) return;
+    pending.current = null;
     setOpening(false);
     if (ok) onDone();
   };
@@ -281,6 +330,11 @@ function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone
         </Button>
       </form>
 
+      {!browseHost && (
+        <p className="text-muted-foreground text-sm">
+          Choose a host and press Connect to browse its folders.
+        </p>
+      )}
       {browseHost && (
         <div className="flex min-h-0 flex-1 flex-col gap-2">
           <form
@@ -319,30 +373,35 @@ function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone
             ) : listing.data?.entries.length === 0 ? (
               <div className="text-muted-foreground p-4 text-sm">Empty directory</div>
             ) : (
-              <ul className="py-1">
+              <ul className="py-1" aria-label={`Folders in ${cwd}`}>
                 {listing.data?.entries.map((e) => (
                   <li
                     key={e.name}
                     className={cn(
-                      "hover:bg-muted flex h-7 cursor-default items-center gap-2 px-3 text-[13px] select-none",
+                      "hover:bg-muted focus-within:bg-muted flex h-7 items-center gap-2 pr-3 text-[13px] select-none",
                       e.name.startsWith(".") && "text-muted-foreground",
                     )}
-                    onClick={() => (e.isRepo ? void open(join(e.name)) : setPath(join(e.name)))}
                   >
-                    {e.isRepo ? (
-                      <IconGitBranch className="text-primary size-4" />
-                    ) : (
-                      <IconFolder className="text-muted-foreground size-4" />
-                    )}
-                    <span className="flex-1 truncate">{e.name}</span>
+                    <button
+                      type="button"
+                      disabled={opening}
+                      title={e.isRepo ? `Open ${e.name}` : undefined}
+                      className="flex h-full min-w-0 flex-1 cursor-default items-center gap-2 pl-3 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset disabled:opacity-60"
+                      onClick={() => (e.isRepo ? void open(join(e.name)) : setPath(join(e.name)))}
+                    >
+                      {e.isRepo ? (
+                        <IconGitBranch className="text-primary size-4 shrink-0" />
+                      ) : (
+                        <IconFolder className="text-muted-foreground size-4 shrink-0" />
+                      )}
+                      <span className="flex-1 truncate">{e.name}</span>
+                    </button>
                     {e.isRepo && (
                       <button
                         type="button"
                         className="text-muted-foreground hover:text-foreground text-[11px]"
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          setPath(join(e.name));
-                        }}
+                        aria-label={`Browse ${e.name}`}
+                        onClick={() => setPath(join(e.name))}
                       >
                         browse
                       </button>
@@ -356,7 +415,13 @@ function RemoteRepoBody({ tabKey, onDone }: { tabKey: string | undefined; onDone
       )}
 
       <DialogFooter>
-        <Button variant="ghost" onClick={onDone}>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            pending.current?.abort();
+            onDone();
+          }}
+        >
           Cancel
         </Button>
         <Button disabled={!listing.data || opening} onClick={() => void open(cwd)}>

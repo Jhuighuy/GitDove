@@ -11,7 +11,8 @@ import { DiffView } from "./DiffView";
 const mocks = vi.hoisted(() => ({
   patches: [] as unknown[][],
   ensured: [] as unknown[][],
-  diffs: new Map<string, FileDiff | Error>(),
+  diffs: new Map<string, FileDiff | Error | Promise<FileDiff>>(),
+  applyError: null as Error | null,
   highlight: true,
 }));
 
@@ -20,10 +21,11 @@ vi.mock("@/lib/api", () => ({
   api: async (method: string, _repo: string, ...args: unknown[]) => {
     if (method === "repo.applyPatch") {
       mocks.patches.push(args);
+      if (mocks.applyError) throw mocks.applyError;
       return undefined;
     }
     if (method === "repo.diff") {
-      const d = mocks.diffs.get((args[0] as DiffTarget).path);
+      const d = await mocks.diffs.get((args[0] as DiffTarget).path);
       if (d instanceof Error) throw d;
       return d;
     }
@@ -95,6 +97,7 @@ beforeEach(() => {
   mocks.patches = [];
   mocks.ensured = [];
   mocks.highlight = true;
+  mocks.applyError = null;
   mocks.diffs = new Map([["src/a.ts", diff("src/a.ts")]]);
   useLayout.setState({ diffMode: "unified", diffViews: {} });
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
@@ -112,8 +115,10 @@ afterEach(() => {
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)));
 
-async function render(target: DiffTarget = { kind: "unstaged", path: "src/a.ts" }) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+async function render(
+  target: DiffTarget = { kind: "unstaged", path: "src/a.ts" },
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -451,4 +456,129 @@ it("keeps the rows a text selection ends in mounted while scrolling, until it co
   sel.removeAllRanges();
   await scrollTo(4020);
   expect(mounted(2)).toBe(false);
+});
+
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+};
+const buttons = () => [...container.querySelectorAll("button")].map((b) => b.textContent);
+
+it("offers no actions or selection on the previous diff while another loads", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await render({ kind: "staged", path: "src/a.ts" }, client);
+  await mouse(1, "mousedown");
+  expect(status()).toBe("1 line selected");
+  expect(buttons()).toContain("Unstage Hunk");
+
+  // The unstaged diff of another file is on its way; the staged one stays on screen meanwhile.
+  const next = deferred<FileDiff>();
+  mocks.diffs.set("src/b.ts", next.promise);
+  await render({ kind: "unstaged", path: "src/b.ts" }, client);
+  expect(line(1).textContent).toContain("const a = 1;");
+  expect(status()).toBeNull();
+  expect(buttons().filter((b) => b?.includes("Hunk"))).toEqual([]);
+  await mouse(1, "mousedown");
+  expect(status()).toBeNull();
+
+  await act(async () => next.resolve(diff("src/b.ts")));
+  await settle();
+  expect(buttons()).toContain("Discard Hunk");
+  await mouse(1, "mousedown");
+  expect(status()).toBe("1 line selected");
+});
+
+it("clears the selection when the target changes", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await render(undefined, client);
+  await mouse(1, "mousedown");
+  expect(status()).toBe("1 line selected");
+  // The same diff, staged instead of unstaged.
+  await render({ kind: "staged", path: "src/a.ts" }, client);
+  expect(status()).toBeNull();
+});
+
+it("keeps the line selection when applying it fails", async () => {
+  await render();
+  await mouse(1, "mousedown");
+  mocks.applyError = new Error("patch does not apply");
+  await act(async () => buttonByText("Stage Lines").click());
+  await settle();
+  expect(mocks.patches).toHaveLength(1);
+  expect(status()).toBe("1 line selected");
+});
+
+it("offers nothing on read-only diffs, nor on the last hunk of a truncated one", async () => {
+  mocks.diffs.set("conflict.ts", diff("conflict.ts", { readOnly: "conflict" }));
+  await render({ kind: "unstaged", path: "conflict.ts" });
+  expect(container.textContent).toContain("Read-only");
+  expect(buttons().filter((b) => b?.includes("Hunk"))).toEqual([]);
+  await mouse(1, "mousedown");
+  expect(status()).toBeNull();
+
+  mocks.diffs.set("big.ts", diff("big.ts", { truncated: true }));
+  await render({ kind: "unstaged", path: "big.ts" });
+  expect(buttons().filter((b) => b === "Stage Hunk")).toHaveLength(1);
+  // Line 5 is in the last hunk.
+  await mouse(5, "mousedown");
+  expect(status()).toBeNull();
+  await mouse(1, "mousedown");
+  expect(status()).toBe("1 line selected");
+});
+
+it("tells empty created and deleted files apart from no changes", async () => {
+  mocks.diffs.set("new.txt", diff("new.txt", { hunks: [], created: true }));
+  mocks.diffs.set("gone.txt", diff("gone.txt", { hunks: [], deleted: true }));
+  await render({ kind: "staged", path: "new.txt" });
+  expect(container.textContent).toContain("Empty file added.");
+  await render({ kind: "staged", path: "gone.txt" });
+  expect(container.textContent).toContain("Empty file deleted.");
+});
+
+it("leaves the line alone when its text is double-clicked", async () => {
+  await render();
+  const press = (id: number, detail: number) =>
+    act(async () => {
+      const at = { bubbles: true, button: 0, clientX: 10, clientY: 10, detail };
+      textOf(id).dispatchEvent(new MouseEvent("mousedown", at));
+      textOf(id).dispatchEvent(new MouseEvent("mouseup", at));
+    });
+  await mouse(6, "mousedown");
+  // The first click selects the line, the second one takes that back.
+  await press(1, 1);
+  expect(selectedIds()).toEqual([1]);
+  await press(1, 2);
+  expect(selectedIds()).toEqual([6]);
+});
+
+it("shows the next file from the top", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const lines = Array.from({ length: 300 }, (_, i) => ctx(i + 1, i + 1, `line ${i}`));
+  const hunk = { header: "@@ -1,300 +1,300 @@", oldStart: 1, oldLines: 300, newStart: 1 };
+  for (const path of ["one.txt", "two.txt"]) {
+    mocks.diffs.set(path, { ...diff(path), hunks: [{ ...hunk, newLines: 300, lines }] });
+  }
+  await render({ kind: "unstaged", path: "one.txt" }, client);
+  const scroller = container.querySelector<HTMLElement>(".overflow-auto.font-mono")!;
+  await act(async () => {
+    scroller.scrollTop = 4000;
+    scroller.dispatchEvent(new Event("scroll"));
+  });
+  // A refresh of the same file keeps the position.
+  await act(async () => client.invalidateQueries());
+  await settle();
+  expect(scroller.scrollTop).toBe(4000);
+  await render({ kind: "unstaged", path: "two.txt" }, client);
+  expect(scroller.scrollTop).toBe(0);
+});
+
+it("cuts very long lines short", async () => {
+  const long = "x".repeat(12_345);
+  mocks.diffs.set("min.js", {
+    ...diff("min.js"),
+    hunks: [{ ...diff("min.js").hunks[1]!, lines: [del(10, "x"), add(9, long)] }],
+  });
+  await render({ kind: "unstaged", path: "min.js" });
+  expect(textOf(1).textContent).toBe(`${"x".repeat(10_000)} … 2,345 more characters`);
 });

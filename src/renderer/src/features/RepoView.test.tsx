@@ -10,7 +10,7 @@ import { RepoView } from "./RepoView";
 const mocks = vi.hoisted(() => ({
   api: [] as unknown[][],
   commands: [] as unknown[][],
-  refreshed: [] as string[],
+  refreshed: [] as unknown[][],
   listeners: new Map<string, Set<(payload: unknown) => void>>(),
   openError: null as Error | null,
   open: null as (() => void) | null,
@@ -25,7 +25,7 @@ vi.mock("@/lib/api", async () => {
       if (method === "repo.open") {
         if (mocks.open) await new Promise<void>((r) => (mocks.open = r));
         if (mocks.openError) throw mocks.openError;
-        return { name: "repo" };
+        return { name: "repo", head: { branch: "main", hash: "h" } };
       }
       if (method === "app.setState") return undefined;
       throw new Error(`unexpected ${method}`);
@@ -45,8 +45,8 @@ vi.mock("@/lib/api", async () => {
 });
 vi.mock("@/lib/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/queries")>()),
-  refreshRepo: (repo: string) => {
-    mocks.refreshed.push(repo);
+  refreshRepo: (repo: string, scopes?: readonly string[]) => {
+    mocks.refreshed.push(scopes ? [repo, ...scopes] : [repo]);
     return Promise.resolve();
   },
 }));
@@ -133,6 +133,20 @@ it("shows progress while opening, then the repository layout", async () => {
   expect(["toolbar", "sidebar", "graph", "details"].map(has)).toEqual([true, true, true, true]);
 });
 
+it("seeds the repository info from opening it", async () => {
+  const client = new QueryClient();
+  const { keys } = await import("@/lib/queries");
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <RepoView repo={repo} active />
+      </QueryClientProvider>,
+    ),
+  );
+  await settle();
+  expect(client.getQueryData(keys.info(repo))).toMatchObject({ head: { branch: "main" } });
+});
+
 it("says it is opening a local repository", async () => {
   mocks.open = () => {};
   await render();
@@ -140,13 +154,22 @@ it("says it is opening a local repository", async () => {
   await act(async () => mocks.open?.());
 });
 
-it("shows the diff instead of the graph, and hides panels", async () => {
+it("shows the diff over the graph, and hides panels", async () => {
   await render();
+  const graph = container.querySelector("[data-testid=graph]")!;
   await act(async () =>
     useRepoUiStore.getState().openDiff(repo, { kind: "unstaged", path: "a.ts" }),
   );
-  expect(has("graph")).toBe(false);
+  // The graph stays mounted, keeping its scroll position, but cannot be reached.
+  expect(container.querySelector("[data-testid=graph]")).toBe(graph);
+  expect(graph.closest("[inert]")).not.toBeNull();
   expect(container.querySelector("[data-testid=diff]")?.textContent).toBe("a.ts");
+  await act(async () => useRepoUiStore.getState().openDiff(repo, null));
+  expect(graph.closest("[inert]")).toBeNull();
+  expect(has("diff")).toBe(false);
+  await act(async () =>
+    useRepoUiStore.getState().openDiff(repo, { kind: "unstaged", path: "a.ts" }),
+  );
   await act(async () => useLayout.setState({ sidebar: false, details: false }));
   expect(has("sidebar")).toBe(false);
   expect(has("details")).toBe(false);
@@ -156,14 +179,14 @@ it("runs menu commands in the active tab only", async () => {
   await render();
   for (const c of ["refresh", "fetch", "pull", "push", "stash", "pop", "new-branch", "open-repo"])
     await menu(c);
-  expect(mocks.refreshed).toEqual([repo]);
+  expect(mocks.refreshed).toEqual([[repo]]);
   expect(mocks.commands).toEqual([
     ["fetch", repo],
     ["pull", repo],
     ["push", repo],
     ["stash", repo],
     ["pop", repo],
-    ["createBranch", repo, "HEAD"],
+    ["createBranch", repo, "HEAD", "main"],
   ]);
   await menu("toggle-sidebar");
   await menu("toggle-details");
@@ -177,13 +200,40 @@ it("runs menu commands in the active tab only", async () => {
   expect(useLayout.getState().sidebar).toBe(false);
 });
 
-it("refreshes when the window regains focus, while active", async () => {
+it("refreshes the working tree when the window regains focus, while active", async () => {
   await render();
   await act(async () => window.dispatchEvent(new Event("focus")));
-  expect(mocks.refreshed).toEqual([repo]);
+  expect(mocks.refreshed).toEqual([[repo, "status", "workingDiffs"]]);
   await render(false);
   await act(async () => window.dispatchEvent(new Event("focus")));
-  expect(mocks.refreshed).toEqual([repo]);
+  expect(mocks.refreshed).toHaveLength(1);
+});
+
+it("focuses the commit box from any selection, showing the details panel", async () => {
+  useLayout.setState({ details: false });
+  useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c1" });
+  await render();
+  await menu("commit-focus");
+  expect(useLayout.getState().details).toBe(true);
+  expect(useRepoUiStore.getState().byRepo[repo]).toMatchObject({ selection: { kind: "wip" } });
+  expect(useRepoUiStore.getState().byRepo[repo]!.commitFocusToken).toBeGreaterThan(0);
+});
+
+it("keeps showing an open repository when reopening it fails", async () => {
+  const client = new QueryClient();
+  const { keys } = await import("@/lib/queries");
+  client.setQueryData(keys.open(repo), { name: "repo" });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <RepoView repo={repo} active />
+      </QueryClientProvider>,
+    ),
+  );
+  mocks.openError = new Error("connection lost");
+  await act(async () => client.refetchQueries({ queryKey: keys.open(repo) }));
+  expect(has("toolbar")).toBe(true);
+  expect(container.textContent).not.toContain("Could not open");
 });
 
 it("offers to retry or close a repository that fails to open", async () => {

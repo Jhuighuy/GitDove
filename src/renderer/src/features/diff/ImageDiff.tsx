@@ -11,7 +11,8 @@ export type ImageSide =
   | { readonly kind: "missing" }
   | { readonly kind: "large"; readonly size: number }
   | { readonly kind: "loading"; readonly size: number }
-  | { readonly kind: "error"; readonly size: number }
+  /** Not an image; `lfs` when it is a Git LFS pointer instead. */
+  | { readonly kind: "error"; readonly size: number; readonly lfs?: boolean }
   | {
       readonly kind: "ready";
       readonly size: number;
@@ -25,6 +26,12 @@ type ReadyImage = Extract<ImageSide, { kind: "ready" }>;
 /** Space taken by a caption above the images (px). */
 const CAPTION = 24;
 const GAP = 16;
+
+const LFS_POINTER = new TextEncoder().encode("version https://git-lfs.github.com/spec/");
+
+/** Whether `content` is a Git LFS pointer file rather than the file itself. */
+const isLfsPointer = (content: Extract<FileContent, { kind: "blob" }>) =>
+  content.bytes.length < 1024 && LFS_POINTER.every((b, i) => content.bytes[i] === b);
 
 /** Decodes `content` through an object URL that lives as long as the component. */
 export function useImage(content: FileContent, mime: string): ImageSide {
@@ -46,7 +53,7 @@ export function useImage(content: FileContent, mime: string): ImageSide {
     img.addEventListener("load", () =>
       done({ kind: "ready", size, url, width: img.naturalWidth, height: img.naturalHeight }),
     );
-    img.addEventListener("error", () => done({ kind: "error", size }));
+    img.addEventListener("error", () => done({ kind: "error", size, lfs: isLfsPointer(content) }));
     img.src = url;
     return () => {
       live = false;
@@ -194,6 +201,10 @@ const placeholder = (side: ImageSide): React.ReactNode => {
       return <Spinner />;
     case "large":
       return `Too large to display (${formatBytes(side.size)}).`;
+    case "error":
+      return side.lfs
+        ? "Stored in Git LFS: only its pointer is here."
+        : "Cannot display this image.";
     default:
       return "Cannot display this image.";
   }

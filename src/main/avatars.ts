@@ -7,25 +7,25 @@
  * network at most once every few days.
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  AVATAR_SCHEME,
-  type AvatarProvider,
-  type AvatarRequest,
-  githubNoreply,
-  parseAvatarUrl,
-} from "@shared/avatars";
+import { AVATAR_SCHEME, type AvatarRequest, githubNoreply, parseAvatarUrl } from "@shared/avatars";
 import { app, net, protocol } from "electron";
 import log from "electron-log/main";
 import { Data, Effect, Semaphore } from "effect";
 
 const HIT_TTL = 7 * 24 * 3600 * 1000;
 const MISS_TTL = 2 * 24 * 3600 * 1000;
+/** Longest a request may take, body included. */
 const TIMEOUT = "8 seconds";
+/** Largest answer read (avatars are a few KB; a GitLab `avatar_url` may point anywhere). */
+const MAX_BYTES = 2 * 1024 * 1024;
+/** How long a host that rate-limited us is left alone, unless it says (`Retry-After`). */
+const COOLDOWN = 60 * 1000;
+const MAX_COOLDOWN = 60 * 60 * 1000;
 
 interface Image {
-  readonly bytes: Uint8Array;
+  readonly bytes: Uint8Array<ArrayBuffer>;
   readonly type: string;
 }
 
@@ -39,53 +39,125 @@ class NoAvatar extends Data.TaggedError("NoAvatar")<{
 }> {}
 
 const definite = (source: string) => new NoAvatar({ source, transient: false });
+const transient = (source: string) => new NoAvatar({ source, transient: true });
 
 /** At most a handful of concurrent avatar downloads. */
 const network = Semaphore.makeUnsafe(6);
 
-const get = (url: string, accept = "image/*") =>
-  Effect.tryPromise({
-    try: (signal) => net.fetch(url, { signal, headers: { accept } }),
-    catch: () => new NoAvatar({ source: url, transient: true }),
+/** Host -> when it may be asked again, after it rate-limited us or was unavailable. */
+const cooldowns = new Map<string, number>();
+
+const coolDown = (host: string, res: Response) => {
+  const after = Number(res.headers.get("retry-after"));
+  const ms = after > 0 ? Math.min(after * 1000, MAX_COOLDOWN) : COOLDOWN;
+  cooldowns.set(host, Date.now() + ms);
+  log.warn(`avatars: ${host} answered HTTP ${res.status}; leaving it alone for ${ms / 1000}s`);
+};
+
+class TooLarge extends Error {}
+
+/** Reads at most {@link MAX_BYTES} of a body; cancelled with `signal`. */
+const readBody = async (res: Response, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> => {
+  if (Number(res.headers.get("content-length")) > MAX_BYTES) throw new TooLarge();
+  if (!res.body) return new Uint8Array(0);
+  const reader = res.body.getReader();
+  const cancel = () => void reader.cancel().catch(() => {});
+  signal.addEventListener("abort", cancel, { once: true });
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_BYTES) {
+        cancel();
+        throw new TooLarge();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
+  return new Uint8Array(Buffer.concat(chunks));
+};
+
+interface Fetched {
+  readonly res: Response;
+  /** The body, if it was wanted. */
+  readonly bytes: Uint8Array<ArrayBuffer> | null;
+}
+
+/** Fetches `url`, and its body if `wanted`; the whole request is bounded in time and size. */
+const fetchUrl = (url: string, accept: string, wanted: (res: Response) => boolean) => {
+  const host = URL.canParse(url) ? new URL(url).host : url;
+  return Effect.tryPromise({
+    try: async (signal): Promise<Fetched> => {
+      if (Date.now() < (cooldowns.get(host) ?? 0)) throw new Error("cooling down");
+      const res = await net.fetch(url, { signal, headers: { accept } });
+      const unwanted = res.status >= 500 || res.status === 429 || !wanted(res);
+      if (unwanted) void res.body?.cancel().catch(() => {});
+      if (res.status === 429 || res.status === 503) coolDown(host, res);
+      if (res.status >= 500 || res.status === 429) throw new Error(`HTTP ${res.status}`);
+      return { res, bytes: unwanted ? null : await readBody(res, signal) };
+    },
+    catch: (e) => (e instanceof TooLarge ? definite(url) : transient(url)),
   }).pipe(
     Effect.timeout(TIMEOUT),
-    Effect.catch(() => Effect.fail(new NoAvatar({ source: url, transient: true }))),
-    Effect.flatMap((res) =>
-      res.status >= 500 || res.status === 429
-        ? Effect.fail(new NoAvatar({ source: url, transient: true }))
-        : Effect.succeed(res),
-    ),
+    Effect.mapError((e) => (e instanceof NoAvatar ? e : transient(url))),
     network.withPermits(1),
   );
+};
 
-const body = <A>(source: string, read: () => Promise<A>) =>
-  Effect.tryPromise({ try: read, catch: () => new NoAvatar({ source, transient: true }) });
+const typeOf = (res: Response) => res.headers.get("content-type") ?? "";
 
 const image = (url: string) =>
-  Effect.gen(function* () {
-    const res = yield* get(url);
-    const type = res.headers.get("content-type") ?? "";
-    if (!res.ok || !type.startsWith("image/")) return yield* definite(url);
-    const bytes = new Uint8Array(yield* body(url, () => res.arrayBuffer()));
-    return { bytes, type } satisfies Image;
-  });
+  fetchUrl(url, "image/*", (res) => res.ok && typeOf(res).startsWith("image/")).pipe(
+    Effect.flatMap(({ res, bytes }) =>
+      bytes
+        ? Effect.succeed({ bytes, type: typeOf(res) } satisfies Image)
+        : Effect.fail(definite(url)),
+    ),
+  );
+
+const parseJson = (bytes: Uint8Array | null): Record<string, unknown> => {
+  try {
+    const v: unknown = bytes && JSON.parse(new TextDecoder().decode(bytes));
+    return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+};
 
 const sha256 = (data: string | Uint8Array) => createHash("sha256").update(data).digest("hex");
 
+const GITHUB_PROBE =
+  "https://avatars.githubusercontent.com/u/e?email=gitdove-probe%40invalid.invalid&s=64";
+
 /**
- * GitHub's email lookup answers unknown emails with a shared default identicon.
- * Fetch it once for an address that cannot exist and compare against it.
+ * GitHub's email lookup answers unknown emails with a shared default identicon. Fetch it once
+ * for an address that cannot exist and compare against it (`null`: GitHub has none). Only an
+ * answer is remembered: after a network failure the next lookup asks again, since taking the
+ * identicon for a real avatar would be cached for a week.
  */
-const githubDefault = Effect.runSync(
-  Effect.cached(
-    image(
-      "https://avatars.githubusercontent.com/u/e?email=gitdove-probe%40invalid.invalid&s=64",
-    ).pipe(
-      Effect.map((img) => sha256(img.bytes)),
-      Effect.orElseSucceed(() => null),
+const probeGithubDefault = (): Effect.Effect<string | null, NoAvatar> =>
+  Effect.runSync(
+    Effect.cached(
+      image(GITHUB_PROBE).pipe(
+        Effect.map((img): string | null => sha256(img.bytes)),
+        Effect.catchIf(
+          (e) => !e.transient,
+          () => Effect.succeed(null),
+        ),
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            githubDefault = probeGithubDefault();
+          }),
+        ),
+      ),
     ),
-  ),
-);
+  );
+let githubDefault = probeGithubDefault();
 
 const fromGithub = (email: string, size: number) =>
   Effect.gen(function* () {
@@ -104,25 +176,18 @@ const fromGithub = (email: string, size: number) =>
  * `origin` is the instance's web origin, e.g. `https://gitlab.com` or `http://git.lan:8080`.
  */
 const gitlabAvatarApi = (origin: string, email: string, size: number) =>
-  get(
+  fetchUrl(
     `${origin}/api/v4/avatar?email=${encodeURIComponent(email)}&size=${size}`,
     "application/json",
+    (res) => typeOf(res).includes("json"),
   );
 
-const avatarUrlOf = (origin: string, res: Response) =>
-  Effect.gen(function* () {
-    if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) {
-      return yield* definite(origin);
-    }
-    const data = yield* body(origin, () => res.json() as Promise<unknown>);
-    // Any JSON parses, `null` included: only an object can name an avatar.
-    const url =
-      typeof data === "object" && data !== null
-        ? (data as { avatar_url?: unknown }).avatar_url
-        : undefined;
-    if (typeof url !== "string" || !/^https?:\/\//.test(url)) return yield* definite(origin);
-    return url;
-  });
+const avatarUrlOf = (origin: string, { res, bytes }: Fetched): Effect.Effect<string, NoAvatar> => {
+  const url = res.ok ? parseJson(bytes).avatar_url : undefined;
+  return typeof url === "string" && /^https?:\/\//.test(url)
+    ? Effect.succeed(url)
+    : Effect.fail(definite(origin));
+};
 
 /**
  * `gitlab` with the avatar URL served for unknown users, `locked` for GitLab
@@ -144,26 +209,21 @@ const summary = (res: Response) => {
 
 const probeGitlab = (origin: string) =>
   Effect.gen(function* () {
-    const res = yield* gitlabAvatarApi(origin, "gitdove-probe@invalid.invalid", 16);
+    const fetched = yield* gitlabAvatarApi(origin, "gitdove-probe@invalid.invalid", 16);
+    const { res } = fetched;
     const why = summary(res);
     // GitLab marks its answers, its error pages included.
     const marked = res.headers.has("x-gitlab-meta");
     if (res.status === 401 || res.status === 403 || (marked && !res.ok)) {
-      const message = yield* body(origin, () => res.json() as Promise<{ message?: unknown }>).pipe(
-        Effect.map((b) => (typeof b === "object" && b !== null ? b.message : null)),
-        Effect.orElseSucceed(() => null),
-      );
+      const message = parseJson(fetched.bytes).message;
       if (marked || (typeof message === "string" && /^40[13]\b/.test(message))) {
         log.warn(`avatars: ${origin} is GitLab but refuses anonymous avatar lookups (${why})`);
         return { kind: "locked" } satisfies GitlabProbe;
       }
     }
-    const probe: GitlabProbe = yield* avatarUrlOf(origin, res).pipe(
+    const probe: GitlabProbe = yield* avatarUrlOf(origin, fetched).pipe(
       Effect.map((unknown) => ({ kind: "gitlab" as const, unknown })),
-      Effect.catchIf(
-        (e) => !e.transient,
-        () => Effect.succeed({ kind: marked ? ("locked" as const) : ("other" as const) }),
-      ),
+      Effect.orElseSucceed(() => ({ kind: marked ? ("locked" as const) : ("other" as const) })),
     );
     log.info(`avatars: ${origin} is ${probe.kind === "other" ? "not " : ""}GitLab (${why})`);
     return probe;
@@ -229,7 +289,10 @@ const fromGitlab = (host: string, email: string, size: number) =>
 const fromGravatar = (email: string, size: number) =>
   image(`https://www.gravatar.com/avatar/${sha256(email)}?d=404&s=${size}`);
 
-/** Tries every source in order; `null` = definitely no avatar, `undefined` = try again later. */
+/**
+ * Tries every source in order; `img` is `null` for no avatar. The answer is `final` unless a
+ * source failed transiently (offline, rate-limited): a better avatar may then be found later.
+ */
 const resolve = ({ email, providers, size }: AvatarRequest) => {
   const noreply = githubNoreply(email);
   const attempts: Effect.Effect<Image, NoAvatar>[] = [];
@@ -242,26 +305,27 @@ const resolve = ({ email, providers, size }: AvatarRequest) => {
       ),
     );
   }
-  for (const p of providers as readonly AvatarProvider[]) {
+  for (const p of providers) {
     if (p === "github") attempts.push(fromGithub(email, size));
     else attempts.push(fromGitlab(p.slice("gitlab:".length), email, size));
   }
   attempts.push(fromGravatar(email, size));
 
-  let transient = false;
+  let unsure = false;
   return Effect.firstSuccessOf(
     attempts.map((a) =>
       a.pipe(
         Effect.tapError((e) =>
           Effect.sync(() => {
-            if (e.transient) transient = true;
+            if (e.transient) unsure = true;
           }),
         ),
       ),
     ),
   ).pipe(
-    Effect.map((img): Image | null | undefined => img),
-    Effect.orElseSucceed(() => (transient ? undefined : null)),
+    Effect.map((img): Image | null => img),
+    Effect.orElseSucceed(() => null),
+    Effect.map((img) => ({ img, final: !unsure })),
   );
 };
 
@@ -271,15 +335,29 @@ const resolve = ({ email, providers, size }: AvatarRequest) => {
 
 const cacheDir = () => join(app.getPath("userData"), "avatars");
 
+/** A cache entry's metadata: the image type, or `null` for "no avatar". */
+const readMeta = async (base: string): Promise<{ type: string | null; at: number } | undefined> => {
+  const meta = JSON.parse(await readFile(`${base}.json`, "utf8")) as {
+    type?: unknown;
+    at?: unknown;
+  };
+  const type = meta.type;
+  if (typeof meta.at !== "number") return undefined;
+  if (type === null) return { type, at: meta.at };
+  // Served as the response's content type.
+  return typeof type === "string" && /^image\/[\w.+-]+$/.test(type)
+    ? { type, at: meta.at }
+    : undefined;
+};
+
+const expired = (meta: { type: string | null; at: number }) =>
+  Date.now() - meta.at > (meta.type ? HIT_TTL : MISS_TTL);
+
 const readCache = async (key: string): Promise<Image | null | undefined> => {
   const base = join(cacheDir(), key);
   try {
-    const meta = JSON.parse(await readFile(`${base}.json`, "utf8")) as {
-      type: string | null;
-      at: number;
-    };
-    const ttl = meta.type ? HIT_TTL : MISS_TTL;
-    if (Date.now() - meta.at > ttl) return undefined;
+    const meta = await readMeta(base);
+    if (!meta || expired(meta)) return undefined;
     if (!meta.type) return null;
     return { bytes: new Uint8Array(await readFile(`${base}.img`)), type: meta.type };
   } catch {
@@ -287,12 +365,39 @@ const readCache = async (key: string): Promise<Image | null | undefined> => {
   }
 };
 
+/** Writes a file atomically, so a crash never leaves a truncated one. */
+const writeAtomic = async (path: string, data: string | Uint8Array) => {
+  await writeFile(`${path}.tmp`, data);
+  await rename(`${path}.tmp`, path);
+};
+
 const writeCache = async (key: string, img: Image | null) => {
   const base = join(cacheDir(), key);
   await mkdir(cacheDir(), { recursive: true });
-  if (img) await writeFile(`${base}.img`, img.bytes);
-  await writeFile(`${base}.json.tmp`, JSON.stringify({ type: img?.type ?? null, at: Date.now() }));
-  await rename(`${base}.json.tmp`, `${base}.json`);
+  if (img) await writeAtomic(`${base}.img`, img.bytes);
+  await writeAtomic(`${base}.json`, JSON.stringify({ type: img?.type ?? null, at: Date.now() }));
+};
+
+/** Deletes expired and broken cache entries, which are otherwise never read again. */
+export const pruneAvatarCache = async () => {
+  let names: string[];
+  try {
+    names = await readdir(cacheDir());
+  } catch {
+    return;
+  }
+  const keys = new Set(names.map((n) => n.replace(/\.(json|img)(\.tmp)?$/, "")));
+  let pruned = 0;
+  for (const key of keys) {
+    const base = join(cacheDir(), key);
+    const meta = await readMeta(base).catch(() => undefined);
+    if (meta && !expired(meta)) continue;
+    await Promise.all(
+      ["json", "img", "json.tmp", "img.tmp"].map((ext) => rm(`${base}.${ext}`, { force: true })),
+    ).catch(() => {});
+    pruned++;
+  }
+  if (pruned > 0) log.info(`avatars: pruned ${pruned} cache entries`);
 };
 
 const inflight = new Map<string, Promise<Image | null>>();
@@ -304,8 +409,8 @@ const lookup = (req: AvatarRequest): Promise<Image | null> => {
     pending = (async () => {
       const cached = await readCache(key);
       if (cached !== undefined) return cached;
-      const img = await Effect.runPromise(resolve(req));
-      if (img === undefined) return null; // Offline or rate-limited: retry next time.
+      const { img, final } = await Effect.runPromise(resolve(req));
+      if (!final) return img; // Offline or rate-limited: try again next time.
       await writeCache(key, img).catch((e: unknown) => log.warn("avatar cache write failed", e));
       return img;
     })().finally(() => inflight.delete(key));
@@ -329,7 +434,10 @@ export const handleAvatarProtocol = () =>
     const req = parseAvatarUrl(request.url);
     if (!req) return new Response(null, { status: 400 });
     const img = await lookup(req);
-    if (!img) return new Response(null, { status: 404 });
+    // Not a 404, which Chromium logs for every image; an empty body fails to load all the same.
+    if (!img) {
+      return new Response(null, { status: 204, headers: { "cache-control": "max-age=600" } });
+    }
     return new Response(img.bytes, {
       headers: { "content-type": img.type, "cache-control": "max-age=86400" },
     });
