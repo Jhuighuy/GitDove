@@ -11,7 +11,7 @@ import { fixProcessPath } from "./exec/environment";
 import { HostsLive } from "./exec/hosts";
 import { registerIpc } from "./ipc";
 import { Notifier, RepoSettings, ReposLive } from "./services";
-import { repoSettings, updateRepoSettings } from "./state";
+import { flushState, repoSettings, updateRepoSettings } from "./state";
 import { checkForUpdatesMenuItem, updater } from "./updater";
 
 // Allows isolated profiles (e.g. for automated UI tests).
@@ -220,6 +220,7 @@ app.on("will-quit", (e) => {
   disposing = true;
   e.preventDefault();
   updater.dispose();
+  flushState();
   // Close SSH masters and file watchers before exiting.
   void runtime
     .dispose()
