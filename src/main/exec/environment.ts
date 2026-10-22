@@ -23,6 +23,14 @@ export const parseShellEnvironment = (output: Buffer): Record<string, string> | 
 };
 
 /**
+ * Arguments that make `shell` an interactive login shell running `command`. csh and tcsh take
+ * `-l` only as their sole argument: they run it interactive, which reads `.cshrc` (`.login`,
+ * which sets little else, is left out).
+ */
+export const shellArgs = (shell: string, command: string): string[] =>
+  /(^|\/)(t?csh|bsd-csh)$/.test(shell) ? ["-i", "-c", command] : ["-ilc", command];
+
+/**
  * Asks the user's interactive login shell for its environment: GUI apps on macOS (and some
  * Linux desktops) are launched with a minimal one, without e.g. Homebrew's PATH or an
  * `SSH_AUTH_SOCK` set in `.zshrc`. Null on Windows or when the shell fails.
@@ -41,7 +49,7 @@ export const resolveShellEnvironment = (timeoutMs = 5000) =>
     let size = 0;
     let done = false;
     let drain: NodeJS.Timeout | undefined;
-    const child = nodeSpawn(shell, ["-ilc", `printf ${MARKER}; env -0; printf ${MARKER}`], {
+    const child = nodeSpawn(shell, shellArgs(shell, `printf ${MARKER}; env -0; printf ${MARKER}`), {
       stdio: ["ignore", "pipe", "ignore"],
       detached: true,
       env: { ...process.env, DISABLE_AUTO_UPDATE: "true", GITDOVE_RESOLVING_ENVIRONMENT: "1" },

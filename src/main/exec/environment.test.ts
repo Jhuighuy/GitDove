@@ -74,6 +74,16 @@ b"; export MULTI; eval "$2"; echo; echo bye`,
     expect(env).toMatchObject({ PATH: "/fake/bin:/usr/bin", MULTI: "a\nb" });
   });
 
+  it.each(["/bin/csh", "/bin/tcsh"].filter((s) => existsSync(s)))(
+    "reads the environment from %s, which takes -l only alone",
+    async (shell) => {
+      process.env.SHELL = shell;
+      process.env.GITDOVE_TEST_VAR = "from csh";
+      const env = await Effect.runPromise(resolveShellEnvironment());
+      expect(env).toMatchObject({ GITDOVE_TEST_VAR: "from csh" });
+    },
+  );
+
   it("is null when the shell fails, cannot start or prints no marker", async () => {
     process.env.SHELL = fakeShell("failing", "exit 1");
     expect(await Effect.runPromise(resolveShellEnvironment())).toBeNull();
