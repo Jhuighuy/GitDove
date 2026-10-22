@@ -283,6 +283,14 @@ export interface FileDiff {
   readonly hunks: readonly DiffHunk[];
   /** True when the diff was too large and got truncated. */
   readonly truncated: boolean;
+  /** The file is absent on the old side (`new file mode`). */
+  readonly created?: boolean;
+  /** The file is absent on the new side (`deleted file mode`). */
+  readonly deleted?: boolean;
+  /** Mode of the side that exists, e.g. "100644", for created or deleted files. */
+  readonly mode?: string;
+  /** Why hunks and lines of this diff must not be staged, unstaged or discarded, if so. */
+  readonly readOnly?: "conflict" | "submodule" | "encoding";
 }
 
 /** One side of a file change, as raw bytes. */
