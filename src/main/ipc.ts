@@ -30,9 +30,6 @@ import { updater } from "./updater";
 
 type Services = Repos | Hosts | RepoSettings;
 
-/** Most hashes `repo.graphHashes` returns at once. */
-const MAX_GRAPH_HASHES = 1 << 20;
-
 /** The renderer a request came from. */
 export class Caller extends Context.Service<Caller, { readonly webContents: WebContents }>()(
   "gitdove/Caller",
@@ -92,9 +89,12 @@ const RowRange = (max: number) =>
     valid(([, , start, end]) => end - start <= max, `At most ${max} rows can be requested`),
   );
 
-/** A non-empty list of commits, at most as many as a selection can hold. */
+/**
+ * A non-empty list of commits: at most {@link MAX_GRAPH_ROWS}, well above what a selection holds
+ * (a Shift-click selects up to 1000).
+ */
 const Hashes = Schema.Array(Str).check(
-  valid((h: readonly string[]) => h.length > 0 && h.length <= MAX_GRAPH_HASHES, "Invalid commits"),
+  valid((h: readonly string[]) => h.length > 0 && h.length <= MAX_GRAPH_ROWS, "Invalid commits"),
 );
 
 const noArgs = Schema.Tuple([]);
@@ -128,7 +128,6 @@ const argSchemas = {
   "repo.graphInfo": repoArgs(),
   "repo.reloadGraph": repoArgs(),
   "repo.graphRows": RowRange(MAX_GRAPH_ROWS),
-  "repo.graphHashes": RowRange(MAX_GRAPH_HASHES),
   "repo.findCommit": repoArgs(Index, Str),
   "repo.findCommits": repoArgs(Index, Hashes),
   "repo.search": repoArgs(Str),
@@ -464,8 +463,6 @@ export const handlers: Handlers = {
   "repo.reloadGraph": (id) => withRepo(id, (r) => r.reloadGraph()),
   "repo.graphRows": (id, version, start, end) =>
     withRepo(id, (r) => r.graphRows(version, start, end)),
-  "repo.graphHashes": (id, version, start, end) =>
-    withRepo(id, (r) => r.graphHashes(version, start, end)),
   "repo.findCommit": (id, version, hash) => withRepo(id, (r) => r.findCommit(version, hash)),
   "repo.findCommits": (id, version, hashes) => withRepo(id, (r) => r.findCommits(version, hashes)),
   "repo.search": (id, query) => withRepo(id, (r) => r.search(query)),

@@ -31,7 +31,7 @@ export type ResetMode = "soft" | "mixed" | "hard";
 export const EDIT_COMMANDS = ["undo", "redo", "cut", "copy", "paste", "selectAll"] as const;
 export type EditCommand = (typeof EDIT_COMMANDS)[number];
 
-/** Most rows `repo.graphRows` returns at once; use `repo.graphHashes` for long ranges. */
+/** Most rows `repo.graphRows` returns at once. */
 export const MAX_GRAPH_ROWS = 4096;
 
 /**
@@ -98,8 +98,6 @@ export interface Api {
   "repo.reloadGraph": (repo: RepoId) => void;
   /** Rows `start` to `end` (exclusive), at most {@link MAX_GRAPH_ROWS} of them. */
   "repo.graphRows": (repo: RepoId, version: number, start: number, end: number) => GraphRow[];
-  /** Commit hashes of rows `start` to `end` (exclusive), e.g. for range selection. */
-  "repo.graphHashes": (repo: RepoId, version: number, start: number, end: number) => string[];
   "repo.findCommit": (repo: RepoId, version: number, hash: string) => number;
   /** Row indexes of several commits (-1 for those not in the graph), e.g. to re-index a selection. */
   "repo.findCommits": (repo: RepoId, version: number, hashes: string[]) => number[];
@@ -201,7 +199,6 @@ export const CANCELLABLE_METHODS = [
   "repo.refs",
   "repo.graphInfo",
   "repo.graphRows",
-  "repo.graphHashes",
   "repo.findCommit",
   "repo.findCommits",
   "repo.search",

@@ -76,9 +76,9 @@ describe.skipIf(noShell).each(targets)("Repository graph on %s", (hostId) => {
     expect((await fails(t.repo.findCommit(g.version + 1, rows[0]!.hash)))._tag).toBe(
       "StaleGraphError",
     );
-    expect(await run(t.repo.graphHashes(g.version, 0, 100_000))).toEqual(rows.map((r) => r.hash));
-    expect(await run(t.repo.graphHashes(g.version, -5, 1))).toEqual([rows[0]!.hash]);
-    expect((await fails(t.repo.graphHashes(g.version, 0.5, 1)))._tag).toBe("InvalidInputError");
+    expect(await run(t.repo.graphRows(g.version, -5, 1))).toEqual([rows[0]]);
+    expect((await fails(t.repo.graphRows(g.version, 0.5, 1)))._tag).toBe("InvalidInputError");
+    expect((await fails(t.repo.graphRows(g.version, 0, 100_000)))._tag).toBe("InvalidInputError");
   });
 
   /** Waits for a complete graph, newer than `after` if given. */

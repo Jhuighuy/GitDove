@@ -647,6 +647,7 @@ describe("registerIpc", () => {
       ["app.setState", [{ tabs: "x", activeTab: null, recent: [] }]],
       ["repo.graphRows", [id, 1, 0, 4097]],
       ["repo.cherryPick", [id, []]],
+      ["repo.cherryPick", [id, Array.from({ length: 4097 }, () => "a")]],
       ["repo.revert", [id, ["a", 1]]],
       ["repo.findCommits", [id, 1, []]],
       ["repo.stashBranch", [id, "b", 0, 42]],

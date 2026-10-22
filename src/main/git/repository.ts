@@ -1086,19 +1086,6 @@ export class Repository {
     );
   }
 
-  /** Commit hashes of rows `start` to `end` (exclusive), e.g. for selecting a range. */
-  graphHashes(
-    version: number,
-    start: number,
-    end: number,
-  ): Effect.Effect<string[], StaleGraphError | InvalidInputError> {
-    return Effect.flatMap(validateRange(start, end, Infinity), ([from, to]) =>
-      this.graphOf(version).pipe(
-        Effect.map((g) => g.builder.rows.slice(from, to).map((r) => r.hash)),
-      ),
-    );
-  }
-
   findCommit(version: number, hash: string): Effect.Effect<number, StaleGraphError> {
     return Effect.map(this.findCommits(version, [hash]), ([i]) => i!);
   }
