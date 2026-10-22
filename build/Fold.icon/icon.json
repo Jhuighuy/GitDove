@@ -1,0 +1,62 @@
+{
+  "fill": {
+    "automatic-gradient": "extended-srgb:0.78039,0.30588,0.22745,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "dove.svg",
+          "name": "Folded dove"
+        }
+      ],
+      "lighting": "combined",
+      "name": "02 Folded dove",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.08
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "layers": [
+        {
+          "fill-specializations": [
+            {
+              "appearance": "dark",
+              "value": {
+                "automatic-gradient": "extended-srgb:0.78039,0.30588,0.22745,1.00000"
+              }
+            },
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "extended-srgb:0.90000,0.90000,0.90000,1.00000"
+              }
+            }
+          ],
+          "image-name": "git-branch.svg",
+          "name": "git-branch"
+        }
+      ],
+      "lighting": "combined",
+      "name": "01 Git branch",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.08
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": ["macOS"]
+  }
+}

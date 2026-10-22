@@ -179,7 +179,7 @@ export function Sidebar({ repo }: { repo: RepoId }) {
               <>
                 {hidesHead && (
                   <span
-                    className="flex shrink-0 text-emerald-500"
+                    className="flex shrink-0 text-primary"
                     title="Contains the checked-out branch"
                   >
                     <IconSquareCheckFilled aria-hidden />
@@ -545,7 +545,7 @@ function VisibilityToggle({
   if (visibility === "head") {
     return (
       <span
-        className="flex w-5 shrink-0 justify-center text-emerald-500"
+        className="flex w-5 shrink-0 justify-center text-primary"
         title="Checked out (always shown)"
       >
         <IconSquareCheckFilled />

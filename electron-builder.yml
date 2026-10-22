@@ -1,6 +1,8 @@
 appId: dev.gitdove.app
 productName: GitDove
 copyright: Copyright © 2026 Oleg Butakov
+# Uses the static macOS icon when Xcode 26+ is unavailable on the build machine.
+beforePack: scripts/before-pack.mjs
 # Embeds the Sparkle updater into macOS builds.
 afterPack: scripts/after-pack.mjs
 directories:
@@ -21,7 +23,9 @@ publish:
   repo: GitDove
   releaseType: release
 mac:
-  icon: build/icon.icns
+  # beforePack selects build/icon.icns if the Icon Composer compiler is unavailable.
+  icon: build/Fold.icon
+  minimumSystemVersion: "26.0"
   category: public.app-category.developer-tools
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
   # Apple silicon only. The zip is what Sparkle downloads for over-the-air updates.
