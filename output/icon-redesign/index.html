@@ -5,39 +5,238 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GitDove — Icon directions</title>
     <style>
-      :root { color-scheme: light; --bg: #f4f3ef; --ink: #232925; --muted: #69706a; --rule: #d8dcd5; --accent: #08634d; --button: #e7eae3; }
-      * { box-sizing: border-box; }
-      body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; transition: background .2s, color .2s; }
-      body.dark { color-scheme: dark; --bg: #1d2123; --ink: #f5f5ee; --muted: #abb2ac; --rule: #3c4542; --accent: #8cddba; --button: #303936; }
-      main { width: min(1240px, 100%); margin: auto; padding: 42px 48px 28px; }
-      .topline { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-      .brand { font-weight: 650; font-size: 15px; letter-spacing: -.3px; }
-      .brand::before { content: ""; display: inline-block; margin-right: 9px; height: 9px; width: 9px; border-radius: 50%; background: var(--accent); }
-      .switch { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--rule); border-radius: 30px; }
-      button { font: inherit; font-size: 12px; color: var(--muted); background: none; border: 0; border-radius: 20px; padding: 7px 14px; cursor: pointer; }
-      button[aria-pressed="true"] { background: var(--button); color: var(--ink); }
-      button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
-      h1 { font-size: clamp(32px, 4.5vw, 52px); line-height: 1.08; font-weight: 550; letter-spacing: -2px; margin: 28px 0 12px; }
-      .intro { font-size: 16px; color: var(--muted); margin: 0; line-height: 1.55; }
-      .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 36px; margin-top: 38px; }
-      article { min-width: 0; border-top: 1px solid var(--rule); padding-top: 15px; }
-      .eyebrow { color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; display: flex; justify-content: space-between; gap: 12px; }
-      .hero { width: 100%; aspect-ratio: 1; display: block; margin: 11px 0 8px; }
-      .titleline { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
-      h2 { margin: 0; font-size: 26px; font-weight: 550; letter-spacing: -.7px; }
-      a { color: var(--accent); text-underline-offset: 4px; }
-      .download { font-size: 12px; white-space: nowrap; }
-      .description { color: var(--muted); font-size: 14px; line-height: 1.55; margin: 12px 0 18px; min-height: 66px; }
-      .samples { display: flex; gap: 24px; align-items: end; height: 92px; padding-bottom: 15px; border-bottom: 1px solid var(--rule); }
-      figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 7px; }
-      figure img { display: block; }
-      figcaption { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
-      .verdict { margin: 30px 0 0; font-size: 14px; line-height: 1.6; max-width: 760px; }
-      .verdict strong { color: var(--accent); font-weight: 600; }
-      footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 10px; margin-top: 23px; padding-top: 14px; border-top: 1px solid var(--rule); }
-      @media (max-width: 760px) { main { padding: 24px; } .grid { grid-template-columns: 1fr; gap: 32px; } article { max-width: 450px; margin: auto; width: 100%; } .hero { max-width: 380px; margin: 10px auto; } .description { min-height: 0; } h1 { letter-spacing: -1px; } }
-      @media (prefers-reduced-motion: reduce) { body { transition: none; } }
-      @media print { .switch, .download { display: none; } main { padding: 20px; } .grid { gap: 24px; } }
+      :root {
+        color-scheme: light;
+        --bg: #f4f3ef;
+        --ink: #232925;
+        --muted: #69706a;
+        --rule: #d8dcd5;
+        --accent: #08634d;
+        --button: #e7eae3;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        transition:
+          background 0.2s,
+          color 0.2s;
+      }
+      body.dark {
+        color-scheme: dark;
+        --bg: #1d2123;
+        --ink: #f5f5ee;
+        --muted: #abb2ac;
+        --rule: #3c4542;
+        --accent: #8cddba;
+        --button: #303936;
+      }
+      main {
+        width: min(1240px, 100%);
+        margin: auto;
+        padding: 42px 48px 28px;
+      }
+      .topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .brand {
+        font-weight: 650;
+        font-size: 15px;
+        letter-spacing: -0.3px;
+      }
+      .brand::before {
+        content: "";
+        display: inline-block;
+        margin-right: 9px;
+        height: 9px;
+        width: 9px;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+      .switch {
+        display: flex;
+        gap: 4px;
+        padding: 3px;
+        border: 1px solid var(--rule);
+        border-radius: 30px;
+      }
+      button {
+        font: inherit;
+        font-size: 12px;
+        color: var(--muted);
+        background: none;
+        border: 0;
+        border-radius: 20px;
+        padding: 7px 14px;
+        cursor: pointer;
+      }
+      button[aria-pressed="true"] {
+        background: var(--button);
+        color: var(--ink);
+      }
+      button:focus-visible,
+      a:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 5px;
+      }
+      h1 {
+        font-size: clamp(32px, 4.5vw, 52px);
+        line-height: 1.08;
+        font-weight: 550;
+        letter-spacing: -2px;
+        margin: 28px 0 12px;
+      }
+      .intro {
+        font-size: 16px;
+        color: var(--muted);
+        margin: 0;
+        line-height: 1.55;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 36px;
+        margin-top: 38px;
+      }
+      article {
+        min-width: 0;
+        border-top: 1px solid var(--rule);
+        padding-top: 15px;
+      }
+      .eyebrow {
+        color: var(--muted);
+        font-size: 10px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .hero {
+        width: 100%;
+        aspect-ratio: 1;
+        display: block;
+        margin: 11px 0 8px;
+      }
+      .titleline {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 14px;
+      }
+      h2 {
+        margin: 0;
+        font-size: 26px;
+        font-weight: 550;
+        letter-spacing: -0.7px;
+      }
+      a {
+        color: var(--accent);
+        text-underline-offset: 4px;
+      }
+      .download {
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .description {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+        margin: 12px 0 18px;
+        min-height: 66px;
+      }
+      .samples {
+        display: flex;
+        gap: 24px;
+        align-items: end;
+        height: 92px;
+        padding-bottom: 15px;
+        border-bottom: 1px solid var(--rule);
+      }
+      figure {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 7px;
+      }
+      figure img {
+        display: block;
+      }
+      figcaption {
+        color: var(--muted);
+        font-size: 10px;
+        font-variant-numeric: tabular-nums;
+      }
+      .verdict {
+        margin: 30px 0 0;
+        font-size: 14px;
+        line-height: 1.6;
+        max-width: 760px;
+      }
+      .verdict strong {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 10px;
+        margin-top: 23px;
+        padding-top: 14px;
+        border-top: 1px solid var(--rule);
+      }
+      @media (max-width: 760px) {
+        main {
+          padding: 24px;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+          gap: 32px;
+        }
+        article {
+          max-width: 450px;
+          margin: auto;
+          width: 100%;
+        }
+        .hero {
+          max-width: 380px;
+          margin: 10px auto;
+        }
+        .description {
+          min-height: 0;
+        }
+        h1 {
+          letter-spacing: -1px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        body {
+          transition: none;
+        }
+      }
+      @media print {
+        .switch,
+        .download {
+          display: none;
+        }
+        main {
+          padding: 20px;
+        }
+        .grid {
+          gap: 24px;
+        }
+      }
     </style>
   </head>
   <body>
@@ -54,51 +253,115 @@
       <section class="grid" aria-label="Icon designs">
         <article>
           <div class="eyebrow"><span>01 / Aero</span><span>Bold &amp; fluid</span></div>
-          <img class="hero" src="01-aero.png" alt="White dove with sweeping wings carrying a coral Git branch on emerald green." />
-          <div class="titleline"><h2>Aero</h2><a class="download" href="01-aero.png" download>Download PNG ↗</a></div>
-          <p class="description">Sweeping wings, a strong silhouette, and a coral branch. An evolution of GitDove’s emerald identity with a clearer Git signal.</p>
+          <img
+            class="hero"
+            src="01-aero.png"
+            alt="White dove with sweeping wings carrying a coral Git branch on emerald green."
+          />
+          <div class="titleline">
+            <h2>Aero</h2>
+            <a class="download" href="01-aero.png" download>Download PNG ↗</a>
+          </div>
+          <p class="description">
+            Sweeping wings, a strong silhouette, and a coral branch. An evolution of GitDove’s
+            emerald identity with a clearer Git signal.
+          </p>
           <div class="samples" aria-label="Aero size previews">
-            <figure><img src="01-aero.png" width="64" height="64" alt="Aero at 64 pixels" /><figcaption>64 px</figcaption></figure>
-            <figure><img src="01-aero.png" width="32" height="32" alt="Aero at 32 pixels" /><figcaption>32 px</figcaption></figure>
-            <figure><img src="01-aero.png" width="16" height="16" alt="Aero at 16 pixels" /><figcaption>16 px</figcaption></figure>
+            <figure>
+              <img src="01-aero.png" width="64" height="64" alt="Aero at 64 pixels" />
+              <figcaption>64 px</figcaption>
+            </figure>
+            <figure>
+              <img src="01-aero.png" width="32" height="32" alt="Aero at 32 pixels" />
+              <figcaption>32 px</figcaption>
+            </figure>
+            <figure>
+              <img src="01-aero.png" width="16" height="16" alt="Aero at 16 pixels" />
+              <figcaption>16 px</figcaption>
+            </figure>
           </div>
         </article>
         <article>
           <div class="eyebrow"><span>02 / Porcelain</span><span>Tactile &amp; sculpted</span></div>
-          <img class="hero" src="02-porcelain.png" alt="Sculpted ivory porcelain dove carrying a glossy orange Git branch on cobalt blue." />
-          <div class="titleline"><h2>Porcelain</h2><a class="download" href="02-porcelain.png" download>Download PNG ↗</a></div>
-          <p class="description">Soft ceramic forms, cobalt depth, and an orange enamel branch. A characterful desktop icon with the presence of a crafted object.</p>
+          <img
+            class="hero"
+            src="02-porcelain.png"
+            alt="Sculpted ivory porcelain dove carrying a glossy orange Git branch on cobalt blue."
+          />
+          <div class="titleline">
+            <h2>Porcelain</h2>
+            <a class="download" href="02-porcelain.png" download>Download PNG ↗</a>
+          </div>
+          <p class="description">
+            Soft ceramic forms, cobalt depth, and an orange enamel branch. A characterful desktop
+            icon with the presence of a crafted object.
+          </p>
           <div class="samples" aria-label="Porcelain size previews">
-            <figure><img src="02-porcelain.png" width="64" height="64" alt="Porcelain at 64 pixels" /><figcaption>64 px</figcaption></figure>
-            <figure><img src="02-porcelain.png" width="32" height="32" alt="Porcelain at 32 pixels" /><figcaption>32 px</figcaption></figure>
-            <figure><img src="02-porcelain.png" width="16" height="16" alt="Porcelain at 16 pixels" /><figcaption>16 px</figcaption></figure>
+            <figure>
+              <img src="02-porcelain.png" width="64" height="64" alt="Porcelain at 64 pixels" />
+              <figcaption>64 px</figcaption>
+            </figure>
+            <figure>
+              <img src="02-porcelain.png" width="32" height="32" alt="Porcelain at 32 pixels" />
+              <figcaption>32 px</figcaption>
+            </figure>
+            <figure>
+              <img src="02-porcelain.png" width="16" height="16" alt="Porcelain at 16 pixels" />
+              <figcaption>16 px</figcaption>
+            </figure>
           </div>
         </article>
         <article>
           <div class="eyebrow"><span>03 / Fold</span><span>Geometric &amp; warm</span></div>
-          <img class="hero" src="03-fold.png" alt="Ivory origami dove holding an aubergine Git branch on warm terracotta." />
-          <div class="titleline"><h2>Fold</h2><a class="download" href="03-fold.png" download>Download PNG ↗</a></div>
-          <p class="description">Broad paper folds and an angular branch bring precision to the dove. Terracotta and ivory give the identity a warm, distinctive direction.</p>
+          <img
+            class="hero"
+            src="03-fold.png"
+            alt="Ivory origami dove holding an aubergine Git branch on warm terracotta."
+          />
+          <div class="titleline">
+            <h2>Fold</h2>
+            <a class="download" href="03-fold.png" download>Download PNG ↗</a>
+          </div>
+          <p class="description">
+            Broad paper folds and an angular branch bring precision to the dove. Terracotta and
+            ivory give the identity a warm, distinctive direction.
+          </p>
           <div class="samples" aria-label="Fold size previews">
-            <figure><img src="03-fold.png" width="64" height="64" alt="Fold at 64 pixels" /><figcaption>64 px</figcaption></figure>
-            <figure><img src="03-fold.png" width="32" height="32" alt="Fold at 32 pixels" /><figcaption>32 px</figcaption></figure>
-            <figure><img src="03-fold.png" width="16" height="16" alt="Fold at 16 pixels" /><figcaption>16 px</figcaption></figure>
+            <figure>
+              <img src="03-fold.png" width="64" height="64" alt="Fold at 64 pixels" />
+              <figcaption>64 px</figcaption>
+            </figure>
+            <figure>
+              <img src="03-fold.png" width="32" height="32" alt="Fold at 32 pixels" />
+              <figcaption>32 px</figcaption>
+            </figure>
+            <figure>
+              <img src="03-fold.png" width="16" height="16" alt="Fold at 16 pixels" />
+              <figcaption>16 px</figcaption>
+            </figure>
           </div>
         </article>
       </section>
-      <p class="verdict"><strong>My pick: Aero.</strong> Its sweeping silhouette and emerald palette make it a natural next step for GitDove. Porcelain favors a sculpted desktop presence; Fold offers the most distinctive change of style.</p>
-      <footer><span>Refined raster concepts · 1254 × 1254 px · Transparent PNG</span><span>Built-in ImageGen · <a href="prompts.json">Full prompts</a></span></footer>
+      <p class="verdict">
+        <strong>My pick: Aero.</strong> Its sweeping silhouette and emerald palette make it a
+        natural next step for GitDove. Porcelain favors a sculpted desktop presence; Fold offers the
+        most distinctive change of style.
+      </p>
+      <footer>
+        <span>Refined raster concepts · 1254 × 1254 px · Transparent PNG</span
+        ><span>Built-in ImageGen · <a href="prompts.json">Full prompts</a></span>
+      </footer>
     </main>
     <script>
-      const light = document.getElementById('light');
-      const dark = document.getElementById('dark');
+      const light = document.getElementById("light");
+      const dark = document.getElementById("dark");
       function setTheme(isDark) {
-        document.body.classList.toggle('dark', isDark);
-        light.setAttribute('aria-pressed', String(!isDark));
-        dark.setAttribute('aria-pressed', String(isDark));
+        document.body.classList.toggle("dark", isDark);
+        light.setAttribute("aria-pressed", String(!isDark));
+        dark.setAttribute("aria-pressed", String(isDark));
       }
-      light.addEventListener('click', () => setTheme(false));
-      dark.addEventListener('click', () => setTheme(true));
+      light.addEventListener("click", () => setTheme(false));
+      dark.addEventListener("click", () => setTheme(true));
     </script>
   </body>
 </html>

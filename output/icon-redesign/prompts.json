@@ -19,9 +19,5 @@
       "refinementPrompt": "Use case: precise-object-edit.\nInput image is an edit target: an already finished GitDove app icon.\nMake only one correction: clean the silhouette of the outer rounded-square tile and its transparent surround. Remove ALL disconnected colored specks, fringe, haze, ragged alpha, and smudges outside the rounded square. There must be only one immaculate smooth rounded-square silhouette on a completely clean transparent exterior, with proper crisp antialiasing. No pixels or glow floating outside it.\nPreserve the existing dove, its shape, pose, wing details, colors, the Git branch with exactly three circular nodes, the beak contact, the background color and shading, composition and overall style. Do not redesign the artwork inside the tile. Keep the transparency outside the tile. Keep a generous even transparent margin. Do not add any words, frames, outlines, objects or checkerboard. Final polished app-icon artwork."
     }
   ],
-  "finalFiles": [
-    "01-aero.png",
-    "02-porcelain.png",
-    "03-fold.png"
-  ]
+  "finalFiles": ["01-aero.png", "02-porcelain.png", "03-fold.png"]
 }

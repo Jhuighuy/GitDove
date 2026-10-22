@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GitDove — Fold SVG recreation</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f3ef;
+        --ink: #262c29;
+        --muted: #68716b;
+        --line: #d9ddd6;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      body.dark {
+        color-scheme: dark;
+        --bg: #1d2123;
+        --ink: #f5f5ef;
+        --muted: #abb3ad;
+        --line: #3e4742;
+      }
+      main {
+        max-width: 1040px;
+        padding: 30px 48px;
+        margin: auto;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 20px;
+      }
+      header span {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      button {
+        color: var(--ink);
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 8px 14px;
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      h1 {
+        margin: 25px 0 10px;
+        font-size: 40px;
+        font-weight: 550;
+        letter-spacing: -1.5px;
+      }
+      p {
+        color: var(--muted);
+        line-height: 1.6;
+        font-size: 14px;
+      }
+      .intro {
+        margin: 0 0 25px;
+      }
+      .compare {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 50px;
+      }
+      figure {
+        margin: 0;
+      }
+      figcaption {
+        font-size: 12px;
+        border-top: 1px solid var(--line);
+        padding: 13px 0 17px;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      figcaption span {
+        color: var(--muted);
+      }
+      .art {
+        width: 100%;
+        aspect-ratio: 1;
+        display: block;
+      }
+      .note {
+        font-size: 11px;
+        margin: 12px 0 0;
+      }
+      .sizes {
+        display: flex;
+        align-items: end;
+        gap: 24px;
+        margin-top: 23px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+      }
+      .sizes figure {
+        display: flex;
+        align-items: center;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .sizes figcaption {
+        padding: 0;
+        border: 0;
+        font-size: 10px;
+        color: var(--muted);
+      }
+      .sizes .label {
+        margin-right: auto;
+        align-self: center;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .label span {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 16px;
+        margin-top: 25px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+      }
+      a {
+        color: inherit;
+        text-underline-offset: 4px;
+      }
+      @media (max-width: 640px) {
+        main {
+          padding: 24px;
+        }
+        .compare {
+          gap: 20px;
+        }
+        h1 {
+          font-size: 30px;
+        }
+        figcaption {
+          flex-direction: column;
+          gap: 4px;
+        }
+        .sizes {
+          gap: 16px;
+          flex-wrap: wrap;
+        }
+        .sizes .label {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <span>GitDove / Fold</span
+        ><button id="theme" type="button" aria-pressed="false">Dark background</button>
+      </header>
+      <h1>Fold, rebuilt as vectors.</h1>
+      <p class="intro">
+        The approved artwork recreated with editable contours, paper facets, and gradients.
+      </p>
+      <section class="compare" aria-label="Reference and SVG comparison">
+        <figure>
+          <figcaption><strong>Original concept</strong><span>Raster reference</span></figcaption>
+          <svg
+            class="art"
+            viewBox="64 79 1126 1097"
+            preserveAspectRatio="none"
+            role="img"
+            aria-label="Original Fold raster concept"
+          >
+            <image href="03-fold.png" width="1254" height="1254" />
+          </svg>
+        </figure>
+        <figure>
+          <figcaption><strong>SVG recreation</strong><span>Paths + gradients</span></figcaption>
+          <svg class="art" viewBox="100 100 824 824" role="img" aria-label="Fold recreated in SVG">
+            <image href="../../build/icon.svg" width="1024" height="1024" />
+          </svg>
+        </figure>
+      </section>
+      <p class="note">
+        Tile bounds aligned for comparison. Production exports retain the existing macOS canvas
+        margins.
+      </p>
+      <section class="sizes" aria-label="Generated icon size previews">
+        <div class="label">
+          Generated from the SVG<br /><span>macOS canvas · actual display sizes</span>
+        </div>
+        <figure>
+          <img src="../../build/icon.png" width="128" height="128" alt="Fold icon at 128 pixels" />
+          <figcaption>128 px</figcaption>
+        </figure>
+        <figure>
+          <img src="../../build/icon.png" width="64" height="64" alt="Fold icon at 64 pixels" />
+          <figcaption>64 px</figcaption>
+        </figure>
+        <figure>
+          <img src="../../build/icon.png" width="32" height="32" alt="Fold icon at 32 pixels" />
+          <figcaption>32 px</figcaption>
+        </figure>
+        <figure>
+          <img src="../../build/icon.png" width="16" height="16" alt="Fold icon at 16 pixels" />
+          <figcaption>16 px</figcaption>
+        </figure>
+      </section>
+      <footer>
+        <span>Named groups: background, branch, tail, rear wing, body, foreground wing, beak</span
+        ><a href="../../build/icon.svg">Open source SVG ↗</a>
+      </footer>
+    </main>
+    <script>
+      const button = document.getElementById("theme");
+      button.addEventListener("click", () => {
+        const isDark = document.body.classList.toggle("dark");
+        button.setAttribute("aria-pressed", String(isDark));
+        button.textContent = isDark ? "Light background" : "Dark background";
+      });
+    </script>
+  </body>
+</html>
