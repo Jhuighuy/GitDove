@@ -10,8 +10,8 @@ export interface WordDiff {
 
 /** Lines longer than this are not compared. */
 const MAX_LINE = 1000;
-/** Limit on the LCS table size; beyond it the middle is marked as changed. */
-const MAX_CELLS = 64 * 64;
+/** Most token edits worth finding; beyond it the middle is marked as changed. */
+const MAX_EDITS = 256;
 /** Emphasis is pointless when less than this share of the line is unchanged. */
 const MIN_COMMON = 0.3;
 
@@ -40,30 +40,12 @@ export const wordDiff = (a: string, b: string): WordDiff | null => {
     suf++;
   }
 
-  // Which tokens of the middle parts are common, via an LCS table.
+  // Which tokens of the middle parts are common.
   const ma = ta.slice(pre, ta.length - suf);
   const mb = tb.slice(pre, tb.length - suf);
   const keepA = Array.from<boolean>({ length: ma.length }).fill(false);
   const keepB = Array.from<boolean>({ length: mb.length }).fill(false);
-  if (ma.length > 0 && mb.length > 0 && ma.length * mb.length <= MAX_CELLS) {
-    const w = mb.length + 1;
-    const t = new Uint16Array((ma.length + 1) * w);
-    for (let i = ma.length - 1; i >= 0; i--) {
-      for (let j = mb.length - 1; j >= 0; j--) {
-        t[i * w + j] =
-          ma[i] === mb[j]
-            ? t[(i + 1) * w + j + 1]! + 1
-            : Math.max(t[(i + 1) * w + j]!, t[i * w + j + 1]!);
-      }
-    }
-    for (let i = 0, j = 0; i < ma.length && j < mb.length;) {
-      if (ma[i] === mb[j]) {
-        keepA[i++] = true;
-        keepB[j++] = true;
-      } else if (t[(i + 1) * w + j]! >= t[i * w + j + 1]!) i++;
-      else j++;
-    }
-  }
+  markCommon(ma, mb, keepA, keepB);
 
   const prefixLen = ta.slice(0, pre).join("").length;
   const del = ranges(ma, keepA, prefixLen);
@@ -72,6 +54,50 @@ export const wordDiff = (a: string, b: string): WordDiff | null => {
   const common = Math.min(a.length - changed(del), b.length - changed(add));
   if (common < MIN_COMMON * Math.max(a.length, b.length)) return null;
   return { del, add };
+};
+
+/**
+ * Marks the tokens of a longest common subsequence of `a` and `b` in `keepA`
+ * and `keepB`, using Myers' O((N+M)D) algorithm, which is fast when the lines
+ * differ little. Marks nothing when more than `MAX_EDITS` edits are needed.
+ */
+const markCommon = (a: string[], b: string[], keepA: boolean[], keepB: boolean[]) => {
+  const n = a.length;
+  const m = b.length;
+  const max = Math.min(n + m, MAX_EDITS);
+  const off = max + 1;
+  // Furthest x reached on each diagonal k = x - y, and a copy of it before each step.
+  const v = new Int32Array(2 * max + 3);
+  const trace: Int32Array[] = [];
+  const down = (k: number, d: number) => k === -d || (k !== d && v[off + k - 1]! < v[off + k + 1]!);
+  for (let d = 0; d <= max; d++) {
+    trace.push(v.slice());
+    for (let k = -d; k <= d; k += 2) {
+      let x = down(k, d) ? v[off + k + 1]! : v[off + k - 1]! + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x++;
+        y++;
+      }
+      v[off + k] = x;
+      if (x < n || y < m) continue;
+      // Walk back through the steps, marking the diagonal moves.
+      for (let e = d; e >= 0; e--) {
+        v.set(trace[e]!);
+        const diagonal = x - y;
+        const prevK = e === 0 ? 0 : down(diagonal, e) ? diagonal + 1 : diagonal - 1;
+        const prevX = e === 0 ? 0 : v[off + prevK]!;
+        const prevY = prevX - prevK;
+        while (x > prevX && y > prevY) {
+          keepA[--x] = true;
+          keepB[--y] = true;
+        }
+        x = prevX;
+        y = prevY;
+      }
+      return;
+    }
+  }
 };
 
 /**
