@@ -5,22 +5,24 @@
  * and resolve to an {@link RpcResult}. Push notifications from main go through
  * the `event` channel.
  */
-import type {
-  AppState,
-  CommitDetails,
-  Comparison,
-  DiffTarget,
-  DirListing,
-  FileDiff,
-  FileVersions,
-  GraphInfo,
-  GraphRow,
-  RefsSnapshot,
-  RepoId,
-  RepoInfo,
-  RepoLocation,
-  UpdaterStatus,
-  WorkingStatus,
+import {
+  type AppState,
+  type CommitDetails,
+  type Comparison,
+  type DiffTarget,
+  type DirListing,
+  type FileDiff,
+  type FileVersions,
+  type GraphInfo,
+  type GraphRow,
+  type RefsSnapshot,
+  type RepoId,
+  type RepoInfo,
+  type RepoLocation,
+  type UpdaterStatus,
+  repoIdOf,
+  repoLocationOf,
+  type WorkingStatus,
 } from "./domain";
 
 export type ResetMode = "soft" | "mixed" | "hard";
@@ -28,6 +30,32 @@ export type ResetMode = "soft" | "mixed" | "hard";
 /** Editing commands of the focused text field or selection, as in the Edit menu. */
 export const EDIT_COMMANDS = ["undo", "redo", "cut", "copy", "paste", "selectAll"] as const;
 export type EditCommand = (typeof EDIT_COMMANDS)[number];
+
+/** Most rows `repo.graphRows` returns at once; use `repo.graphHashes` for long ranges. */
+export const MAX_GRAPH_ROWS = 4096;
+
+/**
+ * Whether `host` can be an SSH destination: no leading `-` (ssh would take it for an option),
+ * whitespace, slashes or control characters.
+ */
+export const isSshHost = (host: string): boolean =>
+  host.length <= 255 && /^[^\s/\p{Cc}-][^\s/\p{Cc}]*$/u.test(host);
+
+/** Whether `id` is a well-formed repository id (see `repoIdOf`). */
+export const isRepoId = (id: string): boolean => {
+  let loc: RepoLocation;
+  try {
+    loc = repoLocationOf(id);
+  } catch {
+    return false;
+  }
+  return (
+    repoIdOf(loc) === id &&
+    loc.path !== "" &&
+    !loc.path.includes("\0") &&
+    (loc.kind === "local" || isSshHost(loc.host))
+  );
+};
 
 export interface Api {
   // App / window
@@ -55,7 +83,10 @@ export interface Api {
   "repo.info": (repo: RepoId) => RepoInfo;
   "repo.refs": (repo: RepoId) => RefsSnapshot;
   "repo.graphInfo": (repo: RepoId) => GraphInfo;
+  /** Rows `start` to `end` (exclusive), at most {@link MAX_GRAPH_ROWS} of them. */
   "repo.graphRows": (repo: RepoId, version: number, start: number, end: number) => GraphRow[];
+  /** Commit hashes of rows `start` to `end` (exclusive), e.g. for range selection. */
+  "repo.graphHashes": (repo: RepoId, version: number, start: number, end: number) => string[];
   "repo.findCommit": (repo: RepoId, version: number, hash: string) => number;
   "repo.search": (repo: RepoId, query: string) => string[];
   "repo.status": (repo: RepoId) => WorkingStatus;

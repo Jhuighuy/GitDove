@@ -6,7 +6,7 @@ import type { RepoLocation } from "@shared/domain";
 import { IPC_INVOKE, type RpcResult } from "@shared/ipc";
 import { Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommandError, InvalidInputError } from "./exec/errors";
+import { CommandError, InvalidInputError, StaleGraphError } from "./exec/errors";
 import { type Host, Hosts } from "./exec/hosts";
 import { spawn } from "./exec/spawn";
 import type { Repository } from "./git/repository";
@@ -31,7 +31,7 @@ const electron = vi.hoisted(() => ({
   },
 }));
 vi.mock("electron", () => electron);
-const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+const log = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock("electron-log/main", () => ({ default: log }));
 const state = vi.hoisted(() => ({ loadState: vi.fn(), saveState: vi.fn() }));
 vi.mock("./state", () => state);
@@ -443,6 +443,7 @@ describe("repository handlers", () => {
     "repo.clone",
     "repo.hiddenRefs",
     "repo.setHiddenRefs",
+    "repo.graphHashes",
   ]);
   const delegating = Object.keys(handlers).filter((m) => m.startsWith("repo.") && !special.has(m));
 
@@ -459,6 +460,14 @@ describe("repository handlers", () => {
       args,
     });
     expect(ids).toEqual(["local:/work/repo"]);
+  });
+
+  it("returns graph row hashes", async () => {
+    services.repo = Object.assign(services.repo, {
+      graphRows: vi.fn(() => Effect.succeed([{ hash: "a" }, { hash: "b" }])),
+    });
+    expect(await call("repo.graphHashes", "local:/work/repo", 3, 10, 12)).toEqual(["a", "b"]);
+    expect(services.repo.graphRows).toHaveBeenCalledWith(3, 10, 12);
   });
 
   it("reads and stores hidden refs", async () => {
@@ -493,19 +502,61 @@ describe("registerIpc", () => {
     return handler({}, method, args);
   };
 
-  it("rejects unknown methods and malformed arguments", async () => {
-    for (const [method, args] of [
-      ["no.such", []],
-      ["toString", []],
-      ["__proto__", []],
-      [42, []],
-      ["app.version", "not-an-array"],
-    ] as const) {
-      expect(await invoke(method, args)).toEqual({
+  it("rejects unknown methods", async () => {
+    for (const method of ["no.such", "toString", "__proto__", 42]) {
+      expect(await invoke(method, [])).toEqual({
         ok: false,
         error: { tag: "BadRequest", message: `Unknown method ${String(method)}` },
       });
     }
+  });
+
+  it("rejects malformed arguments before they reach a handler", async () => {
+    const id = "local:/work/repo";
+    const bad: [string, unknown][] = [
+      ["app.version", "not-an-array"],
+      ["app.version", [1]],
+      ["repo.status", []],
+      ["repo.status", [42]],
+      ["repo.status", ["nope"]],
+      ["repo.status", ["local:"]],
+      ["repo.status", ["ssh://-oProxyCommand=x/srv"]],
+      ["repo.stage", [id, "a"]],
+      ["repo.stage", [id, ["a", 1]]],
+      ["repo.stashPop", [id, -1]],
+      ["repo.stashPop", [id, 1.5]],
+      ["repo.reset", [id, "HEAD", "keep"]],
+      ["repo.push", [id, { force: "yes", setUpstream: false }]],
+      ["repo.open", [{ kind: "ssh", host: "-oProxyCommand=x", path: "/srv" }]],
+      ["repo.open", [{ kind: "ssh", host: "box", path: "" }]],
+      ["repo.open", [{ kind: "nfs", path: "/srv" }]],
+      ["ssh.listDir", ["fedora --", null]],
+      ["app.setState", [{ tabs: "x", activeTab: null, recent: [] }]],
+      ["repo.graphRows", [id, 1, 0, 4097]],
+    ];
+    services.getRepo = () => Effect.die("must not be called");
+    for (const [method, args] of bad) {
+      const r = await invoke(method, args);
+      expect(r, `${method} ${JSON.stringify(args)}`).toMatchObject({
+        ok: false,
+        error: { tag: "BadRequest" },
+      });
+      expect(!r.ok && r.error.message).toMatch(`Invalid arguments for ${method}: `);
+    }
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("accepts well-formed arguments", async () => {
+    expect(await invoke("repo.graphRows", ["local:/work/repo", 1, 4096, 8192])).toMatchObject({
+      ok: true,
+    });
+    expect(
+      await invoke("repo.merge", ["ssh://fedora/srv/a", "main", { ffOnly: true }]),
+    ).toMatchObject({ ok: true });
+    expect(await invoke("shell.revealInFinder", ["local:/work/repo"])).toMatchObject({ ok: true });
+    // Unknown properties are dropped.
+    await invoke("app.setState", [{ tabs: [], activeTab: null, recent: [], extra: 1 }]);
+    expect(state.saveState).toHaveBeenLastCalledWith({ tabs: [], activeTab: null, recent: [] });
   });
 
   it("runs edit commands in the window that asked", async () => {
@@ -516,7 +567,7 @@ describe("registerIpc", () => {
     expect(sender.paste).toHaveBeenCalledOnce();
     expect(await handler({ sender }, "app.edit", ["destroy"])).toMatchObject({
       ok: false,
-      error: { tag: "InvalidInputError", message: "Unknown edit command: destroy" },
+      error: { tag: "BadRequest" },
     });
   });
 
@@ -546,6 +597,20 @@ describe("registerIpc", () => {
       ok: false,
       error: { tag: "InvalidInputError", message: "Refusing to open ftp://x" },
     });
+  });
+
+  it("caps error details and logs expected failures quietly", async () => {
+    services.getRepo = () =>
+      Effect.fail(
+        new CommandError({ message: "x", command: "c", exitCode: 1, stderr: "e".repeat(100_000) }),
+      ) as never;
+    const r = await invoke("repo.status", ["local:/x"]);
+    expect(!r.ok && r.error.detail!.length).toBeLessThan(17_000);
+    services.getRepo = () => Effect.fail(new StaleGraphError({ message: "outdated" })) as never;
+    log.warn.mockClear();
+    await invoke("repo.status", ["local:/x"]);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("repo.status: outdated");
   });
 
   it("reports interruptions and defects", async () => {

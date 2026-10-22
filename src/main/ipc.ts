@@ -6,14 +6,17 @@ import {
   type ApiResult,
   EDIT_COMMANDS,
   IPC_INVOKE,
+  isRepoId,
+  isSshHost,
+  MAX_GRAPH_ROWS,
   type RpcError,
   type RpcResult,
 } from "@shared/ipc";
 import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
 import log from "electron-log/main";
-import { Cause, Context, Effect, Exit, type ManagedRuntime } from "effect";
+import { Cause, Context, Effect, Exit, type ManagedRuntime, Schema } from "effect";
 import { type AppError, InvalidInputError } from "./exec/errors";
-import { Hosts } from "./exec/hosts";
+import { Hosts, LOCAL_HOST } from "./exec/hosts";
 import { shellJoin, shellQuote } from "./exec/shell";
 import type { Repository } from "./git/repository";
 import { RepoSettings, Repos } from "./services";
@@ -21,6 +24,9 @@ import { loadState, saveState } from "./state";
 import { updater } from "./updater";
 
 type Services = Repos | Hosts | RepoSettings;
+
+/** Most hashes `repo.graphHashes` returns at once. */
+const MAX_GRAPH_HASHES = 1 << 20;
 
 /** The renderer a request came from. */
 export class Caller extends Context.Service<Caller, { readonly webContents: WebContents }>()(
@@ -31,6 +37,153 @@ type Handlers = {
   [M in ApiMethod]: (
     ...args: ApiArgs<M>
   ) => Effect.Effect<ApiResult<M>, AppError, Services | Caller>;
+};
+
+// ---------------------------------------------------------------------------
+// Argument schemas: the renderer is not trusted, so every request is decoded
+// against the schema of its method before it reaches a handler.
+// ---------------------------------------------------------------------------
+
+const valid = <T>(test: (value: T) => boolean, message: string) =>
+  Schema.makeFilter<T>((value) => test(value) || message);
+
+const Str = Schema.String;
+const Bool = Schema.Boolean;
+const Index = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+const Path = Str.check(valid((p: string) => p !== "" && !p.includes("\0"), "Invalid path"));
+const Id = Str.check(valid(isRepoId, "Invalid repository id"));
+const SshHost = Str.check(
+  valid((h: string) => isSshHost(h) && h !== LOCAL_HOST, "Invalid SSH host"),
+);
+const Location = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("local"), path: Path }),
+  Schema.Struct({ kind: Schema.Literal("ssh"), host: SshHost, path: Path }),
+]);
+const Target = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("unstaged"), path: Str, untracked: Schema.optional(Bool) }),
+  Schema.Struct({ kind: Schema.Literal("staged"), path: Str, oldPath: Schema.optional(Str) }),
+  Schema.Struct({
+    kind: Schema.Literal("commit"),
+    hash: Str,
+    base: Schema.optional(Str),
+    path: Str,
+    oldPath: Schema.optional(Str),
+  }),
+]);
+const State = Schema.Struct({
+  tabs: Schema.Array(Str),
+  activeTab: Schema.NullOr(Str),
+  recent: Schema.Array(Str),
+});
+/** A graph row range of at most `max` rows. */
+const RowRange = (max: number) =>
+  Schema.Tuple([Id, Index, Index, Index]).check(
+    valid(([, , start, end]) => end - start <= max, `At most ${max} rows can be requested`),
+  );
+
+const noArgs = Schema.Tuple([]);
+const argsOf = <const E extends readonly Schema.Top[]>(...elements: E) => Schema.Tuple(elements);
+const repoArgs = <const E extends readonly Schema.Top[]>(...elements: E) =>
+  Schema.Tuple([Id, ...elements]);
+
+type DeepReadonly<T> = T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } : T;
+type Equals<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+
+const argSchemas = {
+  "app.getState": noArgs,
+  "app.setState": argsOf(State),
+  "app.version": noArgs,
+  "app.edit": argsOf(Schema.Literals(EDIT_COMMANDS)),
+  "dialog.pickDirectory": noArgs,
+  "shell.openTerminal": repoArgs(),
+  "shell.revealInFinder": repoArgs(Schema.optional(Str)),
+  "shell.openExternal": argsOf(Str),
+  "ssh.hosts": noArgs,
+  "ssh.listDir": argsOf(SshHost, Schema.NullOr(Str)),
+  "repo.open": argsOf(Location),
+  "repo.close": repoArgs(),
+  "repo.init": argsOf(Location),
+  "repo.clone": argsOf(Str, Location),
+  "repo.info": repoArgs(),
+  "repo.refs": repoArgs(),
+  "repo.graphInfo": repoArgs(),
+  "repo.graphRows": RowRange(MAX_GRAPH_ROWS),
+  "repo.graphHashes": RowRange(MAX_GRAPH_HASHES),
+  "repo.findCommit": repoArgs(Index, Str),
+  "repo.search": repoArgs(Str),
+  "repo.status": repoArgs(),
+  "repo.commitDetails": repoArgs(Str),
+  "repo.compare": repoArgs(Schema.NullOr(Str), Str),
+  "repo.diff": repoArgs(Target),
+  "repo.fileVersions": repoArgs(Target),
+  "repo.stage": repoArgs(Schema.Array(Str)),
+  "repo.stageAll": repoArgs(),
+  "repo.unstage": repoArgs(Schema.Array(Str)),
+  "repo.unstageAll": repoArgs(),
+  "repo.discard": repoArgs(Schema.Array(Str), Schema.Array(Str)),
+  "repo.applyPatch": repoArgs(Str, Schema.Struct({ cached: Bool, reverse: Bool })),
+  "repo.commit": repoArgs(Str, Schema.Struct({ amend: Bool })),
+  "repo.lastCommitMessage": repoArgs(),
+  "repo.checkout": repoArgs(Str),
+  "repo.checkoutRemote": repoArgs(Str, Str),
+  "repo.createBranch": repoArgs(Str, Str, Bool),
+  "repo.deleteBranch": repoArgs(Str, Bool),
+  "repo.deleteRemoteBranch": repoArgs(Str, Str),
+  "repo.renameBranch": repoArgs(Str, Str),
+  "repo.setUpstream": repoArgs(Str, Schema.NullOr(Str)),
+  "repo.createTag": repoArgs(Str, Str, Schema.NullOr(Str)),
+  "repo.deleteTag": repoArgs(Str),
+  "repo.merge": repoArgs(
+    Str,
+    Schema.Struct({ ffOnly: Schema.optional(Bool), noFf: Schema.optional(Bool) }),
+  ),
+  "repo.rebase": repoArgs(Str),
+  "repo.cherryPick": repoArgs(Str),
+  "repo.revert": repoArgs(Str),
+  "repo.reset": repoArgs(Str, Schema.Literals(["soft", "mixed", "hard"])),
+  "repo.abortOperation": repoArgs(),
+  "repo.continueOperation": repoArgs(),
+  "repo.cancel": repoArgs(),
+  "repo.hiddenRefs": repoArgs(),
+  "repo.setHiddenRefs": repoArgs(Schema.Array(Str)),
+  "repo.addWorktree": repoArgs(Str, Str, Schema.NullOr(Str)),
+  "repo.removeWorktree": repoArgs(Str, Bool),
+  "repo.pruneWorktrees": repoArgs(),
+  "repo.updateSubmodule": repoArgs(Str),
+  "repo.stash": repoArgs(Schema.NullOr(Str), Bool),
+  "repo.stashPop": repoArgs(Index),
+  "repo.stashApply": repoArgs(Index),
+  "repo.stashDrop": repoArgs(Index),
+  "repo.fetch": repoArgs(Schema.NullOr(Str)),
+  "repo.pull": repoArgs(Schema.Literals(["ff-only", "merge", "rebase"])),
+  "repo.push": repoArgs(Schema.Struct({ force: Bool, setUpstream: Bool })),
+  "repo.pushBranch": repoArgs(Str, Bool),
+  "repo.fastForwardBranch": repoArgs(Str),
+  "repo.pushTag": repoArgs(Str, Str),
+  "repo.deleteRemoteTag": repoArgs(Str, Str),
+  "repo.setRemoteUrl": repoArgs(Str, Str),
+  "repo.addRemote": repoArgs(Str, Str),
+  "repo.removeRemote": repoArgs(Str),
+  "updater.status": noArgs,
+  "updater.check": noArgs,
+  "updater.install": noArgs,
+} satisfies { readonly [M in ApiMethod]: Schema.Codec<unknown, unknown> };
+
+/** Fails to compile unless each schema decodes exactly the arguments its `Api` method takes. */
+export type ArgSchemasMatchApi = Expect<{
+  [M in ApiMethod]: Equals<(typeof argSchemas)[M]["Type"], DeepReadonly<ApiArgs<M>>>;
+}>;
+type Expect<T extends { readonly [M in ApiMethod]: true }> = T;
+
+const decoders = new Map<string, (input: unknown) => Exit.Exit<unknown, Schema.SchemaError>>();
+const decodeArgs = (method: ApiMethod, input: unknown) => {
+  let decode = decoders.get(method);
+  if (!decode) {
+    decode = Schema.decodeUnknownExit(argSchemas[method] as Schema.Codec<unknown, unknown>);
+    decoders.set(method, decode);
+  }
+  return decode(input);
 };
 
 const withRepo = <A, E, R = never>(id: RepoId, f: (repo: Repository) => Effect.Effect<A, E, R>) =>
@@ -203,7 +356,7 @@ export const handlers: Handlers = {
   "repo.init": (location) =>
     Effect.gen(function* () {
       const hosts = yield* Hosts;
-      const host = hosts.get(location.kind === "local" ? "local" : location.host);
+      const host = hosts.get(location.kind === "local" ? LOCAL_HOST : location.host);
       yield* host.exec("git", ["init", "--", location.path]);
       const repos = yield* Repos;
       const repo = yield* repos.open(location);
@@ -214,7 +367,7 @@ export const handlers: Handlers = {
       if (url.startsWith("-"))
         return yield* Effect.fail(new InvalidInputError({ message: "Invalid URL" }));
       const hosts = yield* Hosts;
-      const host = hosts.get(location.kind === "local" ? "local" : location.host);
+      const host = hosts.get(location.kind === "local" ? LOCAL_HOST : location.host);
       yield* host.exec("git", ["clone", "--", url, location.path]);
       const repos = yield* Repos;
       const repo = yield* repos.open(location);
@@ -227,6 +380,10 @@ export const handlers: Handlers = {
   "repo.graphInfo": (id) => withRepo(id, (r) => r.graphInfo()),
   "repo.graphRows": (id, version, start, end) =>
     withRepo(id, (r) => r.graphRows(version, start, end)),
+  "repo.graphHashes": (id, version, start, end) =>
+    withRepo(id, (r) => r.graphRows(version, start, end)).pipe(
+      Effect.map((rows) => rows.map((row) => row.hash)),
+    ),
   "repo.findCommit": (id, version, hash) => withRepo(id, (r) => r.findCommit(version, hash)),
   "repo.search": (id, query) => withRepo(id, (r) => r.search(query)),
   "repo.status": (id) => withRepo(id, (r) => r.status()),
@@ -315,14 +472,20 @@ export const handlers: Handlers = {
   "updater.install": () => Effect.sync(() => updater.install()),
 };
 
+/** Longest error detail (e.g. stderr) sent to the renderer. */
+const MAX_DETAIL = 16 * 1024;
+
 const serializeError = (cause: Cause.Cause<AppError>): RpcError => {
   const failure = cause.reasons.find(Cause.isFailReason);
   if (failure) {
     const e = failure.error;
+    const detail = "stderr" in e && e.stderr ? e.stderr : "";
     return {
       tag: e._tag,
       message: e.message,
-      ...("stderr" in e && e.stderr ? { detail: e.stderr } : {}),
+      ...(detail
+        ? { detail: detail.length > MAX_DETAIL ? `${detail.slice(0, MAX_DETAIL)}\n…` : detail }
+        : {}),
     };
   }
   if (Cause.hasInterrupts(cause)) return { tag: "Interrupted", message: "Operation was cancelled" };
@@ -330,29 +493,43 @@ const serializeError = (cause: Cause.Cause<AppError>): RpcError => {
   return { tag: "Defect", message: Cause.pretty(cause).split("\n")[0] ?? "Unexpected error" };
 };
 
+/** Failures that are part of normal operation, not worth a warning. */
+const EXPECTED = new Set(["StaleGraphError", "CancelledError", "Interrupted"]);
+
+const badRequest = (message: string): RpcResult<never> => {
+  log.warn(`Bad request: ${message}`);
+  return { ok: false, error: { tag: "BadRequest", message } };
+};
+
 /** Installs the single IPC entry point that dispatches to {@link handlers}. */
 export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, never>) => {
   ipcMain.handle(
     IPC_INVOKE,
-    async (event, method: unknown, args: unknown): Promise<RpcResult<unknown>> => {
-      if (typeof method !== "string" || !Object.hasOwn(handlers, method) || !Array.isArray(args)) {
-        return {
-          ok: false,
-          error: { tag: "BadRequest", message: `Unknown method ${String(method)}` },
-        };
+    async (event, method: unknown, input: unknown): Promise<RpcResult<unknown>> => {
+      if (typeof method !== "string" || !Object.hasOwn(handlers, method)) {
+        return badRequest(`Unknown method ${String(method).slice(0, 100)}`);
+      }
+      const args = decodeArgs(method as ApiMethod, input);
+      if (Exit.isFailure(args)) {
+        const reason = args.cause.reasons.find(Cause.isFailReason);
+        const why = reason ? reason.error.message.replaceAll(/\s+/g, " ") : "malformed";
+        return badRequest(`Invalid arguments for ${method}: ${why}`);
       }
       const handler = handlers[method as ApiMethod] as (
-        ...a: unknown[]
+        ...a: readonly unknown[]
       ) => Effect.Effect<unknown, AppError, Services | Caller>;
       const started = performance.now();
       const exit = await runtime.runPromiseExit(
-        handler(...args).pipe(Effect.provideService(Caller, { webContents: event.sender })),
+        handler(...(args.value as readonly unknown[])).pipe(
+          Effect.provideService(Caller, { webContents: event.sender }),
+        ),
       );
       const ms = performance.now() - started;
       if (ms > 500) log.info(`${method} took ${ms.toFixed(0)}ms`);
       if (Exit.isSuccess(exit)) return { ok: true, value: exit.value };
       const error = serializeError(exit.cause);
-      log.warn(`${method} failed: ${error.message}`);
+      if (EXPECTED.has(error.tag)) log.debug(`${method}: ${error.message}`);
+      else log.warn(`${method} failed: ${error.message}`);
       return { ok: false, error };
     },
   );
