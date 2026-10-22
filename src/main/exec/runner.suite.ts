@@ -191,7 +191,10 @@ export const runnerSuite = (sh: string) =>
       });
 
       it("ignores what the login shell prints before the runner starts", async () => {
-        const runner = await Effect.runPromise(start("echo Welcome; echo '@GDR 1 X 0 0'; "));
+        // The last line has no newline, e.g. a terminal title set by `.bashrc`.
+        const runner = await Effect.runPromise(
+          start("echo Welcome; echo '@GDR 1 X 0 0'; printf '\\033]0;title\\007'; "),
+        );
         try {
           const r = await Effect.runPromise(run(runner, "echo ok"));
           expect(r.stdout.toString()).toBe("ok\n");

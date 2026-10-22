@@ -38,7 +38,8 @@ import { completion, MAX_STDERR, type SpawnResult, type Stdin } from "./spawn";
  * files shrank meanwhile, the command fails with `F output`.
  *
  * The runner greets with `@GDR-HELLO 2\n` once it is ready; anything before that (e.g. a
- * chatty `.bashrc`) is ignored.
+ * chatty `.bashrc`) is ignored. The greeting starts a line of its own, also after output
+ * without a final newline (e.g. a `.bashrc` that sets the terminal title).
  */
 export const RUNNER_SCRIPT = `d=$(mktemp -d "\${TMPDIR:-/tmp}/gitdove.XXXXXX" 2>/dev/null) ||
   { d=\${TMPDIR:-/tmp}/gitdove.$$ && (umask 077 && mkdir "$d"); } || exit 1
@@ -184,7 +185,7 @@ recv() {
 }
 writer <q &
 exec 3>q
-printf '@GDR-HELLO 2\\n'
+printf '\\n@GDR-HELLO 2\\n'
 while read -r op id a b l c i; do
   case $op in
   D) recv "$id" "$a" ;;
