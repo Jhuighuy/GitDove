@@ -85,6 +85,13 @@ describe.skipIf(noShell).each(targets)("Repository graph on %s", (hostId) => {
     expect((await complete(repo, next.version)).count).toBe(2);
   });
 
+  it("reloads the graph after its own writes, without file system events", async () => {
+    const g = await complete(t.repo);
+    await sh("echo e > e.txt && git add e.txt");
+    await run(t.repo.commit("e", { amend: false }));
+    expect((await complete(t.repo, g.version)).count).toBe(3);
+  });
+
   it("never reuses graph versions, even in a reopened repository", async () => {
     const first = await complete(t.repo);
     const again = await complete(await t.open(t.dir));

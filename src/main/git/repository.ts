@@ -504,13 +504,25 @@ export class Repository {
     effect: Effect.Effect<A, E>,
     network = false,
   ): Effect.Effect<A, E | CancelledError> {
-    return this.writes.withPermits(1)(this.cancellable(effect, network));
+    return this.writes.withPermits(1)(this.cancellable(effect, network)).pipe(this.refsMayChange);
+  }
+
+  /** Like {@link write}, for operations that only change the index and the work tree. */
+  private indexWrite<A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | CancelledError> {
+    return this.writes.withPermits(1)(this.cancellable(effect, false));
   }
 
   /** Like {@link write}, for fetches and pushes (see {@link transfers}). */
   private transfer<A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | CancelledError> {
-    return this.transfers.withPermits(1)(this.cancellable(effect, true));
+    return this.transfers.withPermits(1)(this.cancellable(effect, true)).pipe(this.refsMayChange);
   }
+
+  /**
+   * Checks the graph after an operation of the app's own, which is cheap when the refs did not
+   * change: there may be no file system events for it (over SSH, the next poll is seconds away).
+   */
+  private readonly refsMayChange = <A, E>(effect: Effect.Effect<A, E>) =>
+    effect.pipe(Effect.ensuring(Effect.sync(() => this.invalidateGraph())));
 
   private cancellable<A, E>(
     effect: Effect.Effect<A, E>,
@@ -1193,7 +1205,7 @@ export class Repository {
   // -------------------------------------------------------------------------
 
   stage(paths: readonly string[]) {
-    return this.write(
+    return this.indexWrite(
       paths.length === 0
         ? Effect.void
         : this.run([LITERAL, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], {
@@ -1203,13 +1215,13 @@ export class Repository {
   }
 
   stageAll() {
-    return this.write(this.run(["add", "-A"]));
+    return this.indexWrite(this.run(["add", "-A"]));
   }
 
   // Without a revision, `reset` also works on an unborn branch (it empties the index).
   unstage(paths: readonly string[]) {
     if (paths.length === 0) return Effect.void;
-    return this.write(
+    return this.indexWrite(
       this.run([LITERAL, "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"], {
         stdin: paths.join("\0"),
         okCodes: [0, 1],
@@ -1218,11 +1230,11 @@ export class Repository {
   }
 
   unstageAll() {
-    return this.write(this.run(["reset", "-q"], { okCodes: [0, 1] }));
+    return this.indexWrite(this.run(["reset", "-q"], { okCodes: [0, 1] }));
   }
 
   discard(paths: readonly string[], untracked: readonly string[]) {
-    return this.write(
+    return this.indexWrite(
       Effect.gen({ self: this }, function* () {
         if (paths.length > 0) {
           yield* this.run(
@@ -1240,7 +1252,7 @@ export class Repository {
   }
 
   applyPatch(patch: string, opts: { cached: boolean; reverse: boolean }) {
-    return this.write(
+    return this.indexWrite(
       this.run(
         [
           "apply",
