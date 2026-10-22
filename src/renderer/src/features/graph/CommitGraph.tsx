@@ -133,16 +133,22 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
     overscan: 24,
     initialOffset: () => views.get(repo)?.scroll ?? 0,
   });
-  // The virtualizer starts where the graph was, but one whose history is not loaded yet has
-  // nothing to scroll: the browser clamps it to the top. Go back there once there are rows.
+  // The virtualizer starts where the graph was, but a history that is not loaded yet (or only
+  // partly, while it streams in) may not reach there: the browser clamps the scroll. Go back
+  // there once it can, unless the user scrolled meanwhile.
   const restore = useRef(views.get(repo)?.scroll ?? 0);
-  const loaded = (info?.count ?? 0) > 0;
   useLayoutEffect(() => {
-    if (!loaded || restore.current === 0) return;
-    virtualizer.scrollToOffset(restore.current);
+    const target = restore.current;
+    if (target === 0 || !info) return;
+    const reachable = virtualizer.getTotalSize() - (virtualizer.scrollRect?.height ?? 0) >= target;
+    if (!reachable && !info.complete) return;
+    virtualizer.scrollToOffset(target);
     restore.current = 0;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded]);
+  }, [info?.count, info?.complete]);
+  const scrolledByUser = () => {
+    restore.current = 0;
+  };
   const items = virtualizer.getVirtualItems();
   const firstIndex = Math.max(0, (items[0]?.index ?? 0) - offset);
   const lastIndex = Math.max(0, (items.at(-1)?.index ?? 0) - offset + 1);
@@ -347,10 +353,15 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
             <div
               ref={scrollRef}
               tabIndex={0}
-              onKeyDown={onKeyDown}
+              onKeyDown={(e) => {
+                scrolledByUser();
+                onKeyDown(e);
+              }}
               onScroll={(e) => {
                 viewOf(repo).scroll = e.currentTarget.scrollTop;
               }}
+              onWheel={scrolledByUser}
+              onPointerDown={scrolledByUser}
               className="relative min-h-0 flex-1 overflow-auto outline-none [contain:strict]"
             />
           }

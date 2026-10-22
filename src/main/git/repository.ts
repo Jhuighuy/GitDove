@@ -951,10 +951,24 @@ export class Repository {
         // commits, everything in the index is new (forced: a staged file edited since differs
         // from both the index and the work tree).
         const hasHead = yield* this.hasHead();
-        yield* hasHead
-          ? // Never into submodules, whatever `submodule.recurse` says: their changes are reported.
-            this.run(["reset", "--hard", "-q", "--no-recurse-submodules"])
-          : this.run(["rm", "-r", "-q", "-f", "--ignore-unmatch", "."]);
+        // Submodules added before the first commit: their folders are not ours to delete.
+        let added: string[] = [];
+        if (hasHead) {
+          // Never into submodules, whatever `submodule.recurse` says: their changes are reported.
+          yield* this.run(["reset", "--hard", "-q", "--no-recurse-submodules"]);
+        } else {
+          added = (yield* this.gitText(["ls-files", "-s", "-z"]))
+            .split("\0")
+            .filter((entry) => entry.startsWith("160000 "))
+            .map((entry) => entry.slice(entry.indexOf("\t") + 1));
+          if (added.length > 0) {
+            yield* this.run(
+              ["rm", "--cached", "-r", "-q", "-f", "--pathspec-from-file=-", "--pathspec-file-nul"],
+              { stdin: added.join("\0") },
+            );
+          }
+          yield* this.run(["rm", "-r", "-q", "-f", "--ignore-unmatch", "."]);
+        }
         // What is left is not ours to delete without asking: say so. `clean` keeps untracked
         // nested repositories (unless forced twice), and the reset leaves the files inside
         // submodules alone. Files that were ignored before the reset are kept on purpose.
@@ -965,6 +979,7 @@ export class Repository {
         const kept = [
           ...(nested.length > 0 ? [`nested repositories: ${nested.join(", ")}`] : []),
           ...(submodules.length > 0 ? [`changes in submodules: ${submodules.join(", ")}`] : []),
+          ...(added.length > 0 ? [`the folders of new submodules: ${added.join(", ")}`] : []),
         ];
         if (kept.length > 0) {
           return yield* new InvalidInputError({

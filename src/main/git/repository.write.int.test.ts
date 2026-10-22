@@ -223,6 +223,24 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             const kept = yield* Effect.flip(repo.discardAll());
             expect(kept.message).toContain("kept nested repositories: nested/");
 
+            // A submodule added before the first commit is unstaged, its folder kept.
+            yield* host.sh(
+              `rm -rf nested && git init -q -b main '${dir}-sub' && echo s > '${dir}-sub/s.txt' && ` +
+                `git -C '${dir}-sub' add s.txt && ` +
+                `git -C '${dir}-sub' -c user.name=T -c user.email=t@x commit -qm s && ` +
+                `git -c protocol.file.allow=always submodule add -q '${dir}-sub' sub && ` +
+                "echo x >> sub/s.txt",
+              { cwd: dir },
+            );
+            const sub = yield* Effect.flip(repo.discardAll());
+            expect(sub.message).toBe(
+              "Discarded the other changes, but kept the folders of new submodules: sub",
+            );
+            expect((yield* host.sh("cat sub/s.txt", { cwd: dir })).stdout.toString()).toBe(
+              "s\nx\n",
+            );
+            yield* host.sh("rm -rf sub", { cwd: dir });
+
             // Nothing is discarded in the middle of a merge (or the like).
             yield* host.sh("rm -rf nested && echo x > a.txt && touch .git/MERGE_HEAD", {
               cwd: dir,
@@ -231,7 +249,7 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             expect(merging.message).toBe("Abort or finish the merging first");
             expect((yield* repo.status()).unstaged.map((f) => f.path)).toEqual(["a.txt"]);
           } finally {
-            yield* host.sh(`rm -rf -- '${dir}'`).pipe(Effect.ignore);
+            yield* host.sh(`rm -rf -- '${dir}' '${dir}-sub'`).pipe(Effect.ignore);
           }
         }),
       );

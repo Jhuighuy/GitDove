@@ -346,6 +346,61 @@ it("comes back where it was once a history that was not loaded yet arrives", asy
   expect(scroller().scrollTop).toBe(1234);
 });
 
+it("waits for the history to reach where it was, while it streams in", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 4000;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  // Back with only the first rows loaded: too few to reach the place.
+  mocks.info = { version: 2, count: 20, complete: false, maxLanes: 1 };
+  root = createRoot(container);
+  await render(null);
+  await act(async () => {
+    scroller().scrollTop = 0;
+  });
+  const stream = (count: number, complete: boolean) =>
+    act(async () => {
+      client.setQueryData(keys.graphInfo(repo), { version: 2, count, complete, maxLanes: 1 });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  await stream(60, false);
+  expect(scroller().scrollTop).toBe(0);
+  await stream(200, true);
+  expect(scroller().scrollTop).toBe(4000);
+});
+
+it("does not take the user back once they scrolled themselves", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 4000;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => root.unmount());
+  mocks.info = { version: 2, count: 20, complete: false, maxLanes: 1 };
+  root = createRoot(container);
+  await render(null);
+  await act(async () => {
+    scroller().dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 10 }));
+    scroller().scrollTop = 10;
+  });
+  await act(async () => {
+    client.setQueryData(keys.graphInfo(repo), {
+      version: 2,
+      count: 200,
+      complete: true,
+      maxLanes: 1,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(scroller().scrollTop).toBe(10);
+});
+
 it("reveals a commit again when the graph went away before finding it", async () => {
   mocks.found = 3;
   let release = () => {};
