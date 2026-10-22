@@ -22,8 +22,22 @@ vi.stubGlobal("self", {
   },
 });
 
+/**
+ * Loading shiki, its themes and grammars is by far the slowest part, and under heavy load can
+ * take many seconds: it happens once, up front, with as long as it takes. The tests then wait
+ * on the worker's own work only, which is quick, but never on a clock.
+ */
+const SLOW = 180_000;
+vi.setConfig({ testTimeout: SLOW, hookTimeout: SLOW });
+
 beforeAll(async () => {
   await import("./highlight.worker");
+  const { bundledLanguages } = await import("shiki/langs");
+  await Promise.all([
+    import("shiki/themes/github-light.mjs"),
+    import("shiki/themes/github-dark.mjs"),
+    ...(["typescript", "javascript", "c", "python"] as const).map((l) => bundledLanguages[l]()),
+  ]);
 });
 
 beforeEach(() => {
@@ -50,7 +64,9 @@ const highlight = (doc: number, side: 0 | 1, chunk: number, theme: "dark" | "lig
 
 const tokensOf = (doc: number) =>
   posted.filter((m): m is Tokens => m.type === "tokens" && m.doc === doc);
-const waitFor = (fn: () => void) => vi.waitFor(fn, { timeout: 15_000, interval: 5 });
+/** Waits for the worker, failing a little before the test would time out. */
+const waitFor = (fn: () => void) => vi.waitFor(fn, { timeout: SLOW - 10_000, interval: 5 });
+/** Lets the worker run on; used only to check that nothing more arrives. */
 const idle = () => new Promise((r) => setTimeout(r, 50));
 
 /** Styles of the tokens of line `i` of a chunk, as `[text, style]` pairs. */
