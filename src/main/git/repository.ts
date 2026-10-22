@@ -1442,7 +1442,7 @@ export class Repository {
         const dirs = (yield* this.host.sh(script, { cwd: this.workTree })).stdout.toString();
         for (const p of dirs.split("\0")) if (p) found.add(p);
       }
-      return [...found].toSorted();
+      return [...found].toSorted((a, b) => a.localeCompare(b));
     });
   }
 
