@@ -160,21 +160,35 @@ export const branchOwners = (refsOut: string, logs: OwnerLogs, userOut: string):
   }));
   const tipEmails = new Map(read(logs.tips).map((c) => [c.hash, c.email]));
 
-  /** Branch tips by log position, to find the branches a branch was built on. */
-  const tipsAt = new Map<number, typeof tips>();
+  /**
+   * Branch tips by log position and branch name, to find the branches a branch was built on.
+   * Many refs may share a commit, so lookups must not scan them all.
+   */
+  const tipsAt = new Map<number, Map<string | null, string[]>>();
   for (const tip of tips) {
     const at = position.get(tip.hash);
-    if (at !== undefined) tipsAt.set(at, [...(tipsAt.get(at) ?? []), tip]);
+    if (at === undefined) continue;
+    let names = tipsAt.get(at);
+    if (!names) tipsAt.set(at, (names = new Map()));
+    const n = branchName(tip.name);
+    const refs = names.get(n);
+    if (refs) refs.push(tip.name);
+    else names.set(n, [tip.name]);
   }
 
   const byRef: Record<string, string> = {};
   const used = new Set<string>();
   for (const tip of tips) {
     if (isDefault(tip.name)) continue;
-    // Its copies elsewhere (its upstream, the same name on a remote) are not its bases.
+    // Its copies elsewhere (its upstream, the same name on a remote) are not its bases. Only
+    // one name is its own and only one ref its upstream, so this looks at three names at most.
     const name = branchName(tip.name);
-    const isBase = (at: number) =>
-      (tipsAt.get(at) ?? []).some((t) => t.name !== tip.upstream && branchName(t.name) !== name);
+    const isBase = (at: number) => {
+      for (const [n, refs] of tipsAt.get(at) ?? []) {
+        if (n !== name && (refs.length > 1 || refs[0] !== tip.upstream)) return true;
+      }
+      return false;
+    };
     // Weigh the authors of its own commits by closeness to the tip: the k-th newest commit
     // that is not a merge counts 1/k, so whoever works on it now owns it.
     const weights = new Map<string, number>();

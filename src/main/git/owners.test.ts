@@ -178,6 +178,17 @@ describe("branchOwners", () => {
     expect(o.byRef["refs/heads/b"]).toBe("ann@x");
   });
 
+  it("scales to many refs on one commit", { timeout: 3000 }, () => {
+    // Remotes with the same branch name, and other branches, on a commit of the history.
+    const many = Array.from({ length: 40_000 }, (_, i) => [
+      ref(`refs/remotes/r${i}/x`, "c0"),
+      ref(`refs/heads/b${i}`, "c1"),
+    ]).flat();
+    const o = branchOwners(many.join("\n"), { commits: linear(["one", "two"]), tips: "" }, "");
+    expect(o.byRef["refs/remotes/r0/x"]).toBe("one@x");
+    expect(o.byRef["refs/heads/b0"]).toBe("two@x");
+  });
+
   it("owns a branch with only merges of other branches by its tip", () => {
     // An integration branch tracking main that merged Ann's topic.
     const o = branchOwners(
