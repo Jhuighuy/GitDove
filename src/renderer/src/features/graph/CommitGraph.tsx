@@ -20,7 +20,7 @@ import {
   ContextMenu,
   ContextMenuTrigger,
   isMenuKey,
-  openMenuAt,
+  openActiveMenu,
   useContextMenuTarget,
 } from "@/components/ui/context-menu";
 import { Spinner } from "@/components/ui/spinner";
@@ -171,6 +171,8 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
   const avatarProviders = useAvatarProviders(repo);
   const now = useMinuteClock();
   const listId = useId();
+  /** The element id of the WIP row ("wip") or a commit's row. */
+  const rowId = (key: string) => `${listId}-${key}`;
 
   const changes = status
     ? status.staged.length + status.unstaged.length + status.conflicted.length
@@ -488,8 +490,21 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (isMenuKey(e)) {
       e.preventDefault();
-      const active = scrollRef.current?.getAttribute("aria-activedescendant");
-      openMenuAt(active ? document.getElementById(active) : null);
+      const key = selection?.kind === "wip" ? "wip" : anchorOf(selection);
+      if (key === null) return;
+      openActiveMenu(scrollRef.current, rowId(key), () => {
+        const i = latest.current.info;
+        if (key === "wip") virtualizer.scrollToIndex(0, { align: "auto" });
+        else if (i) {
+          void Promise.resolve(indexOf(i.version, key)).then(
+            (index) => {
+              if (index >= 0)
+                virtualizer.scrollToIndex(index + latest.current.offset, { align: "auto" });
+            },
+            () => {},
+          );
+        }
+      });
       return;
     }
     const page = Math.max(1, Math.floor((virtualizer.scrollRect?.height ?? 0) / ROW_HEIGHT) - 1);
@@ -543,7 +558,6 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
   }
 
   const active = selection?.kind === "wip" ? "wip" : anchorOf(selection);
-  const rowId = (key: string) => `${listId}-${key}`;
   let activeShown = false;
   const rendered = items.map((item) => {
     const index = item.index - offset;

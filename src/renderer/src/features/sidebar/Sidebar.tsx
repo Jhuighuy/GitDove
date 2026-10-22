@@ -43,7 +43,7 @@ import {
   ContextMenu,
   ContextMenuTrigger,
   isMenuKey,
-  openMenuAt,
+  openActiveMenu,
   useContextMenuTarget,
 } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
@@ -746,11 +746,13 @@ const RowList = memo(function RowList({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const id = useId();
+  // Stable while the rows are: a new function makes the virtualizer measure every row again.
+  const getItemKey = useCallback((i: number) => rows[i]!.key, [rows]);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ITEM_HEIGHT,
-    getItemKey: (i) => rows[i]!.key,
+    getItemKey,
     overscan: 12,
     paddingEnd: 4,
   });
@@ -773,7 +775,11 @@ const RowList = memo(function RowList({
     const row = rows[cursorIndex];
     if (isMenuKey(e)) {
       e.preventDefault();
-      if (row) openMenuAt(document.getElementById(rowId(cursorIndex)));
+      if (row) {
+        openActiveMenu(scrollRef.current, rowId(cursorIndex), () =>
+          virtualizer.scrollToIndex(cursorIndex, { align: "auto" }),
+        );
+      }
       return;
     }
     const page = Math.max(1, Math.floor((virtualizer.scrollRect?.height ?? 0) / ITEM_HEIGHT) - 1);

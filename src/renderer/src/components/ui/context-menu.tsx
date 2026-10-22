@@ -66,6 +66,29 @@ const openMenuAt = (el: HTMLElement | null) => {
   );
 };
 
+/** About two seconds of frames: a row scrolled to may have to be fetched before it renders. */
+const MENU_WAIT_FRAMES = 120;
+
+/**
+ * Opens the context menu of a virtualized list's active row (`aria-activedescendant`), which
+ * may be scrolled out of view and not rendered: `reveal` scrolls to it, and the menu opens once
+ * the row renders, unless the list lost focus or moved on to another row meanwhile.
+ */
+const openActiveMenu = (list: HTMLElement | null, id: string, reveal: () => void) => {
+  const shown = () =>
+    list?.getAttribute("aria-activedescendant") === id ? document.getElementById(id) : null;
+  if (shown()) return openMenuAt(shown());
+  reveal();
+  let frames = MENU_WAIT_FRAMES;
+  const poll = () => {
+    if (!list || document.activeElement !== list) return;
+    const el = shown();
+    if (el) openMenuAt(el);
+    else if (frames-- > 0) requestAnimationFrame(poll);
+  };
+  requestAnimationFrame(poll);
+};
+
 function ContextMenuPortal({ ...props }: ContextMenuPrimitive.Portal.Props) {
   return <ContextMenuPrimitive.Portal data-slot="context-menu-portal" {...props} />;
 }
@@ -297,5 +320,6 @@ export {
   ContextMenuRadioGroup,
   useContextMenuTarget,
   isMenuKey,
+  openActiveMenu,
   openMenuAt,
 };

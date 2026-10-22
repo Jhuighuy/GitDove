@@ -366,6 +366,27 @@ it("renders only the rows on screen, and lists every tag", async () => {
   expect(filter.getAttribute("aria-label")).toBe("Filter branches, tags and more");
 });
 
+it("scrolls to the row under the cursor to open its menu from the keyboard", async () => {
+  const tags = Array.from({ length: 3000 }, (_, i) => ref(`refs/tags/t${i}`));
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1_000_000);
+  await render([], { ...base, refs: [...base.refs, ...tags] });
+  await act(async () => useSectionStack.getState().setOpen("tags", true));
+  const tree = document.querySelector<HTMLElement>('[role="tree"][aria-label="Tags"]')!;
+  const press = (key: string) =>
+    act(async () => {
+      tree.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  await act(async () => tree.focus());
+  // The cursor goes to the last tag, which does not render (happy-dom reports no scrolling).
+  await press("End");
+  expect(tree.getAttribute("aria-activedescendant")).toBeNull();
+  await press("ContextMenu");
+  await act(async () => tree.dispatchEvent(new Event("scroll")));
+  await act(() => vi.waitFor(() => expect(menuItems()).toContain("Copy tag name")));
+  // Tags list newest first: the last one is t0.
+  expect(document.getElementById(tree.getAttribute("aria-activedescendant")!)?.title).toBe("t0");
+});
+
 it("works from the keyboard", async () => {
   await render();
   const tree = document.querySelector<HTMLElement>('[role="tree"][aria-label="Local branches"]')!;

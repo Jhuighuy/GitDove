@@ -97,6 +97,8 @@ export const FileList = memo(function FileList({
   const id = useId();
   const listRef = useRef<HTMLDivElement>(null);
   const margin = useScrollMargin(scroller, listRef);
+  // Stable while the files are: a new function makes the virtualizer measure every row again.
+  const getItemKey = useCallback((i: number) => keyOf(files[i]!), [files]);
   const virtualizer = useVirtualizer({
     count: files.length,
     getScrollElement: () => scroller,
@@ -104,7 +106,7 @@ export const FileList = memo(function FileList({
     overscan: 12,
     scrollMargin: margin,
     scrollPaddingStart: stickyTop,
-    getItemKey: (i) => keyOf(files[i]!),
+    getItemKey,
   });
 
   const selected = useMemo(

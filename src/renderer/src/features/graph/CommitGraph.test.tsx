@@ -993,6 +993,32 @@ it("names the selected row for assistive technology and opens its menu from the 
   expect(menuItems()).toContain("Cherry-pick commit");
 });
 
+it("scrolls to the selected row to open its menu from the keyboard", async () => {
+  mocks.rows = Array.from({ length: 1000 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 1000, complete: true, maxLanes: 1 };
+  mocks.found = null;
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1_000_000);
+  await render();
+  await act(async () => useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c900" }));
+  await settle();
+  // Far off screen: not rendered, so nothing is the list's active row.
+  expect(scroller().getAttribute("aria-activedescendant")).toBeNull();
+  scroller().focus();
+  await act(async () => {
+    scroller().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
+    );
+  });
+  await settle();
+  // It scrolled there (happy-dom reports no scroll events itself), and the row rendered.
+  expect(scroller().scrollTop).toBeGreaterThan(0);
+  await act(async () => scroller().dispatchEvent(new Event("scroll")));
+  await act(() => vi.waitFor(() => expect(menuItems()).toContain("Cherry-pick commit")));
+  expect(document.getElementById(scroller().getAttribute("aria-activedescendant")!)).toBe(
+    rowOf("Commit 900"),
+  );
+});
+
 it("looks for a revealed commit again until it has streamed in", async () => {
   mocks.found = -1;
   mocks.info = { version: 1, count: 5, complete: false, maxLanes: 1 };
