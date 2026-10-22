@@ -55,7 +55,7 @@ final class Updater: NSObject, SPUUpdaterDelegate, SPUUserDriver {
 
   private func check() {
     if installNow != nil {
-      emit(Event(kind: "ready", version: version))
+      emitReady()
     } else if sparkle.sessionInProgress {
       // A check or download is underway and reports its own outcome; tell about a download now.
       if let version { emit(Event(kind: "available", version: version)) }
@@ -72,7 +72,14 @@ final class Updater: NSObject, SPUUpdaterDelegate, SPUUserDriver {
 
   private func ready(install: @escaping () -> Void) {
     installNow = install
-    emit(Event(kind: "ready", version: version))
+    emitReady()
+  }
+
+  /// GitDove ignores a "ready" event without a version (and `updater.check()` would then wait
+  /// forever), so fall back to a generic name if Sparkle never told which version this is.
+  /// GitDove shows it as "GitDove <version> is ready".
+  private func emitReady() {
+    emit(Event(kind: "ready", version: version ?? "update"))
   }
 
   // MARK: - SPUUpdaterDelegate
@@ -125,10 +132,12 @@ final class Updater: NSObject, SPUUpdaterDelegate, SPUUserDriver {
     version = item.displayVersionString
     if item.isInformationOnlyUpdate {
       reply(.dismiss)
-    } else if state.stage == .installing {
-      ready { reply(.install) }
+    } else if state.stage == .notDownloaded {
+      reply(.install)  // Download it; Sparkle comes back with showReady once it is extracted.
     } else {
-      reply(.install)
+      // Downloaded in an earlier session (.downloaded) or already staged (.installing): installing
+      // now would quit and relaunch GitDove, so wait for Restart like any other ready update.
+      ready { reply(.install) }
     }
   }
 
