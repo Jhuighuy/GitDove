@@ -14,6 +14,7 @@ interface Hooks {
 const fake = vi.hoisted(() => ({
   open: null as unknown as ReturnType<typeof vi.fn>,
   connects: [] as string[],
+  created: [] as Repository[],
   watchers: [] as {
     repo: { id: string };
     listener: (s: Set<string>) => void;
@@ -41,7 +42,7 @@ vi.mock("./git/repository", async () => {
       // Sub-directories resolve to the work tree root.
       const path = location.path.replace(/\/sub(\/.*)?$/, "");
       const prefix = location.kind === "local" ? "local:" : `ssh://${location.host}`;
-      return {
+      const repo = {
         id: `${prefix}${path}`,
         host,
         hooks,
@@ -50,6 +51,8 @@ vi.mock("./git/repository", async () => {
         setVisible: vi.fn(),
         dispose: vi.fn(),
       } as unknown as Repository;
+      fake.created.push(repo);
+      return repo;
     }),
   );
   return { Repository: { open: fake.open } };
@@ -97,6 +100,7 @@ beforeEach(() => {
   fake.open.mockClear();
   fake.watchers.length = 0;
   fake.connects.length = 0;
+  fake.created.length = 0;
 });
 afterEach(async () => {
   await current?.runtime.dispose();
@@ -293,6 +297,21 @@ describe("Repos", () => {
     );
     expect(repo.dispose).toHaveBeenCalledTimes(1);
     expect(fake.watchers[0]!.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes a repository opened twice at once by different names", async () => {
+    const { run } = repos();
+    const [a, b] = await run((r) =>
+      Effect.all([r.open(local("/repo"), 1), r.open(local("/repo/sub"), 1)], {
+        concurrency: "unbounded",
+      }),
+    );
+    expect(a).toBe(b);
+    expect(fake.created).toHaveLength(2);
+    const dropped = fake.created.find((r) => r !== a)!;
+    expect(dropped.dispose).toHaveBeenCalledTimes(1);
+    expect(a.dispose).not.toHaveBeenCalled();
+    expect(fake.watchers).toHaveLength(1);
   });
 
   it("hides a repository that no owner shows", async () => {

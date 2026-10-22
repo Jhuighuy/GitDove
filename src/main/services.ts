@@ -139,7 +139,11 @@ export const ReposLive = Layer.effect(
 
     const register = (repo: Repository): Entry => {
       const existing = entries.get(repo.id);
-      if (existing) return existing;
+      if (existing) {
+        // Opened concurrently by another name (e.g. a sub-directory): keep the first.
+        repo.dispose();
+        return existing;
+      }
       repo.setHiddenRefs(settings.hidden(repo.id));
       const watch = watchRepository(repo, (scopes) => {
         if (scopes.has("refs") || scopes.has("head")) repo.invalidateGraph();
