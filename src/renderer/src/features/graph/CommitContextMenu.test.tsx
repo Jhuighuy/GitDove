@@ -238,7 +238,7 @@ it("copies the subject when the commit's details are not found", async () => {
   try {
     await open({ kind: "commit", row, refs: [] });
     await click("Copy commit message");
-    await act(() => vi.waitFor(() => expect(mocks.calls.length).toBe(1)));
+    await act(() => vi.waitFor(() => expect(mocks.calls).toHaveLength(1)));
     expect(mocks.calls).toEqual([["copy", "Fix the thing", "Message copied"]]);
   } finally {
     mocks.details = { subject: "Fix the thing", body: "Because it was broken." };

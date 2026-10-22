@@ -323,7 +323,10 @@ const background = new Set<RepoId>();
  */
 const refetchScope = (client: QueryClient, repo: RepoId, scope: DataScope): Promise<void> => {
   let byKey = refetches.get(client);
-  if (!byKey) refetches.set(client, (byKey = new Map()));
+  if (!byKey) {
+    byKey = new Map();
+    refetches.set(client, byKey);
+  }
   const key = `${scope}\0${repo}`;
   const running = byKey.get(key);
   if (running) {

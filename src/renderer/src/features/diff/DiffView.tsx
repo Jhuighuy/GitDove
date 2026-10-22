@@ -580,7 +580,7 @@ function DiffBody({
     // The first click of a double click on text selected the line; the word is what is meant.
     const click = lastClick.current;
     lastClick.current = null;
-    if (e.detail === 2 && click && click.id === id) {
+    if (e.detail === 2 && click?.id === id) {
       setSelection(click.selection);
       dragRef.current = click.drag;
       return;

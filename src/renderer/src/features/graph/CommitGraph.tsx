@@ -356,7 +356,7 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
       if (r) out.set(i, r);
       else {
         const last = missing.at(-1);
-        if (last && last[1] === i && last[1] - last[0] < MAX_GRAPH_ROWS) last[1] = i + 1;
+        if (last?.[1] === i && last[1] - last[0] < MAX_GRAPH_ROWS) last[1] = i + 1;
         else missing.push([i, i + 1]);
       }
     }

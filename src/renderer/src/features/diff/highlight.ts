@@ -90,7 +90,7 @@ export class DocHighlighter {
     private readonly model: DiffModel,
     previous: DocHighlighter | null = null,
   ) {
-    if (previous && previous.model.diff.path === model.diff.path) {
+    if (previous?.model.diff.path === model.diff.path) {
       this.fallback = previous.lineTokens();
     }
   }

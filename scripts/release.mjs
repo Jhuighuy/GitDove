@@ -111,9 +111,10 @@ export function manifestFiles(yaml) {
   const files = new Map();
   let url;
   for (const line of yaml.split(/\r?\n/)) {
-    const entry = /^\s*(?:-\s+)?(url|path|sha512):\s*["']?(.*?)["']?\s*$/.exec(line);
+    const entry = /^\s*(?:-\s+)?(url|path|sha512):(.*)$/.exec(line);
     if (!entry) continue;
-    const [, key, value] = entry;
+    const key = entry[1];
+    const value = entry[2].trim().replace(/^["']|["']$/g, "");
     if (key !== "sha512") {
       url = value;
       if (!files.has(url)) files.set(url, undefined);

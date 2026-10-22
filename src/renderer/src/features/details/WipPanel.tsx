@@ -309,7 +309,7 @@ export function WipPanel({ repo }: { repo: RepoId }) {
         stagedCount={status?.staged.length ?? 0}
         truncated={truncated}
         conflicts={conflicted.length}
-        unborn={info !== undefined && info.head.hash === null}
+        unborn={info?.head.hash === null}
       />
     </div>
   );
