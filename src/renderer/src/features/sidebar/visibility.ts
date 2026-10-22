@@ -16,6 +16,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { toast } from "sonner";
+import { create } from "zustand";
 import { api } from "@/lib/api";
 import { keys, useHiddenRefs, useRefs } from "@/lib/queries";
 
@@ -99,12 +100,23 @@ export const contributorsOf = (owners: BranchOwners): Contributor[] => {
     );
 };
 
+/**
+ * Hidden names being saved, by repository. They are shown rather than what a refresh reads
+ * meanwhile, which may still be the names from before the save.
+ */
+const useSaving = create<{ readonly byRepo: Readonly<Record<RepoId, readonly string[]>> }>()(
+  () => ({ byRepo: {} }),
+);
+/** The latest save per repository: only it ends the saving state. */
+const saveSeq = new Map<RepoId, number>();
+
 /** Graph visibility state and actions for one repository. */
 export const useVisibility = (repo: RepoId) => {
   const client = useQueryClient();
   const { data } = useHiddenRefs(repo);
+  const saving = useSaving((s) => s.byRepo[repo]);
   const { data: refs } = useRefs(repo);
-  const hidden = useMemo(() => data ?? [], [data]);
+  const hidden = useMemo(() => saving ?? data ?? [], [saving, data]);
   const all = useMemo(() => allVisibilityNames(refs), [refs]);
   const owners = refs?.owners ?? NO_OWNERS;
   const byRef = owners.byRef;
@@ -152,11 +164,31 @@ export const useVisibility = (repo: RepoId) => {
 
   const save = useCallback(
     (next: string[]) => {
+      const seq = (saveSeq.get(repo) ?? 0) + 1;
+      saveSeq.set(repo, seq);
+      useSaving.setState((s) => ({ byRepo: { ...s.byRepo, [repo]: next } }));
       client.setQueryData(keys.hidden(repo), next);
-      api("repo.setHiddenRefs", repo, next).catch((e: unknown) => {
-        toast.error("Could not update graph visibility", { description: String(e) });
-        void client.invalidateQueries({ queryKey: keys.hidden(repo) });
-      });
+      const stamp = client.getQueryState(keys.hidden(repo))?.dataUpdatedAt;
+      const saved = (ok: boolean) => {
+        if (saveSeq.get(repo) !== seq) return;
+        // A refresh meanwhile may have read the names from before the save, and a failed save
+        // leaves them as they were: then they are read again.
+        const query = client.getQueryState(keys.hidden(repo));
+        const outdated = !ok || query?.dataUpdatedAt !== stamp || query?.fetchStatus === "fetching";
+        if (ok) client.setQueryData(keys.hidden(repo), next);
+        useSaving.setState((s) => {
+          const { [repo]: _, ...rest } = s.byRepo;
+          return { byRepo: rest };
+        });
+        if (outdated) void client.invalidateQueries({ queryKey: keys.hidden(repo) });
+      };
+      void api("repo.setHiddenRefs", repo, next).then(
+        () => saved(true),
+        (e: unknown) => {
+          toast.error("Could not update graph visibility", { description: String(e) });
+          saved(false);
+        },
+      );
     },
     [client, repo],
   );
