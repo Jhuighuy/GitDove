@@ -7,7 +7,6 @@ const c = (hash: string, ...parents: string[]): LogCommit => ({
   authorName: "a",
   authorEmail: "a@x",
   authorTime: 0,
-  committerTime: 0,
   subject: hash,
 });
 
@@ -53,7 +52,7 @@ describe("LogParser", () => {
     const p = new LogParser((x) => out.push(x));
     // A subject may contain any character but NUL, including the old record separator.
     const text =
-      "aaa\x1fbbb ccc\x1fJane\x1fj@x\x1f10\x1f11\x1fHello\x1fworld\x1e\0bbb\x1f\x1fJoe\x1fjo@x\x1f5\x1f6\x1fInit\0";
+      "aaa\x1fbbb ccc\x1fJane\x1fj@x\x1f10\x1fHello\x1fworld\x1e\0bbb\x1f\x1fJoe\x1fjo@x\x1f5\x1fInit\0";
     const bytes = new TextEncoder().encode(text);
     for (let i = 0; i < bytes.length; i += 7) p.push(bytes.subarray(i, i + 7));
     p.end();
@@ -63,13 +62,20 @@ describe("LogParser", () => {
       parents: ["bbb", "ccc"],
       subject: "Hello\x1fworld\x1e",
     });
-    expect(out[1]).toMatchObject({ hash: "bbb", parents: [], authorTime: 5, committerTime: 6 });
+    expect(out[1]).toEqual({
+      hash: "bbb",
+      parents: [],
+      authorName: "Joe",
+      authorEmail: "jo@x",
+      authorTime: 5,
+      subject: "Init",
+    });
   });
 
   it("reads a last record without a terminator", () => {
     const out: LogCommit[] = [];
     const p = new LogParser((x) => out.push(x));
-    p.push(new TextEncoder().encode("aaa\x1f\x1fJ\x1fj@x\x1f1\x1f2\x1fOnly"));
+    p.push(new TextEncoder().encode("aaa\x1f\x1fJ\x1fj@x\x1f1\x1fOnly"));
     p.end();
     expect(out.map((commit) => commit.subject)).toEqual(["Only"]);
   });

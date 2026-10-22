@@ -6,7 +6,6 @@ export interface LogCommit {
   readonly authorName: string;
   readonly authorEmail: string;
   readonly authorTime: number;
-  readonly committerTime: number;
   readonly subject: string;
 }
 
@@ -14,7 +13,7 @@ export interface LogCommit {
  * Fields of a commit in `git log -z --format`, which ends each commit with a NUL (a subject
  * cannot contain one). Authors are mapped through `.mailmap`, like the branch owners.
  */
-export const LOG_FORMAT = "%H%x1f%P%x1f%aN%x1f%aE%x1f%at%x1f%ct%x1f%s";
+export const LOG_FORMAT = "%H%x1f%P%x1f%aN%x1f%aE%x1f%at%x1f%s";
 
 /**
  * Incremental parser for {@link LOG_FORMAT} output. Feed it raw chunks; it
@@ -46,15 +45,14 @@ export class LogParser {
 
   private parseRecord(record: string): void {
     const f = record.replace(/^\n/, "").replace(/\n$/, "").split("\x1f");
-    if (f.length < 7) return;
+    if (f.length < 6) return;
     this.emit({
       hash: f[0]!,
       parents: f[1] ? f[1].split(" ") : [],
       authorName: f[2]!,
       authorEmail: f[3]!,
       authorTime: Number(f[4]),
-      committerTime: Number(f[5]),
-      subject: f.slice(6).join("\x1f"),
+      subject: f.slice(5).join("\x1f"),
     });
   }
 }
@@ -141,7 +139,6 @@ export class GraphBuilder {
       authorName: c.authorName,
       authorEmail: c.authorEmail,
       authorTime: c.authorTime,
-      committerTime: c.committerTime,
       lane: col,
       color,
       edges,

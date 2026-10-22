@@ -178,7 +178,8 @@ export interface GraphRow {
   readonly authorName: string;
   readonly authorEmail: string;
   readonly authorTime: number;
-  readonly committerTime: number;
+  /** @deprecated Never sent; to be removed once no test fixture sets it. */
+  readonly committerTime?: number;
   readonly lane: number;
   readonly color: number;
   readonly edges: readonly number[];

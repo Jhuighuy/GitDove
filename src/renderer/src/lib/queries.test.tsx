@@ -194,7 +194,6 @@ const row = (hash: string): GraphRow => ({
   authorName: "a",
   authorEmail: "a@x",
   authorTime: 0,
-  committerTime: 0,
   lane: 0,
   color: 0,
   edges: [],
