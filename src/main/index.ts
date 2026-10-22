@@ -6,6 +6,7 @@ import {
   Menu,
   type MenuItemConstructorOptions,
   nativeTheme,
+  powerMonitor,
   session,
   shell,
 } from "electron";
@@ -287,6 +288,9 @@ const main = async () => {
   createWindow();
   started = true;
   updater.init((s) => broadcast("updater.status", s));
+  // Back from sleep or a locked screen: remote repositories may have changed meanwhile.
+  powerMonitor.on("resume", activity.wake);
+  powerMonitor.on("unlock-screen", activity.wake);
   // Housekeeping, once startup work has settled.
   setTimeout(() => void pruneAvatarCache(), 60_000).unref();
 
