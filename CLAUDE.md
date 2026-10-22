@@ -7,9 +7,16 @@ first-class SSH remotes.
 
 - `npm run dev`: run the app (electron-vite, HMR for the renderer).
 - `npm run typecheck && npm run lint && npm test`: run before committing; also `npm run format`.
+  `npm run test:unit` skips the slow integration tests (real git, shells, watchers; the list is in
+  `vitest.config.ts`) for a fast inner loop. Tests ignore the global and system git config
+  (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`), so set any git config a test needs explicitly.
 - `npm run build && node scripts/drive.mjs <scenario.mjs> <outDir>`: drive the built app with
-  Playwright and take screenshots. A scenario module default-exports `async ({ app, page, shot })`.
-  Use `GITDOVE_USER_DATA=<dir>` with a `state.json` (`{tabs, activeTab, recent}`) to preload tabs.
+  Playwright and take screenshots; exits non-zero if the scenario throws. A scenario module
+  default-exports `async ({ app, page, shot })`. Use `GITDOVE_USER_DATA=<dir>` with a `state.json`
+  (`{tabs, activeTab, recent}`) to preload tabs; without it a throwaway profile is used.
+- Packaged apps have Electron fuses set (`electron-builder.yml`): no `ELECTRON_RUN_AS_NODE`
+  (so no `child_process.fork` of the app binary; use `utilityProcess`), no `NODE_OPTIONS` or
+  `--inspect`, and code loads only from the integrity-checked `app.asar`.
 - `ssh fedora` has test repositories in `~` (e.g. `~/cholx`). `~/vcpkg` (31k commits) is a good
   local performance test.
 

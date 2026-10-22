@@ -10,11 +10,30 @@ files:
   - out/**
   - resources/**
   - package.json
+  # Source maps stay out of the installers (ours are emitted for local debugging only).
+  - "!**/*.map"
+  # @parcel/watcher loads the N-API prebuild from @parcel/watcher-<platform>; its C++ sources and
+  # any local build are dead weight.
+  - "!node_modules/@parcel/watcher/{src,scripts,build}/**"
+  - "!node_modules/@parcel/watcher/binding.gyp"
 asarUnpack:
   # Runtime assets referenced by path (window icon).
   - resources/**
   # Native file watcher binaries cannot be loaded from inside the asar archive.
-  - node_modules/@parcel/watcher*/**
+  - node_modules/@parcel/watcher-*/**
+# The only native dependency, @parcel/watcher, ships N-API prebuilds that work in any Electron.
+# Rebuilding compiled it from source on every package run (40 s) and the result went unused.
+npmRebuild: false
+# Lock down the Electron binary: without these, any local process could run GitDove as plain Node
+# (ELECTRON_RUN_AS_NODE, NODE_OPTIONS, --inspect) and inherit its macOS privacy grants, or swap the
+# app code next to the asar. Cookie encryption stays off: GitDove keeps no cookies worth it, and
+# with an ad-hoc signature the Keychain would prompt after every update.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
 publish:
   provider: github
   owner: Jhuighuy
