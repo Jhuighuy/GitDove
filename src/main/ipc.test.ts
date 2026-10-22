@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RepoLocation } from "@shared/domain";
 import { IPC_INVOKE, type RpcResult } from "@shared/ipc";
+import type { WebContents } from "electron";
 import { Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandError, InvalidInputError, StaleGraphError } from "./exec/errors";
@@ -78,7 +79,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { handlers, registerIpc } = await import("./ipc");
+const { Caller, handlers, registerIpc } = await import("./ipc");
 
 // ---------------------------------------------------------------------------
 // Fake services
@@ -109,6 +110,8 @@ const services = {
   hosts: new Map<string, Host>(),
   connected: [] as string[],
   hidden: new Map<string, readonly string[]>(),
+  /** Owners repositories were opened or used for. */
+  owners: [] as number[],
 };
 
 /** A host that runs scripts with the local `/bin/sh` and records programs. */
@@ -132,9 +135,18 @@ const shellHost = (id: string) => {
 
 const layer = Layer.mergeAll(
   Layer.succeed(Repos, {
-    open: (location) => Effect.succeed(fakeRepo(location)),
-    get: (id) => (services.getRepo ? services.getRepo(id) : Effect.succeed(services.repo)),
-    close: (id) => Effect.sync(() => void services.connected.push(`close ${id}`)),
+    open: (location, owner) =>
+      Effect.sync(() => {
+        services.owners.push(owner);
+        return fakeRepo(location);
+      }),
+    get: (id, owner) => {
+      services.owners.push(owner);
+      return services.getRepo ? services.getRepo(id) : Effect.succeed(services.repo);
+    },
+    release: (id, owner) =>
+      Effect.sync(() => void services.connected.push(`close ${id} by ${owner}`)),
+    releaseAll: (owner) => Effect.sync(() => void services.connected.push(`release ${owner}`)),
   }),
   Layer.succeed(Hosts, {
     get: (id) => {
@@ -152,11 +164,17 @@ const layer = Layer.mergeAll(
 );
 const runtime = ManagedRuntime.make(layer);
 
-type AnyHandler = (...args: unknown[]) => Effect.Effect<unknown, unknown, never>;
-const call = (method: string, ...args: unknown[]) =>
-  runtime.runPromise((handlers as unknown as Record<string, AnyHandler>)[method]!(...args));
+type AnyHandler = (
+  ...args: unknown[]
+) => Effect.Effect<unknown, unknown, InstanceType<typeof Caller>>;
+/** Calls a handler as the renderer with `webContents.id` 1. */
+const asCaller = (method: string, args: unknown[]) =>
+  (handlers as unknown as Record<string, AnyHandler>)[method]!(...args).pipe(
+    Effect.provideService(Caller, { webContents: { id: 1 } as WebContents }),
+  );
+const call = (method: string, ...args: unknown[]) => runtime.runPromise(asCaller(method, args));
 const callExit = (method: string, ...args: unknown[]) =>
-  runtime.runPromiseExit((handlers as unknown as Record<string, AnyHandler>)[method]!(...args));
+  runtime.runPromiseExit(asCaller(method, args));
 
 const platform = process.platform;
 const setPlatform = (value: string) => Object.defineProperty(process, "platform", { value });
@@ -168,6 +186,7 @@ beforeEach(() => {
   services.hosts.clear();
   services.connected.length = 0;
   services.hidden.clear();
+  services.owners.length = 0;
   terminals.missing.clear();
   vi.stubEnv("TERMINAL", "");
 });
@@ -395,7 +414,8 @@ describe("repository lifecycle handlers", () => {
       args: [],
     });
     await call("repo.close", "local:/a");
-    expect(services.connected).toEqual(["close local:/a"]);
+    expect(services.connected).toEqual(["close local:/a by 1"]);
+    expect(services.owners).toEqual([1]);
   });
 
   it("initializes a repository on its host, then opens it", async () => {
@@ -413,6 +433,7 @@ describe("repository lifecycle handlers", () => {
   });
 
   it("clones on the target host and refuses option-like URLs", async () => {
+    const safe = ["-c", "protocol.ext.allow=never", "-c", "protocol.fd.allow=never"];
     await call("repo.clone", "git@github.com:a/b.git", {
       kind: "ssh",
       host: "fedora",
@@ -420,16 +441,18 @@ describe("repository lifecycle handlers", () => {
     });
     await call("repo.clone", "https://x/c.git", { kind: "local", path: "/tmp/c" });
     expect((services.hosts.get("fedora") as ReturnType<typeof shellHost>).execs).toEqual([
-      ["git", ["clone", "--", "git@github.com:a/b.git", "/srv/b"]],
+      [
+        "git",
+        [...safe, "clone", "--no-recurse-submodules", "--", "git@github.com:a/b.git", "/srv/b"],
+      ],
     ]);
     expect((services.hosts.get("local") as ReturnType<typeof shellHost>).execs).toEqual([
-      ["git", ["clone", "--", "https://x/c.git", "/tmp/c"]],
+      ["git", [...safe, "clone", "--no-recurse-submodules", "--", "https://x/c.git", "/tmp/c"]],
     ]);
-    const exit = await callExit("repo.clone", "--upload-pack=evil", {
-      kind: "local",
-      path: "/tmp/d",
-    });
-    expect(exit).toEqual(Exit.fail(new InvalidInputError({ message: "Invalid URL" })));
+    for (const url of ["--upload-pack=evil", "ext::sh -c touch% /tmp/pwned", "FD::17", ""]) {
+      const exit = await callExit("repo.clone", url, { kind: "local", path: "/tmp/d" });
+      expect(exit).toEqual(Exit.fail(new InvalidInputError({ message: "Invalid URL" })));
+    }
     expect(services.hosts.get("local")).toBeDefined();
     expect((services.hosts.get("local") as ReturnType<typeof shellHost>).execs).toHaveLength(1);
   });
@@ -495,11 +518,12 @@ describe("updater handlers", () => {
 
 describe("registerIpc", () => {
   type Invoke = (event: unknown, method: unknown, args: unknown) => Promise<RpcResult<unknown>>;
+  const sender = { id: 1, once: vi.fn() };
   const invoke = (method: unknown, args: unknown) => {
     registerIpc(runtime);
     expect(electron.ipcMain.handle).toHaveBeenCalledWith(IPC_INVOKE, expect.any(Function));
     const handler = electron.ipcMain.handle.mock.lastCall![1] as Invoke;
-    return handler({}, method, args);
+    return handler({ sender }, method, args);
   };
 
   it("rejects unknown methods", async () => {
@@ -562,10 +586,10 @@ describe("registerIpc", () => {
   it("runs edit commands in the window that asked", async () => {
     registerIpc(runtime);
     const handler = electron.ipcMain.handle.mock.lastCall![1] as Invoke;
-    const sender = { paste: vi.fn() };
-    expect(await handler({ sender }, "app.edit", ["paste"])).toEqual({ ok: true });
-    expect(sender.paste).toHaveBeenCalledOnce();
-    expect(await handler({ sender }, "app.edit", ["destroy"])).toMatchObject({
+    const editor = { id: 2, once: vi.fn(), paste: vi.fn() };
+    expect(await handler({ sender: editor }, "app.edit", ["paste"])).toEqual({ ok: true });
+    expect(editor.paste).toHaveBeenCalledOnce();
+    expect(await handler({ sender: editor }, "app.edit", ["destroy"])).toMatchObject({
       ok: false,
       error: { tag: "BadRequest" },
     });
@@ -624,6 +648,19 @@ describe("registerIpc", () => {
     expect(r).toMatchObject({ ok: false, error: { tag: "Defect" } });
     expect(!r.ok && r.error.message).toContain("boom");
     expect(log.error).toHaveBeenCalledWith("Unexpected error", expect.stringContaining("boom"));
+  });
+
+  it("releases the repositories of a renderer when it goes away", async () => {
+    const renderer = { id: 5, once: vi.fn() };
+    registerIpc(runtime);
+    const handler = electron.ipcMain.handle.mock.lastCall![1] as Invoke;
+    await handler({ sender: renderer }, "repo.status", ["local:/work/repo"]);
+    await handler({ sender: renderer }, "repo.refs", ["local:/work/repo"]);
+    expect(services.owners).toEqual([5, 5]);
+    expect(renderer.once).toHaveBeenCalledTimes(1);
+    expect(renderer.once).toHaveBeenCalledWith("destroyed", expect.any(Function));
+    renderer.once.mock.calls[0]![1]();
+    await vi.waitFor(() => expect(services.connected).toEqual(["release 5"]));
   });
 
   it("logs slow calls", async () => {

@@ -19,7 +19,7 @@ import { type AppError, InvalidInputError } from "./exec/errors";
 import { Hosts, LOCAL_HOST } from "./exec/hosts";
 import { shellJoin, shellQuote } from "./exec/shell";
 import type { Repository } from "./git/repository";
-import { RepoSettings, Repos } from "./services";
+import { type Owner, RepoSettings, Repos } from "./services";
 import { loadState, saveState } from "./state";
 import { updater } from "./updater";
 
@@ -186,11 +186,27 @@ const decodeArgs = (method: ApiMethod, input: unknown) => {
   return decode(input);
 };
 
+/** The renderer that asked, which owns the repositories it uses (see `Repos`). */
+const owner: Effect.Effect<Owner, never, Caller> = Effect.map(Caller, (c) => c.webContents.id);
+
 const withRepo = <A, E, R = never>(id: RepoId, f: (repo: Repository) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const repos = yield* Repos;
-    return yield* f(yield* repos.get(id));
+    return yield* f(yield* repos.get(id, yield* owner));
   });
+
+/** Opens a repository for the caller and returns its info. */
+const openFor = (location: RepoLocation) =>
+  Effect.gen(function* () {
+    const repo = yield* (yield* Repos).open(location, yield* owner);
+    return yield* repo.info();
+  });
+
+/**
+ * Transports git must not use for a URL from the renderer: `ext::` runs arbitrary commands and
+ * `fd::` talks to inherited file descriptors.
+ */
+const SAFE_TRANSPORTS = ["-c", "protocol.ext.allow=never", "-c", "protocol.fd.allow=never"];
 
 const LIST_DIR_SCRIPT = String.raw`
 for f in * .[!.]*; do
@@ -343,35 +359,33 @@ export const handlers: Handlers = {
     }),
 
   // Repository lifecycle -------------------------------------------------------
-  "repo.open": (location) =>
-    Effect.gen(function* () {
-      const repos = yield* Repos;
-      const repo = yield* repos.open(location);
-      return yield* repo.info();
-    }),
+  "repo.open": openFor,
   "repo.close": (id) =>
     Effect.gen(function* () {
-      yield* (yield* Repos).close(id);
+      yield* (yield* Repos).release(id, yield* owner);
     }),
   "repo.init": (location) =>
     Effect.gen(function* () {
       const hosts = yield* Hosts;
       const host = hosts.get(location.kind === "local" ? LOCAL_HOST : location.host);
       yield* host.exec("git", ["init", "--", location.path]);
-      const repos = yield* Repos;
-      const repo = yield* repos.open(location);
-      return yield* repo.info();
+      return yield* openFor(location);
     }),
   "repo.clone": (url, location) =>
     Effect.gen(function* () {
-      if (url.startsWith("-"))
+      if (url === "" || /^-|^(?:ext|fd)::/i.test(url))
         return yield* Effect.fail(new InvalidInputError({ message: "Invalid URL" }));
       const hosts = yield* Hosts;
       const host = hosts.get(location.kind === "local" ? LOCAL_HOST : location.host);
-      yield* host.exec("git", ["clone", "--", url, location.path]);
-      const repos = yield* Repos;
-      const repo = yield* repos.open(location);
-      return yield* repo.info();
+      yield* host.exec("git", [
+        ...SAFE_TRANSPORTS,
+        "clone",
+        "--no-recurse-submodules",
+        "--",
+        url,
+        location.path,
+      ]);
+      return yield* openFor(location);
     }),
 
   // Queries ----------------------------------------------------------------------
@@ -503,6 +517,18 @@ const badRequest = (message: string): RpcResult<never> => {
 
 /** Installs the single IPC entry point that dispatches to {@link handlers}. */
 export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, never>) => {
+  // Repositories a renderer used are released when it goes away (e.g. its window closed).
+  const senders = new WeakSet<WebContents>();
+  const track = (sender: WebContents) => {
+    if (senders.has(sender)) return;
+    senders.add(sender);
+    const id = sender.id;
+    sender.once("destroyed", () => {
+      runtime
+        .runPromise(Effect.flatMap(Repos, (repos) => repos.releaseAll(id)))
+        .catch((e: unknown) => log.warn("Cannot release repositories", e));
+    });
+  };
   ipcMain.handle(
     IPC_INVOKE,
     async (event, method: unknown, input: unknown): Promise<RpcResult<unknown>> => {
@@ -515,6 +541,7 @@ export const registerIpc = (runtime: ManagedRuntime.ManagedRuntime<Services, nev
         const why = reason ? reason.error.message.replaceAll(/\s+/g, " ") : "malformed";
         return badRequest(`Invalid arguments for ${method}: ${why}`);
       }
+      track(event.sender);
       const handler = handlers[method as ApiMethod] as (
         ...a: readonly unknown[]
       ) => Effect.Effect<unknown, AppError, Services | Caller>;

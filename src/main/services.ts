@@ -2,7 +2,7 @@ import type { RepoId, RepoLocation } from "@shared/domain";
 import { repoIdOf, repoLocationOf } from "@shared/domain";
 import type { EventName, Events } from "@shared/ipc";
 import { Context, Deferred, Effect, Exit, Layer } from "effect";
-import type { NotARepositoryError } from "./exec/errors";
+import { InvalidInputError, type NotARepositoryError, RepoNotOpenError } from "./exec/errors";
 import { Hosts, LOCAL_HOST } from "./exec/hosts";
 import { type GitError, Repository } from "./git/repository";
 import { watchRepository } from "./git/watcher";
@@ -24,20 +24,37 @@ export class RepoSettings extends Context.Service<
 
 type OpenError = GitError | NotARepositoryError;
 
+/** What uses an open repository: a renderer, by `webContents.id`. */
+export type Owner = number;
+
 interface Entry {
   readonly repo: Repository;
+  readonly owners: Set<Owner>;
   readonly dispose: () => void;
 }
 
-/** Registry of open repositories. */
+/**
+ * Registry of open repositories. Each one is kept open (watched, its graph loaded, its SSH
+ * connection alive) while some owner uses it.
+ */
 export class Repos extends Context.Service<
   Repos,
   {
-    /** Opens (or returns the already open) repository at a location. */
-    readonly open: (location: RepoLocation) => Effect.Effect<Repository, OpenError>;
-    /** Returns an open repository, opening it lazily if needed. */
-    readonly get: (id: RepoId) => Effect.Effect<Repository, OpenError>;
-    readonly close: (id: RepoId) => Effect.Effect<void>;
+    /** Opens (or returns the already open) repository at a location for `owner`. */
+    readonly open: (location: RepoLocation, owner: Owner) => Effect.Effect<Repository, OpenError>;
+    /**
+     * Returns an open repository for `owner`. One that is not open is opened, e.g. for tabs
+     * restored on launch, unless it was explicitly closed: late requests from a closed tab must
+     * not bring it back.
+     */
+    readonly get: (
+      id: RepoId,
+      owner: Owner,
+    ) => Effect.Effect<Repository, OpenError | RepoNotOpenError | InvalidInputError>;
+    /** `owner` closed the repository; it is closed once no owner uses it. */
+    readonly release: (id: RepoId, owner: Owner) => Effect.Effect<void>;
+    /** `owner` went away (e.g. its window closed): releases everything it used. */
+    readonly releaseAll: (owner: Owner) => Effect.Effect<void>;
   }
 >()("gitdove/Repos") {}
 
@@ -50,13 +67,17 @@ export const ReposLive = Layer.effect(
     const entries = new Map<RepoId, Entry>();
     /** Requested id -> pending open. */
     const opening = new Map<RepoId, Deferred.Deferred<Repository, OpenError>>();
+    /** Requested id -> owners waiting for its pending open. */
+    const claims = new Map<RepoId, Set<Owner>>();
     /** Requested id (e.g. a sub-directory) -> canonical id. */
     const aliases = new Map<RepoId, RepoId>();
+    /** Ids (canonical or aliases) explicitly closed and not opened again since. */
+    const closed = new Set<RepoId>();
     const lookup = (id: RepoId) => entries.get(aliases.get(id) ?? id);
 
-    const register = (repo: Repository): Repository => {
+    const register = (repo: Repository): Entry => {
       const existing = entries.get(repo.id);
-      if (existing) return existing.repo;
+      if (existing) return existing;
       repo.setHiddenRefs(settings.hidden(repo.id));
       const unwatch = watchRepository(repo, (scopes) => {
         if (scopes.has("refs") || scopes.has("head")) repo.invalidateGraph();
@@ -66,15 +87,34 @@ export const ReposLive = Layer.effect(
         unwatch();
         repo.dispose();
       };
-      entries.set(repo.id, { repo, dispose });
-      return repo;
+      const entry = { repo, owners: new Set<Owner>(), dispose };
+      entries.set(repo.id, entry);
+      return entry;
     };
 
-    const open = (location: RepoLocation): Effect.Effect<Repository, OpenError> =>
+    const closeEntry = (entry: Entry) => {
+      entry.dispose();
+      entries.delete(entry.repo.id);
+      for (const [k, v] of aliases) if (v === entry.repo.id) aliases.delete(k);
+    };
+
+    /**
+     * Opens a repository for `owner`, sharing concurrent opens of the same location. Owners are
+     * claimed up front, so a release while the open is pending takes effect once it completes.
+     */
+    const open = (location: RepoLocation, owner: Owner): Effect.Effect<Repository, OpenError> =>
       Effect.suspend(() => {
         const requested = repoIdOf(location);
+        closed.delete(requested);
         const ready = lookup(requested);
-        if (ready) return Effect.succeed(ready.repo);
+        if (ready) {
+          ready.owners.add(owner);
+          closed.delete(ready.repo.id);
+          return Effect.succeed(ready.repo);
+        }
+        let waiting = claims.get(requested);
+        if (!waiting) claims.set(requested, (waiting = new Set()));
+        waiting.add(owner);
         const pending = opening.get(requested);
         if (pending) return Deferred.await(pending);
 
@@ -88,20 +128,65 @@ export const ReposLive = Layer.effect(
           Effect.map(register),
           Effect.onExit((exit) => {
             opening.delete(requested);
-            if (Exit.isSuccess(exit) && exit.value.id !== requested)
-              aliases.set(requested, exit.value.id);
-            return Deferred.done(deferred, exit);
+            const owners = claims.get(requested) ?? new Set();
+            claims.delete(requested);
+            if (Exit.isFailure(exit)) return Deferred.failCause(deferred, exit.cause);
+            const entry = exit.value;
+            if (entry.repo.id !== requested) aliases.set(requested, entry.repo.id);
+            closed.delete(entry.repo.id);
+            for (const o of owners) entry.owners.add(o);
+            // Every owner closed it while it was opening.
+            if (entry.owners.size === 0) closeEntry(entry);
+            return Deferred.succeed(deferred, entry.repo);
           }),
+          Effect.map((entry) => entry.repo),
         );
       });
 
-    const close = (id: RepoId) =>
+    const get = (id: RepoId, owner: Owner) =>
+      Effect.suspend(
+        (): Effect.Effect<Repository, OpenError | RepoNotOpenError | InvalidInputError> => {
+          const entry = lookup(id);
+          if (entry) {
+            entry.owners.add(owner);
+            return Effect.succeed(entry.repo);
+          }
+          if (closed.has(id)) {
+            return Effect.fail(
+              new RepoNotOpenError({ message: "The repository is closed", repo: id }),
+            );
+          }
+          let location: RepoLocation;
+          try {
+            location = repoLocationOf(id);
+          } catch {
+            return Effect.fail(new InvalidInputError({ message: `Invalid repository id: ${id}` }));
+          }
+          return open(location, owner);
+        },
+      );
+
+    const release = (id: RepoId, owner: Owner) =>
       Effect.sync(() => {
+        const waiting = claims.get(id);
+        waiting?.delete(owner);
         const entry = lookup(id);
-        if (!entry) return;
-        entry.dispose();
-        entries.delete(entry.repo.id);
-        for (const [k, v] of aliases) if (v === entry.repo.id) aliases.delete(k);
+        if (entry) {
+          entry.owners.delete(owner);
+          if (entry.owners.size > 0) return;
+          closed.add(entry.repo.id);
+          for (const [k, v] of aliases) if (v === entry.repo.id) closed.add(k);
+          closeEntry(entry);
+        }
+        if (!waiting?.size) closed.add(id);
+      });
+
+    const releaseAll = (owner: Owner) =>
+      Effect.sync(() => {
+        for (const waiting of claims.values()) waiting.delete(owner);
+        for (const entry of entries.values()) {
+          if (entry.owners.delete(owner) && entry.owners.size === 0) closeEntry(entry);
+        }
       });
 
     yield* Effect.addFinalizer(() =>
@@ -111,14 +196,6 @@ export const ReposLive = Layer.effect(
       }),
     );
 
-    return {
-      open,
-      get: (id) =>
-        Effect.suspend(() => {
-          const entry = lookup(id);
-          return entry ? Effect.succeed(entry.repo) : open(repoLocationOf(id));
-        }),
-      close,
-    };
+    return { open, get, release, releaseAll };
   }),
 );

@@ -2,7 +2,7 @@ import type { RepoLocation } from "@shared/domain";
 import type { RepoChangeScope } from "@shared/ipc";
 import { Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import { NotARepositoryError } from "./exec/errors";
+import { InvalidInputError, NotARepositoryError, RepoNotOpenError } from "./exec/errors";
 import { type Host, Hosts } from "./exec/hosts";
 import type { Repository } from "./git/repository";
 import { Notifier, RepoSettings, Repos, ReposLive } from "./services";
@@ -98,8 +98,8 @@ const local = (path: string): RepoLocation => ({ kind: "local", path });
 describe("Repos", () => {
   it("opens a repository once, applies its settings and watches it", async () => {
     const { run } = repos();
-    const a = await run((r) => r.open(local("/repo")));
-    const b = await run((r) => r.open(local("/repo")));
+    const a = await run((r) => r.open(local("/repo"), 1));
+    const b = await run((r) => r.open(local("/repo"), 1));
     expect(a).toBe(b);
     expect(a.id).toBe("local:/repo");
     expect(fake.open).toHaveBeenCalledTimes(1);
@@ -110,7 +110,7 @@ describe("Repos", () => {
 
   it("uses the SSH host of remote locations", async () => {
     const { run } = repos();
-    const repo = await run((r) => r.open({ kind: "ssh", host: "fedora", path: "/srv/x" }));
+    const repo = await run((r) => r.open({ kind: "ssh", host: "fedora", path: "/srv/x" }, 1));
     expect(repo.id).toBe("ssh://fedora/srv/x");
     expect(fake.open.mock.calls[0]![0]).toMatchObject({ id: "fedora", kind: "ssh" });
   });
@@ -118,7 +118,7 @@ describe("Repos", () => {
   it("shares concurrent opens of the same location", async () => {
     const { run } = repos();
     const [a, b, c] = await run((r) =>
-      Effect.all([r.open(local("/repo")), r.open(local("/repo")), r.get("local:/repo")], {
+      Effect.all([r.open(local("/repo"), 1), r.open(local("/repo"), 1), r.get("local:/repo", 1)], {
         concurrency: "unbounded",
       }),
     );
@@ -130,11 +130,11 @@ describe("Repos", () => {
 
   it("maps sub-directories to the repository they belong to", async () => {
     const { run } = repos();
-    const sub = await run((r) => r.open(local("/repo/sub")));
+    const sub = await run((r) => r.open(local("/repo/sub"), 1));
     expect(sub.id).toBe("local:/repo");
-    expect(await run((r) => r.get("local:/repo/sub"))).toBe(sub);
-    expect(await run((r) => r.open(local("/repo")))).toBe(sub);
-    expect(await run((r) => r.open(local("/repo/sub/deeper")))).toBe(sub);
+    expect(await run((r) => r.get("local:/repo/sub", 1))).toBe(sub);
+    expect(await run((r) => r.open(local("/repo"), 1))).toBe(sub);
+    expect(await run((r) => r.open(local("/repo/sub/deeper"), 1))).toBe(sub);
     // The second sub-directory needed a probe; the repository was registered once.
     expect(fake.open).toHaveBeenCalledTimes(2);
     expect(fake.watchers).toHaveLength(1);
@@ -142,16 +142,16 @@ describe("Repos", () => {
 
   it("opens repositories lazily by id", async () => {
     const { run } = repos();
-    const repo = await run((r) => r.get("ssh://fedora/srv/x"));
+    const repo = await run((r) => r.get("ssh://fedora/srv/x", 1));
     expect(repo.id).toBe("ssh://fedora/srv/x");
-    expect(await run((r) => r.get("ssh://fedora/srv/x"))).toBe(repo);
+    expect(await run((r) => r.get("ssh://fedora/srv/x", 1))).toBe(repo);
     expect(fake.open).toHaveBeenCalledTimes(1);
   });
 
   it("reports locations that are not repositories, every time", async () => {
     const { runExit } = repos();
     for (let i = 0; i < 2; i++) {
-      const exit = await runExit((r) => r.open(local("/missing")));
+      const exit = await runExit((r) => r.open(local("/missing"), 1));
       expect(exit).toEqual(
         Exit.fail(
           new NotARepositoryError({
@@ -167,7 +167,7 @@ describe("Repos", () => {
 
   it("forwards changes and graph progress to the renderer", async () => {
     const { run, events } = repos();
-    const repo = await run((r) => r.open(local("/repo")));
+    const repo = await run((r) => r.open(local("/repo"), 1));
     const { listener } = fake.watchers[0]!;
 
     listener(new Set<RepoChangeScope>(["worktree", "index"]));
@@ -188,23 +188,91 @@ describe("Repos", () => {
 
   it("closes repositories, including by an alias", async () => {
     const { run } = repos();
-    const first = await run((r) => r.open(local("/repo/sub")));
-    await run((r) => r.close("local:/repo/sub"));
+    const first = await run((r) => r.open(local("/repo/sub"), 1));
+    await run((r) => r.release("local:/repo/sub", 1));
     expect(fake.watchers[0]!.dispose).toHaveBeenCalledTimes(1);
     expect(first.dispose).toHaveBeenCalledTimes(1);
-    await run((r) => r.close("local:/repo"));
-    await run((r) => r.close("local:/never-opened"));
+    await run((r) => r.release("local:/repo", 1));
+    await run((r) => r.release("local:/never-opened", 1));
     expect(fake.watchers[0]!.dispose).toHaveBeenCalledTimes(1);
     expect(first.dispose).toHaveBeenCalledTimes(1);
 
-    const second = await run((r) => r.get("local:/repo/sub"));
+    const second = await run((r) => r.open(local("/repo/sub"), 1));
     expect(second).not.toBe(first);
     expect(fake.open).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a repository open while any owner uses it", async () => {
+    const { run } = repos();
+    const repo = await run((r) => r.open(local("/repo"), 1));
+    // Using it counts too, e.g. a restored tab in another window.
+    await run((r) => r.get("local:/repo", 2));
+    await run((r) => r.release("local:/repo", 1));
+    expect(repo.dispose).not.toHaveBeenCalled();
+    await run((r) => r.release("local:/repo", 1));
+    expect(repo.dispose).not.toHaveBeenCalled();
+    await run((r) => r.release("local:/repo", 2));
+    expect(repo.dispose).toHaveBeenCalledTimes(1);
+    expect(fake.watchers[0]!.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases everything an owner used when it goes away", async () => {
+    const { run } = repos();
+    const [a, b] = await run((r) =>
+      Effect.all([r.open(local("/repo"), 1), r.open(local("/other"), 1)]),
+    );
+    await run((r) => r.get("local:/other", 2));
+    await run((r) => r.releaseAll(1));
+    expect(a.dispose).toHaveBeenCalledTimes(1);
+    expect(b.dispose).not.toHaveBeenCalled();
+    // Not closed explicitly: it opens lazily again, e.g. for a new window restoring its tabs.
+    expect(await run((r) => r.get("local:/repo", 3))).not.toBe(a);
+  });
+
+  it("does not reopen an explicitly closed repository for late requests", async () => {
+    const { run, runExit } = repos();
+    await run((r) => r.open(local("/repo/sub"), 1));
+    await run((r) => r.release("local:/repo", 1));
+    for (const id of ["local:/repo", "local:/repo/sub"]) {
+      expect(await runExit((r) => r.get(id, 1))).toEqual(
+        Exit.fail(new RepoNotOpenError({ message: "The repository is closed", repo: id })),
+      );
+    }
+    expect(fake.open).toHaveBeenCalledTimes(1);
+    // Opening it again lifts that.
+    const again = await run((r) => r.open(local("/repo"), 1));
+    expect(await run((r) => r.get("local:/repo", 1))).toBe(again);
+  });
+
+  it("releases a repository closed while it was opening", async () => {
+    const { run } = repos();
+    const [repo] = await run((r) =>
+      Effect.all(
+        [
+          r.open(local("/repo"), 1),
+          Effect.andThen(Effect.sleep("5 millis"), r.release("local:/repo", 1)),
+        ],
+        {
+          concurrency: "unbounded",
+        },
+      ),
+    );
+    expect(repo.dispose).toHaveBeenCalledTimes(1);
+    expect(fake.watchers[0]!.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed ids", async () => {
+    const { runExit } = repos();
+    expect(await runExit((r) => r.get("nope", 1))).toEqual(
+      Exit.fail(new InvalidInputError({ message: "Invalid repository id: nope" })),
+    );
+  });
+
   it("stops all watchers and graph loads on shutdown", async () => {
     const { run, runtime } = repos();
-    const opened = await run((r) => Effect.all([r.open(local("/repo")), r.open(local("/other"))]));
+    const opened = await run((r) =>
+      Effect.all([r.open(local("/repo"), 1), r.open(local("/other"), 1)]),
+    );
     await runtime.dispose();
     current = null;
     expect(fake.watchers.map((w) => w.dispose.mock.calls.length)).toEqual([1, 1]);
