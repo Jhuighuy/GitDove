@@ -1562,17 +1562,19 @@ export class Repository {
     return this.write(validateRev(onto).pipe(Effect.andThen(this.run(["rebase", onto]))));
   }
 
-  /** Applies commits given newest first (as in the graph), oldest first. */
+  /**
+   * Applies commits given newest first (as in the graph), oldest first: git applies them in the
+   * order given, and each may build on the one before.
+   */
   cherryPick(hashes: readonly string[]) {
     return this.write(
       Effect.forEach(hashes, validateRev).pipe(
-        // git picks commits in command-line order.
         Effect.andThen(this.run(["cherry-pick", ...hashes.toReversed()])),
       ),
     );
   }
 
-  /** Reverts commits given newest first (as in the graph), in that order. */
+  /** Reverts commits given newest first (as in the graph), in that order (as git takes them). */
   revert(hashes: readonly string[]) {
     return this.write(
       Effect.forEach(hashes, validateRev).pipe(

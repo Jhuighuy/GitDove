@@ -644,6 +644,11 @@ describe("registerIpc", () => {
       ["ssh.listDir", ["fedora --", null]],
       ["app.setState", [{ tabs: "x", activeTab: null, recent: [] }]],
       ["repo.graphRows", [id, 1, 0, 4097]],
+      ["repo.cherryPick", [id, []]],
+      ["repo.revert", [id, ["a", 1]]],
+      ["repo.findCommits", [id, 1, []]],
+      ["repo.stashBranch", [id, "b", 0, 42]],
+      ["repo.setVisible", [id, "yes"]],
     ];
     services.getRepo = () => Effect.die("must not be called");
     for (const [method, args] of bad) {

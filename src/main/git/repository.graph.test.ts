@@ -49,6 +49,15 @@ describe.skipIf(noShell).each(targets)("Repository graph on %s", (hostId) => {
     expect(await run(t.repo.graphRows(g.version, 1, 0))).toEqual([]);
     expect(await run(t.repo.findCommit(g.version, rows[1]!.hash))).toBe(1);
     expect(await run(t.repo.findCommit(g.version, "0".repeat(40)))).toBe(-1);
+    // Several at once, also abbreviated; unknown ones are -1.
+    expect(
+      await run(
+        t.repo.findCommits(g.version, [rows[1]!.hash, "0".repeat(40), rows[0]!.hash.slice(0, 7)]),
+      ),
+    ).toEqual([1, -1, 0]);
+    expect((await fails(t.repo.findCommits(g.version + 1, [rows[0]!.hash])))._tag).toBe(
+      "StaleGraphError",
+    );
     expect((await fails(t.repo.graphRows(g.version + 1, 0, 10)))._tag).toBe("StaleGraphError");
     expect((await fails(t.repo.findCommit(g.version + 1, rows[0]!.hash)))._tag).toBe(
       "StaleGraphError",

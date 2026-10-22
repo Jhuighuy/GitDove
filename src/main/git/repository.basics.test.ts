@@ -139,6 +139,27 @@ describe.skipIf(noShell).each(targets)(
       expect(await sh("ls")).toBe("f.txt");
     });
 
+    it("cherry-picks and reverts several commits given in graph order", async () => {
+      // Each commit needs the one before it: applied in another order, they would conflict.
+      await run(t.repo.createBranch("feat", "HEAD", true));
+      await sh(
+        "echo 1 > l.txt && git add l.txt && git commit -qm c1 && " +
+          "echo 2 >> l.txt && git commit -qam c2 && echo 3 >> l.txt && git commit -qam c3",
+      );
+      // Newest first, as the graph lists (and selects) them.
+      const picked = (await sh("git rev-list -n3 HEAD")).split("\n");
+      await run(t.repo.checkout("main"));
+      await run(t.repo.cherryPick(picked));
+      expect(await sh("git log -4 --format=%s")).toBe("c3\nc2\nc1\ntwo");
+      expect(await sh("cat l.txt")).toBe("1\n2\n3");
+
+      const applied = (await sh("git rev-list -n3 HEAD")).split("\n");
+      await run(t.repo.revert(applied));
+      expect(await sh("git log -3 --format=%s")).toBe('Revert "c1"\nRevert "c2"\nRevert "c3"');
+      expect(await sh("ls")).toBe("f.txt");
+      expect((await run(t.repo.info())).state).toBe("clean");
+    });
+
     it("resets in every mode", async () => {
       const two = await head();
       await run(t.repo.reset("HEAD~1", "soft"));

@@ -39,8 +39,12 @@ describe.skipIf(noShell).each(targets)("Repository index and diffs on %s", (host
     const left = (await run(t.repo.refs())).stashes;
     expect(left.map((s) => s.message)).not.toContainEqual(expect.stringContaining("first"));
     expect(left).toHaveLength(1);
-    // A stash that is gone is not mistaken for another.
+    // A stash that is gone is not mistaken for another, nor is a commit that is no stash.
     expect((await fails(t.repo.stashPop(0, first!.hash)))._tag).toBe("InvalidInputError");
+    expect((await fails(t.repo.stashDrop(0, await t.head())))._tag).toBe("InvalidInputError");
+    expect((await fails(t.repo.stashBranch("x", 0, first!.hash)))._tag).toBe("InvalidInputError");
+    expect(await run(t.repo.refs())).toMatchObject({ stashes: left });
+    expect(await sh("git branch --list x")).toBe("");
 
     // A branch from a stash starts at the commit the stash was made on.
     await sh("git commit -q --allow-empty -m three");
