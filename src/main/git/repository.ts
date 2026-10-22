@@ -83,6 +83,17 @@ const replacedFiles = (raw: string) => {
   return out;
 };
 
+/** Submodules that `git diff --cached --raw -z --no-renames` reports as added. */
+const newSubmodules = (raw: string) => {
+  const out: string[] = [];
+  const fields = raw.split("\0");
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const [, newMode = "", , , status = ""] = fields[i]!.slice(1).split(" ");
+    if (status === "A" && newMode === "160000") out.push(fields[i + 1]!);
+  }
+  return out;
+};
+
 /** How many paths one directory check takes, to keep its script small. */
 const DIR_CHECK_BATCH = 500;
 
@@ -979,10 +990,23 @@ export class Repository {
         // Then drop staged and unstaged changes, deleting new files that are staged. Without
         // commits, everything in the index is new (forced: a staged file edited since differs
         // from both the index and the work tree).
-        // Submodules added before the first commit: their folders are not ours to delete.
+        // Newly added submodules: their folders are not ours to delete, only their entries.
         let added: string[] = [];
         if (hasHead) {
+          added = newSubmodules(
+            yield* this.gitText([
+              "diff",
+              "--cached",
+              "--raw",
+              "-z",
+              "--no-renames",
+              "--no-abbrev",
+              "--ignore-submodules=none",
+              "HEAD",
+            ]),
+          );
           // Never into submodules, whatever `submodule.recurse` says: their changes are reported.
+          // The reset unstages new ones and leaves their folders.
           yield* this.run(["reset", "--hard", "-q", "--no-recurse-submodules"]);
         } else {
           added = (yield* this.gitText(["ls-files", "-s", "-z"]))

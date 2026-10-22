@@ -227,6 +227,21 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             expect((yield* host.sh("cat sub/s.txt", { cwd: dir })).stdout.toString()).toBe(
               "s\nx\n",
             );
+
+            // A submodule added since: unstaged, its folder (and work in it) kept, and said so.
+            yield* host.sh(
+              `git -c protocol.file.allow=always submodule add -q '${dir}-sub' sub2 && ` +
+                "echo y >> sub2/s.txt",
+              { cwd: dir },
+            );
+            const added = yield* Effect.flip(repo.discardAll());
+            expect(added.message).toBe(
+              "Discarded the other changes, but kept changes in submodules: sub; " +
+                "the folders of new submodules: sub2",
+            );
+            expect((yield* host.sh("cat sub2/s.txt", { cwd: dir })).stdout.toString()).toBe(
+              "s\ny\n",
+            );
           } finally {
             yield* host.sh(`rm -rf -- '${dir}' '${dir}-sub'`).pipe(Effect.ignore);
           }
