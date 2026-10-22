@@ -61,7 +61,10 @@ interface Entry {
 export class Repos extends Context.Service<
   Repos,
   {
-    /** Opens (or returns the already open) repository at a location for `owner`. */
+    /**
+     * Opens (or returns the already open) repository at a location for `owner`. It is the user's
+     * request: an SSH host that failed to connect a moment ago is tried again right away.
+     */
     readonly open: (location: RepoLocation, owner: Owner) => Effect.Effect<Repository, OpenError>;
     /**
      * Returns an open repository for `owner`. One that is not open is opened, e.g. for tabs
@@ -123,7 +126,11 @@ export const ReposLive = Layer.effect(
      * Opens a repository for `owner`, sharing concurrent opens of the same location. Owners are
      * claimed up front, so a release while the open is pending takes effect once it completes.
      */
-    const open = (location: RepoLocation, owner: Owner): Effect.Effect<Repository, OpenError> =>
+    const open = (
+      location: RepoLocation,
+      owner: Owner,
+      reconnect: boolean,
+    ): Effect.Effect<Repository, OpenError> =>
       Effect.suspend(() => {
         const requested = repoIdOf(location);
         closed.delete(requested);
@@ -142,10 +149,16 @@ export const ReposLive = Layer.effect(
         const deferred = Deferred.makeUnsafe<Repository, OpenError>();
         opening.set(requested, deferred);
         const host = hosts.get(location.kind === "local" ? LOCAL_HOST : location.host);
-        return Repository.open(host, location, {
-          onGraphProgress: (repo, info) =>
-            notifier.emit("repo.graphProgress", { repo: repo.id, info }),
-        }).pipe(
+        // Connecting first skips the backoff after failed attempts (see `Hosts.connect`).
+        const connect =
+          reconnect && location.kind === "ssh" ? hosts.connect(location.host) : Effect.void;
+        return connect.pipe(
+          Effect.andThen(
+            Repository.open(host, location, {
+              onGraphProgress: (repo, info) =>
+                notifier.emit("repo.graphProgress", { repo: repo.id, info }),
+            }),
+          ),
           Effect.map(register),
           Effect.onExit((exit) => {
             opening.delete(requested);
@@ -183,7 +196,7 @@ export const ReposLive = Layer.effect(
           } catch {
             return Effect.fail(new InvalidInputError({ message: `Invalid repository id: ${id}` }));
           }
-          return open(location, owner);
+          return open(location, owner, false);
         },
       );
 
@@ -217,6 +230,11 @@ export const ReposLive = Layer.effect(
       }),
     );
 
-    return { open, get, release, releaseAll };
+    return {
+      open: (location: RepoLocation, owner: Owner) => open(location, owner, true),
+      get,
+      release,
+      releaseAll,
+    };
   }),
 );

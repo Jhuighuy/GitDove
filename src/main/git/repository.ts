@@ -196,7 +196,7 @@ const notARepository = (path: string, e: CommandError): NotARepositoryError => {
         : e.exitCode === 3
           ? `${path} is not a Git repository`
           : `${path} cannot be opened${stderr ? `: ${stderr.split("\n")[0]}` : ""}`;
-  return new NotARepositoryError({ message: reason, path });
+  return new NotARepositoryError({ message: reason, path, stderr });
 };
 
 const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARepositoryError> =>

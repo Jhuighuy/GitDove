@@ -12,6 +12,7 @@ interface Hooks {
 }
 const fake = vi.hoisted(() => ({
   open: null as unknown as ReturnType<typeof vi.fn>,
+  connects: [] as string[],
   watchers: [] as {
     repo: { id: string };
     listener: (s: Set<string>) => void;
@@ -31,6 +32,7 @@ vi.mock("./git/repository", async () => {
           new errors.NotARepositoryError({
             message: `${location.path} is not a Git repository`,
             path: location.path,
+            stderr: "fatal: not a git repository",
           }),
         );
       }
@@ -69,7 +71,7 @@ const setup = () => {
         Layer.succeed(Hosts, {
           get: (id: string) => ({ id, kind: id === LOCAL_HOST ? "local" : "ssh" }) as Host,
           configuredSshHosts: Effect.succeed([]),
-          connect: () => Effect.void,
+          connect: (id: string) => Effect.sync(() => void fake.connects.push(id)),
         }),
         Layer.succeed(Notifier, { emit: (event, payload) => void events.push([event, payload]) }),
         Layer.succeed(RepoSettings, { hidden, setHidden: () => {} }),
@@ -89,6 +91,7 @@ const repos = () => (current = setup());
 beforeEach(() => {
   fake.open.mockClear();
   fake.watchers.length = 0;
+  fake.connects.length = 0;
 });
 afterEach(async () => {
   await current?.runtime.dispose();
@@ -115,6 +118,16 @@ describe("Repos", () => {
     const repo = await run((r) => r.open({ kind: "ssh", host: "fedora", path: "/srv/x" }, 1));
     expect(repo.id).toBe("ssh://fedora/srv/x");
     expect(fake.open.mock.calls[0]![0]).toMatchObject({ id: "fedora", kind: "ssh" });
+  });
+
+  it("connects first when the user opens a remote repository, skipping the backoff", async () => {
+    const { run } = repos();
+    await run((r) => r.open({ kind: "ssh", host: "fedora", path: "/srv/x" }, 1));
+    await run((r) => r.open(local("/repo"), 1));
+    expect(fake.connects).toEqual(["fedora"]);
+    // A restored tab opening lazily waits for the backoff like any other command.
+    await run((r) => r.get("ssh://box/srv/y", 1));
+    expect(fake.connects).toEqual(["fedora"]);
   });
 
   it("shares concurrent opens of the same location", async () => {
@@ -159,6 +172,7 @@ describe("Repos", () => {
           new NotARepositoryError({
             message: "/missing is not a Git repository",
             path: "/missing",
+            stderr: "fatal: not a git repository",
           }),
         ),
       );

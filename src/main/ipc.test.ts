@@ -7,7 +7,12 @@ import { IPC_INVOKE, type RpcResult } from "@shared/ipc";
 import type { WebContents } from "electron";
 import { Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommandError, InvalidInputError, StaleGraphError } from "./exec/errors";
+import {
+  CommandError,
+  InvalidInputError,
+  NotARepositoryError,
+  StaleGraphError,
+} from "./exec/errors";
 import { type Host, Hosts, LOCAL_HOST } from "./exec/hosts";
 import { spawn } from "./exec/spawn";
 import type { Repository } from "./git/repository";
@@ -540,6 +545,7 @@ describe("repository handlers", () => {
     "repo.clone",
     "repo.hiddenRefs",
     "repo.setHiddenRefs",
+    "repo.setVisible",
   ]);
   const delegating = Object.keys(handlers).filter((m) => m.startsWith("repo.") && !special.has(m));
 
@@ -686,6 +692,22 @@ describe("registerIpc", () => {
       error: { tag: "CommandError", message: "bad revision", detail: "fatal: bad revision" },
     });
     expect(log.warn).toHaveBeenCalledWith("repo.status failed: bad revision");
+    services.getRepo = () =>
+      Effect.fail(
+        new NotARepositoryError({
+          message: "/x cannot be opened",
+          path: "/x",
+          stderr: "fatal: detected dubious ownership",
+        }),
+      ) as never;
+    expect(await invoke("repo.status", ["local:/x"])).toEqual({
+      ok: false,
+      error: {
+        tag: "NotARepositoryError",
+        message: "/x cannot be opened",
+        detail: "fatal: detected dubious ownership",
+      },
+    });
     expect(await invoke("shell.openExternal", ["ftp://x"])).toEqual({
       ok: false,
       error: { tag: "InvalidInputError", message: "Refusing to open ftp://x" },

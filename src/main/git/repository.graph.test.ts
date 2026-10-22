@@ -29,6 +29,17 @@ describe.skipIf(noShell).each(targets)("Repository graph on %s", (hostId) => {
     expect(e.message).toMatch(/Git directory/);
   });
 
+  it("says why a folder is not a repository, with git's own words", async () => {
+    const path = `${t.root}/plain${t.n}`;
+    await sh(`mkdir -p '${path}'`);
+    const e = await fails(
+      Repository.open(t.host, { kind: "local", path }, { onGraphProgress: () => {} }),
+    );
+    expect(e).toMatchObject({ _tag: "NotARepositoryError", path });
+    expect(e.message).toBe(`${path} is not a Git repository`);
+    expect((e as { stderr: string }).stderr).toMatch(/not a git repository/i);
+  });
+
   it("serves graph rows by version", async () => {
     let g = await run(t.repo.graphInfo());
     while (!g.complete) g = await run(t.repo.graphInfo());
