@@ -29,7 +29,7 @@
             {
               "appearance": "dark",
               "value": {
-                "solid": "extended-srgb:0.82745,0.56471,0.43922,1.00000"
+                "automatic-gradient": "extended-srgb:0.78039,0.30588,0.22745,1.00000"
               }
             },
             {
