@@ -75,6 +75,14 @@ it("links issue and pull request references", () => {
     ["!5", "https://gitlab.com/g/p/-/merge_requests/5"],
     ["#6", "https://gitlab.com/g/p/-/issues/6"],
   ]);
+  // On a host not known to run GitLab (one that could not be asked), `!` still means one.
+  expect(
+    links("See merge request group/sub/repo!12, !5 and #3", "https://git.corp.io/g/r"),
+  ).toEqual([
+    ["group/sub/repo!12", "https://git.corp.io/group/sub/repo/-/merge_requests/12"],
+    ["!5", "https://git.corp.io/g/r/-/merge_requests/5"],
+    ["#3", "https://git.corp.io/g/r/issues/3"],
+  ]);
   // GitLab projects may sit in nested groups; GitHub's are owner/repo only.
   expect(links("See group/repo!1234 and g/sub/r#7", "https://gitlab.com/g/p")).toEqual([
     ["group/repo!1234", "https://gitlab.com/group/repo/-/merge_requests/1234"],

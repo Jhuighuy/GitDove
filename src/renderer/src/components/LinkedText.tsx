@@ -20,6 +20,8 @@ const useReferenceRepo = (repo: RepoId): WebRepo | null => {
     queryFn: () => api("web.isGitlab", origin!),
     enabled: origin !== null,
     retry: false,
+    // "Not GitLab" may be an instance out of reach (VPN down): ask again later.
+    staleTime: (query) => (query.state.data ? Infinity : 60_000),
   });
   return useMemo(
     () => (web && origin && gitlab ? { ...web, forge: "gitlab" } : web),

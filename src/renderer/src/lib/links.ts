@@ -85,6 +85,9 @@ const referenceUrl = (repo: WebRepo, path: string, sigil: string, n: string, pul
       // Bitbucket's own markup: `#12` is an issue, `pull request #12` a pull request.
       return `${base}/${pull ? "pull-requests" : "issues"}/${n}`;
     default:
+      // Only GitLab writes `!12`: an instance that could not be asked (e.g. behind a sign-in
+      // proxy) still gets its merge requests.
+      if (sigil === "!") return `${base}/-/merge_requests/${n}`;
       // GitHub, Gitea and Forgejo redirect an issue URL to the pull request with that number.
       return `${base}/issues/${n}`;
   }
@@ -168,8 +171,10 @@ export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
     if (!repo) return void out.push({ text: s });
     let last = 0;
     for (const m of s.matchAll(REF_RE)) {
-      const ref = reference(s, m, repo.forge === "gitlab");
-      if (!ref || ref.start < last || (ref.sigil === "!" && repo.forge !== "gitlab")) continue;
+      // GitLab paths may name nested groups; on a host not known to be GitLab, `!` says it is.
+      const gitlab = repo.forge === "gitlab" || (repo.forge === "other" && m[0][0] === "!");
+      const ref = reference(s, m, gitlab);
+      if (!ref || ref.start < last || (ref.sigil === "!" && !gitlab)) continue;
       if (ref.start > last) out.push({ text: s.slice(last, ref.start) });
       out.push({
         text: s.slice(ref.start, ref.end),
