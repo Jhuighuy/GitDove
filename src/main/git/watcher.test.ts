@@ -36,6 +36,7 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
       gitDir: fields.gitDir,
       commonDir: fields.commonDir ?? fields.gitDir,
       bare: fields.bare ?? false,
+      fork: (effect: Effect.Effect<unknown, unknown>) => Effect.runFork(effect),
       // Only `check-ignore` runs, which exits with 1 when nothing is ignored.
       gitText: (args: readonly string[], options: { stdin?: string }) =>
         Effect.sync(() => {
@@ -256,6 +257,7 @@ describe("watchRepository on a remote repository", () => {
       workTree: "/srv/repo",
       gitDir: "/srv/repo/.git",
       commonDir: "/srv/repo/.git",
+      fork: (effect: Effect.Effect<unknown, unknown>) => Effect.runFork(effect),
     };
     return { repo: repo as unknown as Repository, sh, polls };
   };

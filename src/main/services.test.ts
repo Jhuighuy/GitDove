@@ -4,11 +4,12 @@ import { Context, Effect, Exit, Layer, ManagedRuntime, RcMap } from "effect";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { InvalidInputError, NotARepositoryError, RepoNotOpenError } from "./exec/errors";
 import { type Host, Hosts, LOCAL_HOST } from "./exec/hosts";
-import type { Repository } from "./git/repository";
+import type { Fork, Repository } from "./git/repository";
 import { LoggerLive, Notifier, RepoSettings, Repos, ReposLive } from "./services";
 
 interface Hooks {
   readonly onGraphProgress: (repo: Repository, info: unknown) => void;
+  readonly fork: Fork;
 }
 const fake = vi.hoisted(() => ({
   open: null as unknown as ReturnType<typeof vi.fn>,
@@ -77,6 +78,7 @@ const setup = () => {
         Layer.succeed(RepoSettings, { hidden, setHidden: () => {} }),
       ),
     ),
+    Layer.provide(LoggerLive),
   );
   const runtime = ManagedRuntime.make(layer);
   const run = <A, E>(f: (repos: Repos["Service"]) => Effect.Effect<A, E>) =>
@@ -282,6 +284,23 @@ describe("Repos", () => {
     expect(await runExit((r) => r.get("nope", 1))).toEqual(
       Exit.fail(new InvalidInputError({ message: "Invalid repository id: nope" })),
     );
+  });
+
+  it("runs repositories' background work with the app's logger until shutdown", async () => {
+    const { run, runtime } = repos();
+    await run((r) => r.open(local("/repo"), 1));
+    const { fork } = fake.open.mock.calls[0]![2] as Hooks;
+    let interrupted = false;
+    fork(
+      Effect.logInfo("loading the graph").pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Effect.sync(() => (interrupted = true))),
+      ),
+    );
+    await vi.waitFor(() => expect(log.info).toHaveBeenCalledWith("loading the graph"));
+    await runtime.dispose();
+    current = null;
+    expect(interrupted).toBe(true);
   });
 
   it("stops all watchers and graph loads on shutdown", async () => {

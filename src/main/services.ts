@@ -2,7 +2,7 @@ import type { RepoId, RepoLocation } from "@shared/domain";
 import { repoIdOf, repoLocationOf } from "@shared/domain";
 import type { EventName, Events } from "@shared/ipc";
 import log from "electron-log/main";
-import { Cause, Context, Deferred, Effect, Exit, Layer, Logger } from "effect";
+import { Cause, Context, Deferred, Effect, Exit, FiberSet, Layer, Logger } from "effect";
 import { InvalidInputError, type NotARepositoryError, RepoNotOpenError } from "./exec/errors";
 import { Hosts, LOCAL_HOST } from "./exec/hosts";
 import { type GitError, Repository } from "./git/repository";
@@ -88,6 +88,9 @@ export const ReposLive = Layer.effect(
     const hosts = yield* Hosts;
     const notifier = yield* Notifier;
     const settings = yield* RepoSettings;
+    // Background work of repositories (graph loads, watchers) runs with this layer's services
+    // (e.g. its logger) and is interrupted when the layer is released, i.e. at quit.
+    const fork = yield* FiberSet.makeRuntime();
     const entries = new Map<RepoId, Entry>();
     /** Requested id -> pending open. */
     const opening = new Map<RepoId, Deferred.Deferred<Repository, OpenError>>();
@@ -157,6 +160,7 @@ export const ReposLive = Layer.effect(
             Repository.open(host, location, {
               onGraphProgress: (repo, info) =>
                 notifier.emit("repo.graphProgress", { repo: repo.id, info }),
+              fork,
             }),
           ),
           Effect.map(register),

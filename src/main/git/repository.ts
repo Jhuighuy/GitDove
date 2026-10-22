@@ -432,8 +432,13 @@ const GRAPH_RETRY_DELAYS = [
 // Repository
 // ---------------------------------------------------------------------------
 
+/** Runs an effect in the background, e.g. with the app's logger, interrupted at quit. */
+export type Fork = <A, E>(effect: Effect.Effect<A, E>) => Fiber.Fiber<A, E>;
+
 export interface RepositoryHooks {
   readonly onGraphProgress: (repo: Repository, info: GraphInfo) => void;
+  /** Starts background work (graph loads, watchers); `Effect.runFork` by default. */
+  readonly fork?: Fork;
 }
 
 /**
@@ -470,6 +475,8 @@ export class Repository {
   /** The probe made by {@link open}, which spares the first {@link info} a round trip. */
   private openingProbe: { readonly probe: Probe; readonly at: number } | null;
   readonly emptyTree: string;
+  /** Starts the repository's background work, see {@link RepositoryHooks.fork}. */
+  readonly fork: Fork;
 
   private constructor(
     readonly id: RepoId,
@@ -484,6 +491,7 @@ export class Repository {
   ) {
     this.openingProbe = { probe: opening, at: Date.now() };
     this.emptyTree = emptyTreeOf(opening.objectFormat);
+    this.fork = hooks.fork ?? ((effect) => Effect.runFork(effect));
   }
 
   static readonly open = (
@@ -922,7 +930,7 @@ export class Repository {
     this.graphDirty = true;
     if (this.disposed || (!this.graph && !this.graphLoad)) return;
     if (this.graphCheck) Effect.runFork(Fiber.interrupt(this.graphCheck));
-    const fiber = Effect.runFork(
+    const fiber = this.fork(
       this.graphState().pipe(
         Effect.match({
           onFailure: () => null,
@@ -1063,7 +1071,7 @@ export class Repository {
       this.graphReady && !Deferred.isDoneUnsafe(this.graphReady) ? this.graphReady : null;
     const ready = pending ?? Deferred.makeUnsafe<void, GitError>();
     if (this.graph === null) this.graphReady = ready;
-    const fiber = Effect.runFork(
+    const fiber = this.fork(
       this.loadGraph(ready, state).pipe(
         Effect.catch((e) =>
           Effect.suspend(() => (this.graphFailed(e) ? Effect.void : Deferred.fail(ready, e))),
@@ -1145,7 +1153,7 @@ export class Repository {
     const delay = GRAPH_RETRY_DELAYS[this.graphFailures];
     if (e._tag !== "SshError" || delay === undefined) return false;
     this.graphFailures++;
-    this.graphRetry = Effect.runFork(
+    this.graphRetry = this.fork(
       Effect.sleep(delay).pipe(
         Effect.andThen(
           Effect.sync(() => {

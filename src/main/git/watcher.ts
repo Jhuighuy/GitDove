@@ -101,18 +101,16 @@ const isInside = (child: string, parent: string) => {
 };
 
 /** The paths that `.gitignore` and friends ignore (tracked files never are). */
-const ignoredPaths = (repo: Repository, paths: readonly string[]): Promise<Set<string>> =>
-  Effect.runPromise(
-    repo
-      .gitText(["check-ignore", "-z", "--stdin"], {
-        stdin: paths.join("\0") + "\0",
-        okCodes: [0, 1],
-      })
-      .pipe(
-        Effect.map((out) => new Set(out.split("\0").filter(Boolean))),
-        Effect.orElseSucceed(() => new Set<string>()),
-      ),
-  );
+const ignoredPaths = (repo: Repository, paths: readonly string[]): Effect.Effect<Set<string>> =>
+  repo
+    .gitText(["check-ignore", "-z", "--stdin"], {
+      stdin: paths.join("\0") + "\0",
+      okCodes: [0, 1],
+    })
+    .pipe(
+      Effect.map((out) => new Set(out.split("\0").filter(Boolean))),
+      Effect.orElseSucceed(() => new Set<string>()),
+    );
 
 /**
  * Watches a local repository with native file system events, and falls back to polling when
@@ -125,9 +123,11 @@ const watchLocal = (repo: Repository, listener: ChangeListener): (() => void) =>
     if (disposed) return;
     // Only ignored files changed (e.g. build output): nothing to show.
     if (scopes.size === 1 && scopes.has("worktree") && paths && paths.length > 0) {
-      void ignoredPaths(repo, paths).then((ignored) => {
-        if (!disposed && paths.some((p) => !ignored.has(p))) listener(scopes);
-      });
+      repo.fork(
+        Effect.map(ignoredPaths(repo, paths), (ignored) => {
+          if (!disposed && paths.some((p) => !ignored.has(p))) listener(scopes);
+        }),
+      );
       return;
     }
     listener(scopes);
@@ -261,7 +261,7 @@ printf 'W:'; git status --porcelain=v2 -z --untracked-files=all --no-renames 2>/
       yield* sleepUnlessWoken(activity.isActive() ? POLL_ACTIVE : POLL_BACKGROUND);
     }
   });
-  const fiber = Effect.runFork(loop);
+  const fiber = repo.fork(loop);
   return () => {
     Effect.runFork(Fiber.interrupt(fiber));
   };
