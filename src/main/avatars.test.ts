@@ -198,6 +198,16 @@ describe("avatar lookup", () => {
     expect(log.info).toHaveBeenCalledWith("avatars: https://git.example.org is not GitLab");
   });
 
+  it("takes a host answering null for not GitLab", async () => {
+    await load();
+    serve({
+      "https://git.example.org/api/v4/avatar?email=gitdove-probe": json(null),
+      [gravatar("a@x.org")]: png("gravatar"),
+    });
+    expect((await request("a@x.org", ["gitlab:git.example.org"])).body).toBe("png:gravatar");
+    expect(log.info).toHaveBeenCalledWith("avatars: https://git.example.org is not GitLab");
+  });
+
   it("ignores GitLab answers without a usable avatar URL", async () => {
     await load();
     const probe = json({ avatar_url: "https://gitlab.example.org/probe.png" });

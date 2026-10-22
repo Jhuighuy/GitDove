@@ -111,8 +111,12 @@ const gitlabAvatarUrl = (origin: string, email: string, size: number) =>
     if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) {
       return yield* definite(origin);
     }
-    const url = (yield* body(origin, () => res.json() as Promise<{ avatar_url?: unknown }>))
-      .avatar_url;
+    const data = yield* body(origin, () => res.json() as Promise<unknown>);
+    // Any JSON parses, `null` included: only an object can name an avatar.
+    const url =
+      typeof data === "object" && data !== null
+        ? (data as { avatar_url?: unknown }).avatar_url
+        : undefined;
     if (typeof url !== "string" || !/^https?:\/\//.test(url)) return yield* definite(origin);
     return url;
   });

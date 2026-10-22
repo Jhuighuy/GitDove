@@ -157,11 +157,13 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             .toString()
             .trim();
           try {
-            // The tracked file `a` replaced by a repository with work in it.
+            // The tracked files `a` and `b` (whose deletion is staged) replaced by a repository
+            // with work in it and a folder.
             yield* host.sh(
               "git init -q -b main . && git config user.name T && git config user.email t@x && " +
-                "echo a > a && git add a && git commit -qm a && rm a && mkdir a && " +
-                "git -C a init -q && echo n > a/n.txt && echo j > junk.txt",
+                "echo a > a && echo b > b && git add a b && git commit -qm ab && rm a && " +
+                "mkdir a && git -C a init -q && echo n > a/n.txt && git rm -q b && mkdir b && " +
+                "git -C b init -q && echo j > junk.txt",
               { cwd: dir },
             );
             const location: RepoLocation =
@@ -171,10 +173,10 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
             const repo = yield* Repository.open(host, location, { onGraphProgress: () => {} });
             const stopped = yield* Effect.flip(repo.discardAll());
             expect(stopped.message).toBe(
-              "Folders are where tracked files belong: a. Move them away first.",
+              "Folders are where tracked files belong: a, b. Move them away first.",
             );
             // Nothing was deleted.
-            const left = (yield* host.sh("ls -A . a", { cwd: dir })).stdout.toString();
+            const left = (yield* host.sh("ls -A . a b", { cwd: dir })).stdout.toString();
             expect(left).toContain("n.txt");
             expect(left).toContain(".git");
             expect(left).toContain("junk.txt");

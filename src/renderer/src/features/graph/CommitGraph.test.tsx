@@ -405,6 +405,43 @@ it("does not take the user back after revealing a commit meanwhile", async () =>
   expect(revealed).toBeLessThan(4000);
 });
 
+it("keeps the place to go back to while the history is too short to reach it", async () => {
+  mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
+  mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };
+  await render();
+  await act(async () => {
+    scroller().scrollTop = 4000;
+    scroller().dispatchEvent(new Event("scroll"));
+  });
+  // Twice back with too short a history: the browser clamps, and a diff replaces it again.
+  for (let i = 0; i < 2; i++) {
+    await act(async () => root.unmount());
+    mocks.info = { version: 2, count: 20, complete: false, maxLanes: 1 };
+    root = createRoot(container);
+    await render(null);
+    await act(async () => {
+      scroller().scrollTop = 200;
+      scroller().dispatchEvent(new Event("scroll"));
+    });
+  }
+  // A commit that is not in the history yet does not cancel going back either.
+  mocks.found = -1;
+  await act(async () =>
+    useRepoUiStore.getState().select(repo, { kind: "commit", hash: "c199" }, true),
+  );
+  await settle();
+  await act(async () => {
+    client.setQueryData(keys.graphInfo(repo), {
+      version: 2,
+      count: 200,
+      complete: true,
+      maxLanes: 1,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(scroller().scrollTop).toBe(4000);
+});
+
 it("does not take the user back once they scrolled themselves", async () => {
   mocks.rows = Array.from({ length: 200 }, (_, i) => commit(i));
   mocks.info = { version: 1, count: 200, complete: true, maxLanes: 1 };

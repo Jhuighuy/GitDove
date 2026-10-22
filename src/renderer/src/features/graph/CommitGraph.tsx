@@ -195,9 +195,10 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
         // Handled once it got here: a lookup cut short (e.g. by a diff) runs again.
         if (cancelled) return;
         viewOf(repo).revealed = revealToken;
+        if (index < 0) return;
         // Going to the commit replaces going back to where the graph was.
         restore.current = 0;
-        if (index >= 0) virtualizer.scrollToIndex(index + offset, { align: "center" });
+        virtualizer.scrollToIndex(index + offset, { align: "center" });
       },
       () => {},
     );
@@ -360,7 +361,8 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
                 onKeyDown(e);
               }}
               onScroll={(e) => {
-                viewOf(repo).scroll = e.currentTarget.scrollTop;
+                // While going back is pending, the browser's clamping is not a place to keep.
+                if (restore.current === 0) viewOf(repo).scroll = e.currentTarget.scrollTop;
               }}
               onWheel={scrolledByUser}
               onPointerDown={scrolledByUser}

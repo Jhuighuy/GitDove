@@ -153,13 +153,12 @@ const reference = (s: string, m: RegExpMatchArray, nested: boolean) => {
   return { start, end, path: qualifier || null, sigil: m[0][0]!, n: m[0].slice(1) };
 };
 
-/** Whether the reference starting at `at` follows the words "pull request". */
-const pullRequest = (s: string, at: number) =>
-  s
-    .slice(Math.max(0, at - 13), at)
-    .toLowerCase()
-    .trimEnd()
-    .endsWith("pull request");
+/** Whether the reference starting at `at` follows the words "pull request" (`pull request: #7`). */
+const pullRequest = (s: string, at: number) => {
+  let end = at;
+  while (end > 0 && " \t:-–—".includes(s[end - 1]!)) end--;
+  return s.slice(Math.max(0, end - 12), end).toLowerCase() === "pull request";
+};
 
 /** Splits a message into plain text and links. */
 export const linkify = (text: string, repo: WebRepo | null): Segment[] => {
