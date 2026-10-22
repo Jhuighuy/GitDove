@@ -22,19 +22,28 @@ export const draftMessage = (d: Pick<Draft, "summary" | "description">) =>
 
 const isEmpty = (d: Draft) => !d.summary && !d.description && !d.amend;
 
+/** Whether a draft's text is still the previous commit's message, as prefilled for amending. */
+const isPrefilled = (d: Draft) => d.prefill !== null && draftMessage(d) === d.prefill;
+
 interface DraftsState {
   readonly drafts: Readonly<Record<RepoId, Draft>>;
   set(repo: RepoId, d: Partial<Draft>): void;
+  /**
+   * Turns amending off. The previous commit's message, if still unchanged, goes too: it is not
+   * meant for a new commit.
+   */
+  stopAmending(repo: RepoId): void;
   clear(repo: RepoId): void;
 }
 
 /**
- * Commit messages per repository. Messages survive reloads and restarts (amending does not: it
- * is a decision about the next commit, and the previous commit may have changed meanwhile).
+ * Commit messages per repository. Messages survive reloads and restarts. Amending does not (it
+ * is a decision about the next commit, and the previous commit may have changed meanwhile), and
+ * neither does the previous commit's message prefilled for it.
  */
 export const useDrafts = create<DraftsState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       drafts: {},
       set: (repo, d) =>
         set((s) => {
@@ -42,6 +51,15 @@ export const useDrafts = create<DraftsState>()(
           const { [repo]: _, ...rest } = s.drafts;
           return { drafts: isEmpty(next) ? rest : { ...rest, [repo]: next } };
         }),
+      stopAmending: (repo) => {
+        const d = get().drafts[repo];
+        if (!d || (!d.amend && d.prefill === null)) return;
+        get().set(repo, {
+          amend: false,
+          prefill: null,
+          ...(isPrefilled(d) ? { summary: "", description: "" } : {}),
+        });
+      },
       clear: (repo) =>
         set((s) => {
           const { [repo]: _, ...rest } = s.drafts;
@@ -74,7 +92,7 @@ export const useDrafts = create<DraftsState>()(
       partialize: (s) => ({
         drafts: Object.fromEntries(
           Object.entries(s.drafts)
-            .filter(([, d]) => d.summary || d.description)
+            .filter(([, d]) => (d.summary || d.description) && !isPrefilled(d))
             .map(([repo, d]) => [repo, { summary: d.summary, description: d.description }]),
         ),
       }),

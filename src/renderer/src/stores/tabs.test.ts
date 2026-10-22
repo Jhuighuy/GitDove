@@ -231,6 +231,14 @@ it("forgets everything about a closed repository", async () => {
   expect(mocks.api).toHaveBeenCalledWith("repo.close", A);
 });
 
+it("drops the previous commit's message prefilled for amending when closing a tab", async () => {
+  const { useDrafts } = await import("./drafts");
+  await load([A, B], A);
+  useDrafts.getState().set(A, { summary: "Old", amend: true, prefill: "Old" });
+  s().closeTab(s().tabs[0]!.key);
+  expect(useDrafts.getState().drafts[A]).toBeUndefined();
+});
+
 it("keeps repositories in background tabs from refetching until shown", async () => {
   const q = await import("@/lib/queries");
   const refetch = vi.spyOn(q.queryClient, "refetchQueries").mockResolvedValue();

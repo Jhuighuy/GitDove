@@ -412,17 +412,8 @@ function CommitBox({
   }, [draft.amend]);
 
   const setAmend = (amend: boolean) => {
-    if (amend) {
-      setDraft(repo, { amend });
-      return;
-    }
-    // The previous commit's message, unchanged, is not meant for a new commit.
-    const prefilled = draft.prefill !== null && draftMessage(draft) === draft.prefill;
-    setDraft(repo, {
-      amend,
-      prefill: null,
-      ...(prefilled ? { summary: "", description: "" } : {}),
-    });
+    if (amend) setDraft(repo, { amend });
+    else useDrafts.getState().stopAmending(repo);
   };
 
   const blocked = busy

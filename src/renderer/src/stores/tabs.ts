@@ -37,13 +37,13 @@ const saveState = (s: TabsState) => {
 
 /**
  * Forgets a closed repository: its cached data (reopening it starts afresh, and the main
- * process starts a new graph), its selection and its notices. A non-empty commit message stays.
+ * process starts a new graph), its selection and its notices. A commit message the user wrote
+ * stays; amending, with the previous commit's message prefilled for it, does not.
  */
 const forgetRepo = (repo: RepoId) => {
   forgetRepoQueries(repo);
   useRepoUiStore.getState().forget(repo);
-  const drafts = useDrafts.getState();
-  if (drafts.drafts[repo]?.amend) drafts.set(repo, { amend: false, prefill: null });
+  useDrafts.getState().stopAmending(repo);
   useStatusStore.setState((s) => {
     const { [repo]: _, ...notices } = s.notices;
     return { notices };
