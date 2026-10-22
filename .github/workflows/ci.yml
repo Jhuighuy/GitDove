@@ -171,6 +171,8 @@ jobs:
             exit 1
           fi
           ls -l dist
+      - name: Check update manifests
+        run: node scripts/release.mjs check dist
       - id: version
         run: node scripts/release.mjs version
       - name: Sign the macOS update

@@ -4,8 +4,11 @@
 //     Prints the release version: package.json's major.minor plus the CI run number.
 //   node scripts/release.mjs appcast <dir> <download URL prefix>
 //     Signs the macOS ZIP in <dir> with SPARKLE_PRIVATE_KEY and writes appcast.xml next to it.
+//   node scripts/release.mjs check <dir>
+//     Fails unless every file in <dir> keeps its name as a GitHub release asset and every file
+//     that the electron-updater manifests (latest*.yml) point to is there with the listed sha512.
 import { execFileSync } from "node:child_process";
-import { createPublicKey, verify } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 import { appendFileSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fetchSparkle, root, updateSettings } from "./sparkle.mjs";
@@ -97,6 +100,52 @@ export async function writeAppcast({ zip, url, seed, output, settings }) {
   sign([output]);
 }
 
+/**
+ * GitHub renames uploaded assets whose names contain other characters (a space becomes a dot),
+ * which breaks every download URL computed from the local file name.
+ */
+const githubSafeName = /^[\w.-]+$/;
+
+/** Files an electron-updater manifest points to, with their base64 SHA-512 when listed. */
+export function manifestFiles(yaml) {
+  const files = new Map();
+  let url;
+  for (const line of yaml.split(/\r?\n/)) {
+    const entry = /^\s*(?:-\s+)?(url|path|sha512):\s*["']?(.*?)["']?\s*$/.exec(line);
+    if (!entry) continue;
+    const [, key, value] = entry;
+    if (key !== "sha512") {
+      url = value;
+      if (!files.has(url)) files.set(url, undefined);
+    } else if (url !== undefined && files.get(url) === undefined) {
+      files.set(url, value);
+    }
+  }
+  return files;
+}
+
+const sha512Of = (file) => createHash("sha512").update(readFileSync(file)).digest("base64");
+
+/** Reasons a release made of the files in `dir` would break downloads; empty if none. */
+export function releaseProblems(dir) {
+  const names = readdirSync(dir);
+  const problems = names
+    .filter((name) => !githubSafeName.test(name))
+    .map((name) => `${name}: GitHub would rename this asset`);
+  for (const manifest of names.filter((name) => /^latest.*\.yml$/.test(name))) {
+    const files = manifestFiles(readFileSync(join(dir, manifest), "utf8"));
+    if (files.size === 0) problems.push(`${manifest}: lists no files`);
+    for (const [url, sha512] of files) {
+      if (!names.includes(url)) {
+        problems.push(`${manifest}: ${url} is not in the release`);
+      } else if (sha512 !== undefined && sha512 !== sha512Of(join(dir, url))) {
+        problems.push(`${manifest}: ${url} does not match its sha512`);
+      }
+    }
+  }
+  return problems;
+}
+
 async function main([command, ...args]) {
   if (command === "version") {
     const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -126,8 +175,15 @@ async function main([command, ...args]) {
       settings: updateSettings(),
     });
     console.log(`Wrote ${output} for ${basename(zip)}`);
+  } else if (command === "check" && args.length === 1) {
+    const problems = releaseProblems(args[0]);
+    if (problems.length)
+      throw new Error(`The release would break updates:\n${problems.join("\n")}`);
+    console.log(`${args[0]}: every asset name and update manifest checks out`);
   } else {
-    throw new Error("usage: release.mjs version | appcast <dir> <download URL prefix>");
+    throw new Error(
+      "usage: release.mjs version | appcast <dir> <download URL prefix> | check <dir>",
+    );
   }
 }
 

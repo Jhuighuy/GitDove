@@ -44,5 +44,8 @@ win:
   icon: build/icon.ico
   target: [nsis]
 nsis:
+  # The default name has spaces, which GitHub turns into dots on upload, while latest.yml points
+  # at a dashed name: updates would 404. `release.mjs check` guards against such mismatches.
+  artifactName: ${productName}-Setup-${version}.${ext}
   oneClick: true
   perMachine: false
