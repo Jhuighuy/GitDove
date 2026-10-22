@@ -318,6 +318,25 @@ describe("Repos", () => {
     expect(fake.open).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let an owner that closed a repository claim it again with late requests", async () => {
+    const { run, runExit } = repos();
+    const repo = await run((r) => r.open(local("/repo/sub"), 1));
+    await run((r) => r.get("local:/repo", 2));
+    await run((r) => r.release("local:/repo/sub", 1));
+    // By any of its names.
+    for (const id of ["local:/repo", "local:/repo/sub"]) {
+      expect(await runExit((r) => r.get(id, 1))).toEqual(
+        Exit.fail(new RepoNotOpenError({ message: "The repository is closed", repo: id })),
+      );
+    }
+    // The other owner's close closes it.
+    await run((r) => r.release("local:/repo", 2));
+    expect(repo.dispose).toHaveBeenCalledTimes(1);
+    // Opening it again lifts that.
+    const again = await run((r) => r.open(local("/repo"), 1));
+    expect(await run((r) => r.get("local:/repo", 1))).toBe(again);
+  });
+
   it("disposes a repository opened twice at once by different names", async () => {
     const { run } = repos();
     const [a, b] = await run((r) =>

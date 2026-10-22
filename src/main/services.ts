@@ -71,8 +71,8 @@ export class Repos extends Context.Service<
     readonly open: (location: RepoLocation, owner: Owner) => Effect.Effect<Repository, OpenError>;
     /**
      * Returns an open repository for `owner`. One that is not open is opened, e.g. for tabs
-     * restored on launch, unless it was explicitly closed: late requests from a closed tab must
-     * not bring it back.
+     * restored on launch, unless it was explicitly closed (by `owner`, or by every owner): late
+     * requests from a closed tab must not bring it back.
      */
     readonly get: (
       id: RepoId,
@@ -109,6 +109,17 @@ export const ReposLive = Layer.effect(
     const aliases = new Map<RepoId, RepoId>();
     /** Ids (canonical or aliases) explicitly closed and not opened again since. */
     const closed = new Set<RepoId>();
+    /**
+     * Ids, as owners name them -> owners that closed them while others kept them open, and did
+     * not open them again since: their late requests must not claim them again.
+     */
+    const releasedBy = new Map<RepoId, Set<Owner>>();
+    const forgetRelease = (owner: Owner, ids: Iterable<RepoId>) => {
+      for (const id of ids) {
+        const set = releasedBy.get(id);
+        if (set?.delete(owner) && set.size === 0) releasedBy.delete(id);
+      }
+    };
     const lookup = (id: RepoId) => entries.get(aliases.get(id) ?? id);
     /** Ids, as owners name them -> owners that do not show them (see `setVisible`). */
     const hiddenBy = new Map<RepoId, Set<Owner>>();
@@ -176,10 +187,12 @@ export const ReposLive = Layer.effect(
       Effect.suspend(() => {
         const requested = repoIdOf(location);
         closed.delete(requested);
+        forgetRelease(owner, [requested]);
         const ready = lookup(requested);
         if (ready) {
           ready.owners.add(owner);
           closed.delete(ready.repo.id);
+          forgetRelease(owner, idsOf(ready));
           updateVisibility(ready);
           return Effect.succeed(ready.repo);
         }
@@ -214,7 +227,10 @@ export const ReposLive = Layer.effect(
               if (Exit.isFailure(exit)) return Deferred.failCause(deferred, exit.cause);
               const entry = exit.value;
               if (entry.repo.id !== requested) aliases.set(requested, entry.repo.id);
-              for (const o of owners) entry.owners.add(o);
+              for (const o of owners) {
+                entry.owners.add(o);
+                forgetRelease(o, idsOf(entry));
+              }
               if (entry.owners.size > 0) {
                 closed.delete(entry.repo.id);
                 updateVisibility(entry);
@@ -235,14 +251,14 @@ export const ReposLive = Layer.effect(
       Effect.suspend(
         (): Effect.Effect<Repository, OpenError | RepoNotOpenError | InvalidInputError> => {
           const entry = lookup(id);
-          if (entry) {
+          if (entry && !releasedBy.get(id)?.has(owner)) {
             if (!entry.owners.has(owner)) {
               entry.owners.add(owner);
               updateVisibility(entry);
             }
             return Effect.succeed(entry.repo);
           }
-          if (closed.has(id)) {
+          if (entry || closed.has(id)) {
             return Effect.fail(
               new RepoNotOpenError({ message: "The repository is closed", repo: id }),
             );
@@ -265,7 +281,14 @@ export const ReposLive = Layer.effect(
         unhide(owner, entry ? [id, ...idsOf(entry)] : [id]);
         if (entry) {
           entry.owners.delete(owner);
-          if (entry.owners.size > 0) return updateVisibility(entry);
+          if (entry.owners.size > 0) {
+            for (const name of [id, ...idsOf(entry)]) {
+              let set = releasedBy.get(name);
+              if (!set) releasedBy.set(name, (set = new Set()));
+              set.add(owner);
+            }
+            return updateVisibility(entry);
+          }
           closed.add(entry.repo.id);
           for (const [k, v] of aliases) if (v === entry.repo.id) closed.add(k);
           closeEntry(entry);
@@ -277,6 +300,7 @@ export const ReposLive = Layer.effect(
       Effect.sync(() => {
         for (const waiting of claims.values()) waiting.delete(owner);
         unhide(owner, [...hiddenBy.keys()]);
+        forgetRelease(owner, [...releasedBy.keys()]);
         for (const entry of entries.values()) {
           if (!entry.owners.delete(owner)) continue;
           if (entry.owners.size === 0) closeEntry(entry);
