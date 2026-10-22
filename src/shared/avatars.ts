@@ -13,10 +13,11 @@ const HOST_RE = /^[a-z0-9.-]+(:\d+)?$/i;
 
 /**
  * Extracts the host from a git remote URL (`https://…`, `ssh://…` or scp-like
- * `git@host:path`). HTTP(S) remotes keep their port, which the web UI shares.
+ * `git@host:path`). HTTPS remotes keep their port, which the web UI shares;
+ * avatar lookups always use HTTPS, so other schemes' ports do not apply.
  */
 export const remoteHost = (url: string): string | null => {
-  const web = /^https?:\/\/(?:[^@/]+@)?([^/:]+(?::\d+)?)/i.exec(url);
+  const web = /^https:\/\/(?:[^@/]+@)?([^/:]+(?::\d+)?)/i.exec(url);
   const m =
     web ??
     /^[a-z+]+:\/\/(?:[^@/]+@)?([^/:]+)/i.exec(url) ??

@@ -14,6 +14,7 @@ describe("avatars", () => {
     expect(remoteHost("ssh://git@gitlab.example.org:2222/a/b.git")).toBe("gitlab.example.org");
     expect(remoteHost("https://git.corp.example:8443/a/b.git")).toBe("git.corp.example:8443");
     expect(remoteHost("https://u:p@git.corp.example:443/a/b.git")).toBe("git.corp.example");
+    expect(remoteHost("http://git.corp.example:80/a/b.git")).toBe("git.corp.example");
     expect(remoteHost("/srv/git/repo.git")).toBeNull();
   });
 
