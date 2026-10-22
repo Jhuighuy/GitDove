@@ -15,7 +15,7 @@ import dockIcon from "../../build/icon.png?asset";
 import windowIcon from "../../resources/icon.png?asset";
 import { activity } from "./activity";
 import { handleAvatarProtocol, pruneAvatarCache, registerAvatarScheme } from "./avatars";
-import { fixProcessPath } from "./exec/environment";
+import { loadEnvironment } from "./exec/environment";
 import { HostsLive } from "./exec/hosts";
 import { isWebUrl, registerIpc } from "./ipc";
 import { LoggerLive, Notifier, RepoSettings, ReposLive } from "./services";
@@ -278,7 +278,8 @@ const main = async () => {
   await app.whenReady();
   // Packaged builds use the bundle icon; in development show ours instead of Electron's.
   if (isMac && !app.isPackaged) app.dock?.setIcon(dockIcon);
-  await Effect.runPromise(fixProcessPath);
+  // The login shell may take a while: spawns wait for it, the window does not.
+  Effect.runSync(loadEnvironment);
   registerIpc(runtime);
   restrictPermissions();
   handleAvatarProtocol();

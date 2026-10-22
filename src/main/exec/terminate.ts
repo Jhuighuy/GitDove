@@ -1,9 +1,12 @@
 import { execFile, spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import { Effect } from "effect";
 
-/** How long a process tree gets to exit after SIGTERM before it gets SIGKILL. */
-const GRACE_MS = 3000;
-const POLL_MS = 50;
+export const terminateTiming = {
+  /** How long a process tree gets to exit after SIGTERM before it gets SIGKILL. */
+  graceMs: 3000,
+  /** First interval between checks whether it is gone; later ones are longer. */
+  pollMs: 50,
+};
 
 /**
  * Processes started by `spawn` lead their own process group on POSIX (see `detached`), so a
@@ -47,29 +50,25 @@ const groupAlive = (pid: number): Effect.Effect<boolean> =>
     });
   });
 
-/** Waits until `done` holds, checking every POLL_MS; false if `ms` passed first. */
+/** Waits until `done` holds, checking with growing intervals; false if `ms` passed first. */
 const until = (done: Effect.Effect<boolean>, ms = Infinity) =>
   Effect.gen(function* () {
     const start = Date.now();
+    let delay = terminateTiming.pollMs;
     for (;;) {
       if (yield* done) return true;
-      if (Date.now() - start >= ms) return false;
-      yield* Effect.sleep(POLL_MS);
+      const left = start + ms - Date.now();
+      if (left <= 0) return false;
+      yield* Effect.sleep(Math.min(delay, left));
+      delay = Math.min(delay * 2, 400);
     }
   });
-
-/** Sends SIGTERM (POSIX) to the process and everything it started. */
-export const signalTree = (child: ChildProcess): void => {
-  if (child.pid === undefined) return;
-  if (OWN_PROCESS_GROUP) signalGroup(child.pid, "SIGTERM");
-  else child.kill();
-};
 
 /**
  * Stops a process and everything it started, and waits until all of it is gone: callers
  * holding a lock (see Repository.write) must not release it while git still runs. On POSIX
- * the process group gets SIGTERM, then SIGKILL after GRACE_MS; on Windows the tree is
- * killed with taskkill.
+ * the process group gets SIGTERM, then SIGKILL after `terminateTiming.graceMs`; on Windows
+ * the tree is killed with taskkill.
  */
 export const terminateTree = (child: ChildProcess): Effect.Effect<void> =>
   Effect.suspend(() => {
@@ -92,7 +91,7 @@ export const terminateTree = (child: ChildProcess): Effect.Effect<void> =>
     }
     signalGroup(pid, "SIGTERM");
     const gone = Effect.map(groupAlive(pid), (alive) => !alive);
-    return until(gone, GRACE_MS).pipe(
+    return until(gone, terminateTiming.graceMs).pipe(
       Effect.flatMap((done) =>
         done
           ? Effect.void

@@ -5,6 +5,7 @@ import { Effect, Exit, Fiber } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CommandError } from "./errors";
 import { completion, spawn, summarizeStderr } from "./spawn";
+import { terminateTiming } from "./terminate";
 
 const sh = (script: string, options?: Parameters<typeof spawn>[2]) =>
   spawn("/bin/sh", ["-c", script], options);
@@ -18,10 +19,16 @@ const fail = async <A>(effect: Effect.Effect<A, CommandError>) => {
 };
 
 let dir = "";
+const graceMs = terminateTiming.graceMs;
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "gitdove-spawn-"));
+  // Processes that ignore SIGTERM get SIGKILL sooner.
+  terminateTiming.graceMs = 1000;
 });
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => {
+  terminateTiming.graceMs = graceMs;
+  rmSync(dir, { recursive: true, force: true });
+});
 
 describe.skipIf(process.platform === "win32")("spawn", () => {
   it("collects stdout and stderr in the given cwd and environment", async () => {
@@ -131,7 +138,7 @@ describe.skipIf(process.platform === "win32")("spawn", () => {
     // Exiting takes a while (like git cleaning up its locks): the interrupt waits for it.
     const marker = join(dir, "cleaned-up");
     const fiber = Effect.runFork(
-      sh(`trap 'sleep 0.4; touch "${marker}"; exit 1' TERM; while :; do sleep 0.05; done`),
+      sh(`trap 'sleep 0.2; touch "${marker}"; exit 1' TERM; while :; do sleep 0.05; done`),
     );
     await new Promise((r) => setTimeout(r, 200));
     await run(Fiber.interrupt(fiber));
@@ -151,12 +158,44 @@ describe.skipIf(process.platform === "win32")("spawn", () => {
   it("kills a process that ignores SIGTERM", async () => {
     const pidFile = join(dir, "stubborn.pid");
     const fiber = Effect.runFork(
-      sh(`echo $$ > "${pidFile}"; trap '' TERM; while :; do sleep 0.05; done`),
+      sh(`trap '' TERM; echo $$ > "${pidFile}"; while :; do sleep 0.05; done`),
     );
-    await new Promise((r) => setTimeout(r, 200));
+    while (!existsSync(pidFile)) await new Promise((r) => setTimeout(r, 20));
     await run(Fiber.interrupt(fiber));
     const pid = Number(readFileSync(pidFile, "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
+  });
+
+  it("kills a truncated process that ignores SIGTERM", async () => {
+    const r = await run(
+      sh("trap '' TERM; while :; do echo xxxxxxxxxxxxxxx; done", { maxBytes: 100 }),
+    );
+    expect(r).toMatchObject({ truncated: true, exitCode: 0 });
+    expect(r.stdout).toHaveLength(100);
+  });
+
+  it("does not wait for what the process left running in the background", async () => {
+    // E.g. a hook doing `task &`, which holds stdout and stderr open.
+    const t0 = Date.now();
+    const r = await run(sh("(sleep 3) & echo hi"));
+    expect(r.stdout.toString()).toBe("hi\n");
+    expect(Date.now() - t0).toBeLessThan(2500);
+  });
+
+  it("still collects output written shortly after the process exited", async () => {
+    const r = await run(sh("(sleep 0.05; echo late; echo err >&2) & echo early"));
+    expect(r.stdout.toString()).toBe("early\nlate\n");
+    expect(r.stderr).toBe("err\n");
+  });
+
+  it("decodes stderr as a whole, not per chunk", async () => {
+    const e = await fail(sh("printf '\\303' >&2; sleep 0.1; printf '\\251' >&2; exit 1"));
+    expect(e.stderr).toBe("é");
+  });
+
+  it("reports a missing working directory as such", async () => {
+    const e = await fail(spawn("/bin/sh", ["-c", "true"], { cwd: join(dir, "gone") }));
+    expect(e.message).toBe(`Directory not found: ${join(dir, "gone")}`);
   });
 });
 
