@@ -109,11 +109,18 @@ it("asks for the commit box from any selection, closing a commit's diff", () => 
   select(A, { kind: "commit", hash: "c1" });
   openDiff(A, { kind: "commit", hash: "c1", path: "f" });
   focusCommit(A);
-  expect(ui(A)).toMatchObject({ selection: { kind: "wip" }, diff: null, commitFocusToken: 1 });
+  expect(ui(A)).toMatchObject({ selection: { kind: "wip" }, diff: null });
+  const first = ui(A)!.commitFocusToken;
+  expect(first).toBeGreaterThan(0);
   // A working tree diff stays open.
   openDiff(A, { kind: "unstaged", path: "g" });
   focusCommit(A);
-  expect(ui(A)).toMatchObject({ diff: { kind: "unstaged", path: "g" }, commitFocusToken: 2 });
+  expect(ui(A)).toMatchObject({ diff: { kind: "unstaged", path: "g" } });
+  expect(ui(A)!.commitFocusToken).toBeGreaterThan(first);
+  // Requests never repeat, also after the repository was forgotten.
+  useRepoUiStore.getState().forget(A);
+  focusCommit(A);
+  expect(ui(A)!.commitFocusToken).toBeGreaterThan(first + 1);
 });
 
 it("forgets a repository", () => {

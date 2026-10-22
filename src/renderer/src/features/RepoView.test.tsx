@@ -215,10 +215,8 @@ it("focuses the commit box from any selection, showing the details panel", async
   await render();
   await menu("commit-focus");
   expect(useLayout.getState().details).toBe(true);
-  expect(useRepoUiStore.getState().byRepo[repo]).toMatchObject({
-    selection: { kind: "wip" },
-    commitFocusToken: 1,
-  });
+  expect(useRepoUiStore.getState().byRepo[repo]).toMatchObject({ selection: { kind: "wip" } });
+  expect(useRepoUiStore.getState().byRepo[repo]!.commitFocusToken).toBeGreaterThan(0);
 });
 
 it("keeps showing an open repository when reopening it fails", async () => {

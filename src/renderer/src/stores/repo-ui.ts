@@ -28,11 +28,16 @@ interface RepoUi {
   readonly diff: DiffTarget | null;
   /** Bumped to ask the graph to scroll to the selected commit. */
   readonly revealToken: number;
-  /** Bumped to ask the commit box to take the focus. */
+  /**
+   * Set to a new value to ask the commit box to take the focus. Values never repeat (also for
+   * a reopened repository), so the box can remember which requests it handled.
+   */
   readonly commitFocusToken: number;
 }
 
 const EMPTY: RepoUi = { selection: null, diff: null, revealToken: 0, commitFocusToken: 0 };
+
+let focusRequests = 0;
 
 interface RepoUiState {
   readonly byRepo: Readonly<Record<RepoId, RepoUi>>;
@@ -75,7 +80,7 @@ export const useRepoUiStore = create<RepoUiState>()((set) => ({
             ...cur,
             selection: { kind: "wip" },
             diff: wip ? cur.diff : null,
-            commitFocusToken: cur.commitFocusToken + 1,
+            commitFocusToken: ++focusRequests,
           },
         },
       };
