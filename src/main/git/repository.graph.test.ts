@@ -105,6 +105,37 @@ describe.skipIf(noShell).each(targets)("Repository graph on %s", (hostId) => {
     expect((await complete(repo, next.version)).count).toBe(2);
   });
 
+  it("reloads the graph when history changes but refs do not", async () => {
+    const shallow = `${t.root}/shallow${t.n}`;
+    await sh(`git clone -q --depth 1 'file://${t.origin}' '${shallow}'`, t.root);
+    const repo = await t.open(shallow);
+    const g = await complete(repo);
+    expect(g.count).toBe(1);
+    await sh("git fetch -q --unshallow", shallow);
+    repo.invalidateGraph();
+    const deep = await complete(repo, g.version);
+    expect(deep.count).toBe(2);
+
+    // A replace ref that makes HEAD a root commit.
+    await sh("git replace --graft HEAD", shallow);
+    repo.invalidateGraph();
+    const grafted = await complete(repo, deep.version);
+    expect(grafted.count).toBe(1);
+
+    // The mailmap names authors.
+    await sh("echo 'Mapped <t@x>' > .mailmap", shallow);
+    repo.invalidateGraph();
+    const mapped = await complete(repo, grafted.version);
+    expect((await run(repo.graphRows(mapped.version, 0, 1)))[0]!.authorName).toBe("Mapped");
+  });
+
+  it("reloads the graph on request even if nothing changed", async () => {
+    const g = await complete(t.repo);
+    await run(t.repo.reloadGraph());
+    const again = await complete(t.repo, g.version);
+    expect(again.count).toBe(g.count);
+  });
+
   it("checks the graph of a hidden repository once it is shown", async () => {
     const events: GraphInfo[] = [];
     const repo = await t.open(t.dir, { onGraphProgress: (_, info) => void events.push(info) });

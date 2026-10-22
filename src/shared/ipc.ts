@@ -91,6 +91,11 @@ export interface Api {
   "repo.info": (repo: RepoId) => RepoInfo;
   "repo.refs": (repo: RepoId) => RefsSnapshot;
   "repo.graphInfo": (repo: RepoId) => GraphInfo;
+  /**
+   * Reloads the graph even if its refs did not change (e.g. on an explicit refresh); the new
+   * version arrives as a `repo.graphProgress` event.
+   */
+  "repo.reloadGraph": (repo: RepoId) => void;
   /** Rows `start` to `end` (exclusive), at most {@link MAX_GRAPH_ROWS} of them. */
   "repo.graphRows": (repo: RepoId, version: number, start: number, end: number) => GraphRow[];
   /** Commit hashes of rows `start` to `end` (exclusive), e.g. for range selection. */

@@ -68,6 +68,7 @@ const classifyGitPath = (rel: string): RepoChangeScope | null => {
   if (
     p.startsWith("refs/") ||
     p === "packed-refs" ||
+    p === "shallow" ||
     p === "MERGE_HEAD" ||
     p === "CHERRY_PICK_HEAD" ||
     p === "REVERT_HEAD" ||
@@ -89,7 +90,12 @@ const classifyGitPath = (rel: string): RepoChangeScope | null => {
 const classifyCommonPath = (rel: string): RepoChangeScope | null => {
   const p = rel.split(sep).join("/");
   if (p === "config") return "config";
-  if (p.startsWith("refs/") || p === "packed-refs" || p.startsWith("logs/refs/stash")) {
+  if (
+    p.startsWith("refs/") ||
+    p === "packed-refs" ||
+    p === "shallow" ||
+    p.startsWith("logs/refs/stash")
+  ) {
     return "refs";
   }
   return null;
@@ -238,7 +244,7 @@ common=${shellQuote(repo.commonDir)}
 st() { stat -c '%Y.%s' "$1" 2>/dev/null || stat -f '%m.%z' "$1" 2>/dev/null; }
 printf 'H:'; cat "$gd/HEAD" 2>/dev/null
 printf 'I:'; st "$gd/index"; echo
-printf 'R:'; { git for-each-ref --format='%(refname) %(objectname)'; st "$common/logs/refs/stash"; ls "$gd" | grep -E '^(MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|BISECT_LOG|rebase-merge|rebase-apply|sequencer)$'; } 2>/dev/null | cksum
+printf 'R:'; { git for-each-ref --format='%(refname) %(objectname)'; st "$common/logs/refs/stash"; st "$common/shallow"; ls "$gd" | grep -E '^(MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|BISECT_LOG|rebase-merge|rebase-apply|sequencer)$'; } 2>/dev/null | cksum
 printf 'C:'; st "$common/config"; echo
 printf 'W:'; git status --porcelain=v2 -z --untracked-files=all --no-renames 2>/dev/null | cksum
 `;

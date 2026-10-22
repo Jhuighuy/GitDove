@@ -126,6 +126,7 @@ const argSchemas = {
   "repo.info": repoArgs(),
   "repo.refs": repoArgs(),
   "repo.graphInfo": repoArgs(),
+  "repo.reloadGraph": repoArgs(),
   "repo.graphRows": RowRange(MAX_GRAPH_ROWS),
   "repo.graphHashes": RowRange(MAX_GRAPH_HASHES),
   "repo.findCommit": repoArgs(Index, Str),
@@ -460,6 +461,7 @@ export const handlers: Handlers = {
   "repo.info": (id) => withRepo(id, (r) => r.info()),
   "repo.refs": (id) => withRepo(id, (r) => r.refs()),
   "repo.graphInfo": (id) => withRepo(id, (r) => r.graphInfo()),
+  "repo.reloadGraph": (id) => withRepo(id, (r) => r.reloadGraph()),
   "repo.graphRows": (id, version, start, end) =>
     withRepo(id, (r) => r.graphRows(version, start, end)),
   "repo.graphHashes": (id, version, start, end) =>

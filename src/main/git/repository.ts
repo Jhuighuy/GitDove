@@ -363,6 +363,24 @@ const GRAPH_REFS_FORMAT = [
   "%(symref)",
 ].join("%00");
 
+/**
+ * A checksum of what changes the history that refs reach, or how it is shown, without changing
+ * any ref: shallow boundaries (`fetch --deepen`, `--unshallow`), replace refs, and the mailmap
+ * that names authors. Run in the work tree (the git directory of a bare repository).
+ */
+const historyScript = (commonDir: string, bare: boolean) => String.raw`
+{
+  cat -- ${shellQuote(`${commonDir}/shallow`)}
+  git for-each-ref --format='%(refname) %(objectname)' refs/replace
+  f=$(git config --path mailmap.file) && cat -- "$f"
+  ${
+    bare
+      ? `git rev-parse -q --verify "$(git config mailmap.blob || echo HEAD:.mailmap)"`
+      : `cat .mailmap; b=$(git config mailmap.blob) && git rev-parse -q --verify "$b"`
+  }
+} 2>/dev/null | cksum
+`;
+
 /** Everything a graph is computed from; read before streaming it, and to tell if it changed. */
 interface GraphState {
   readonly stashes: readonly StashEntry[];
@@ -371,7 +389,10 @@ interface GraphState {
   readonly refList: string;
   readonly owners: OwnerLogs | null;
   readonly hidden: ReadonlySet<string>;
-  /** Refs, stashes and hidden refs: the graph (but HEAD) is the same while this is. */
+  /**
+   * Refs, stashes, hidden refs and {@link historyScript}: the graph (but HEAD) is the same
+   * while this is.
+   */
   readonly fingerprint: string;
 }
 
@@ -981,6 +1002,24 @@ export class Repository {
   }
 
   /**
+   * Reloads the graph even if what it is computed from looks the same, e.g. on an explicit
+   * refresh: some changes are not seen (a mailmap file outside the repository). The graph on
+   * screen stays until the new one is loaded.
+   */
+  reloadGraph(): Effect.Effect<void> {
+    return Effect.sync(() => {
+      if (this.disposed) return;
+      if (!this.graph && !this.graphLoad) {
+        this.graphDirty = true;
+        return;
+      }
+      if (this.graphCheck) Effect.runFork(Fiber.interrupt(this.graphCheck));
+      this.graphCheck = null;
+      this.startGraphLoad(false, undefined, true);
+    });
+  }
+
+  /**
    * Whether the repository is shown (e.g. its tab is active). A hidden repository does not
    * check its graph when refs change, but once it is shown again.
    */
@@ -1086,9 +1125,10 @@ export class Repository {
 
   /**
    * Starts loading the graph, replacing any load in progress. The load reads the refs first
-   * (unless `state` has them) and keeps the shown graph if it is up to date with them.
+   * (unless `state` has them) and keeps the shown graph if it is up to date with them, unless
+   * `force`d.
    */
-  private startGraphLoad(retry = false, state?: GraphState): void {
+  private startGraphLoad(retry = false, state?: GraphState, force = false): void {
     if (this.disposed) return;
     this.cancelGraphLoad();
     if (!retry) this.graphFailures = 0;
@@ -1099,7 +1139,7 @@ export class Repository {
     const ready = pending ?? Deferred.makeUnsafe<void, GitError>();
     if (this.graph === null) this.graphReady = ready;
     const fiber = this.fork(
-      this.loadGraph(ready, state).pipe(
+      this.loadGraph(ready, state, force).pipe(
         Effect.catch((e) =>
           Effect.suspend(() => (this.graphFailed(e) ? Effect.void : Deferred.fail(ready, e))),
         ),
@@ -1148,13 +1188,17 @@ export class Repository {
           refList: this.refList(GRAPH_REFS_FORMAT),
           // Owners are only needed for the contributor filter.
           owners: [...hidden].some(isContributorKey) ? this.ownerLogs() : Effect.succeed(null),
+          history: this.host
+            .sh(historyScript(this.commonDir, this.bare), { cwd: this.workTree, idempotent: true })
+            .pipe(Effect.map((r) => text(r).trim())),
         },
         { concurrency: "unbounded" },
       ).pipe(
-        Effect.map((s) => ({
+        Effect.map(({ history, ...s }) => ({
           ...s,
           hidden,
           fingerprint: [
+            history,
             // A symbolic ref (e.g. a remote's HEAD, which a fetch may add) adds no commits.
             s.refList
               .split("\n")
@@ -1193,11 +1237,11 @@ export class Repository {
     return true;
   }
 
-  private loadGraph(ready: Deferred.Deferred<void, GitError>, known?: GraphState) {
+  private loadGraph(ready: Deferred.Deferred<void, GitError>, known?: GraphState, force = false) {
     return Effect.gen({ self: this }, function* () {
       const state = known ?? (yield* this.graphState());
       const current = this.graph;
-      if (current?.complete && showsState(current, state)) {
+      if (!force && current?.complete && showsState(current, state)) {
         // Nothing to load: the refs did not change since the graph was loaded.
         current.head = state.head;
         const hadError = this.graphError !== null;
