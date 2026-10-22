@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { Avatar, useAvatarProviders } from "./Avatar";
+import { Avatar, MISSING_RETRY_MS, useAvatarProviders } from "./Avatar";
 
 const mocks = vi.hoisted(() => ({ remotes: [] as { fetchUrl: string }[] }));
 
@@ -89,6 +89,22 @@ it("falls back to initials when the picture fails, and does not retry it", () =>
   root = createRoot(container);
   render(<Avatar name="Bob Builder" email="bob@example.com" providers={[]} />);
   expect(img()).toBeNull();
+});
+
+it("retries a failed picture after a while", () => {
+  vi.useFakeTimers();
+  try {
+    render(<Avatar name="Cy" email="cy@example.com" providers={[]} />);
+    expect(img()!.getAttribute("loading")).toBe("lazy");
+    act(() => img()!.dispatchEvent(new Event("error")));
+    act(() => root.unmount());
+    vi.advanceTimersByTime(MISSING_RETRY_MS);
+    root = createRoot(container);
+    render(<Avatar name="Cy" email="cy@example.com" providers={[]} />);
+    expect(img()).not.toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("derives avatar providers from the remotes", async () => {
