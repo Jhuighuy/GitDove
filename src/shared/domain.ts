@@ -23,7 +23,8 @@ export const repoIdOf = (loc: RepoLocation): RepoId =>
 
 export const repoLocationOf = (id: RepoId): RepoLocation => {
   if (id.startsWith("local:")) return { kind: "local", path: id.slice("local:".length) };
-  const m = /^ssh:\/\/([^/]+)(\/.*)$/.exec(id);
+  // `s`: a path may contain newlines.
+  const m = /^ssh:\/\/([^/]+)(\/.*)$/s.exec(id);
   if (!m) throw new Error(`Invalid repository id: ${id}`);
   return { kind: "ssh", host: m[1]!, path: m[2]! };
 };
