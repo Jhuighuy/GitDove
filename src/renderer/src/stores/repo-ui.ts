@@ -23,19 +23,30 @@ export type Selection =
       readonly version: number;
     };
 
+/** An interactive rebase being planned in the editor, see `RebaseEditor`. */
+export interface RebaseRequest {
+  /** The commit the rebase starts from; null to rewrite from the root commit. */
+  readonly base: string | null;
+  /** Commits to show as selected when the editor opens. */
+  readonly selected: readonly string[];
+}
+
 interface RepoUi {
   readonly selection: Selection | null;
   readonly diff: DiffTarget | null;
+  /** The interactive rebase editor, shown instead of the graph while open. */
+  readonly rebase: RebaseRequest | null;
   /** Bumped to ask the graph to scroll to the selected commit. */
   readonly revealToken: number;
 }
 
-const EMPTY: RepoUi = { selection: null, diff: null, revealToken: 0 };
+const EMPTY: RepoUi = { selection: null, diff: null, rebase: null, revealToken: 0 };
 
 interface RepoUiState {
   readonly byRepo: Readonly<Record<RepoId, RepoUi>>;
   select(repo: RepoId, selection: Selection | null, reveal?: boolean): void;
   openDiff(repo: RepoId, diff: DiffTarget | null): void;
+  openRebase(repo: RepoId, rebase: RebaseRequest | null): void;
 }
 
 export const useRepoUiStore = create<RepoUiState>()((set) => ({
@@ -58,6 +69,10 @@ export const useRepoUiStore = create<RepoUiState>()((set) => ({
     }),
   openDiff: (repo, diff) =>
     set((s) => ({ byRepo: { ...s.byRepo, [repo]: { ...(s.byRepo[repo] ?? EMPTY), diff } } })),
+  openRebase: (repo, rebase) =>
+    set((s) => ({
+      byRepo: { ...s.byRepo, [repo]: { ...(s.byRepo[repo] ?? EMPTY), rebase, diff: null } },
+    })),
 }));
 
 const sameSelection = (a: Selection | null, b: Selection | null): boolean => {

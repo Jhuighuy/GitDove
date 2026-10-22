@@ -278,6 +278,12 @@ export function CommitGraph({ repo }: { repo: RepoId }) {
   const onRowContextMenu = useCallback(
     (row: GraphRow | null) => {
       if (row) {
+        // Within a selection of several commits, the menu is for all of them.
+        const selected = useRepoUiStore.getState().byRepo[repo]?.selection;
+        if (selected?.kind === "commits" && selected.commits.some((c) => c.row.hash === row.hash)) {
+          setMenu({ kind: "commits", rows: selected.commits.map((c) => c.row) });
+          return;
+        }
         select(repo, { kind: "commit", hash: row.hash });
         setMenu({ kind: "commit", row, refs: refsByHash.get(row.hash) ?? [], stashIndex: null });
       } else {

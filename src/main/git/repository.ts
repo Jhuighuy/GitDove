@@ -1335,7 +1335,7 @@ export class Repository {
   editableHistory(): Effect.Effect<EditableHistory, GitError> {
     const LIMIT = "2000";
     return Effect.gen({ self: this }, function* () {
-      if (!(yield* this.hasHead())) return { head: null, commits: [], unpushed: 0 };
+      if (!(yield* this.hasHead())) return { head: null, commits: [], bottom: null, unpushed: 0 };
       const [chain, local] = yield* Effect.all(
         [
           this.gitText(["rev-list", "--first-parent", "--parents", "-n", LIMIT, "HEAD"]),
@@ -1344,15 +1344,20 @@ export class Repository {
         { concurrency: 2 },
       );
       const commits: string[] = [];
+      let bottom: string | null = null;
       for (const line of lines(chain)) {
         const [hash, ...parents] = line.split(" ");
-        if (parents.length > 1) break;
+        if (parents.length > 1) {
+          bottom = hash!;
+          break;
+        }
         commits.push(hash!);
+        bottom = parents[0] ?? null;
       }
       const unpublished = new Set(lines(local));
       let unpushed = 0;
       while (unpushed < commits.length && unpublished.has(commits[unpushed]!)) unpushed++;
-      return { head: commits[0] ?? null, commits, unpushed };
+      return { head: commits[0] ?? null, commits, bottom, unpushed };
     });
   }
 

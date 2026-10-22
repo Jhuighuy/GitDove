@@ -88,7 +88,10 @@ describe.skipIf(process.platform === "win32").each(targets)("History editing on 
     );
     await sh("git checkout -q main && git merge -q --no-ff -m merge side && echo 5 > f5.txt");
     await sh("git add f5.txt && git commit -qm c5");
-    expect((await run(repo.editableHistory())).commits).toHaveLength(1);
+    const merged = await run(repo.editableHistory());
+    expect(merged.commits).toHaveLength(1);
+    expect(merged.bottom).toBe(await sh("git rev-parse HEAD~1"));
+    expect(history.bottom).toBeNull();
     expect((await run(repo.rebaseTodo(await sh("git rev-parse HEAD~3")))).merges).toBe(1);
   });
 

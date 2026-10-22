@@ -342,6 +342,8 @@ export type Outcome = "done" | "conflicts" | "stopped";
 export interface EditableHistory {
   readonly head: string | null;
   readonly commits: readonly string[];
+  /** The parent of the oldest commit listed: a merge commit, or older history; null at the root. */
+  readonly bottom: string | null;
   /** How many of `commits` (from the newest) are on no remote-tracking branch yet. */
   readonly unpushed: number;
 }

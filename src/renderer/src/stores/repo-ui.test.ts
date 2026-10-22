@@ -18,8 +18,13 @@ it("keeps selection and diff per repository", () => {
   const { select, openDiff } = useRepoUiStore.getState();
   select(A, { kind: "wip" });
   openDiff(B, { kind: "unstaged", path: "x" });
-  expect(ui(A)).toEqual({ selection: { kind: "wip" }, diff: null, revealToken: 0 });
-  expect(ui(B)).toEqual({ selection: null, diff: { kind: "unstaged", path: "x" }, revealToken: 0 });
+  expect(ui(A)).toEqual({ selection: { kind: "wip" }, diff: null, rebase: null, revealToken: 0 });
+  expect(ui(B)).toEqual({
+    selection: null,
+    diff: { kind: "unstaged", path: "x" },
+    rebase: null,
+    revealToken: 0,
+  });
 });
 
 it("closes the diff when the selection changes, but not when it is re-selected", () => {
@@ -57,7 +62,7 @@ it("exposes a repository's UI state through a hook", async () => {
   };
   const root = createRoot(document.createElement("div"));
   await act(async () => root.render(createElement(Probe)));
-  expect(seen.at(-1)).toEqual({ selection: null, diff: null, revealToken: 0 });
+  expect(seen.at(-1)).toEqual({ selection: null, diff: null, rebase: null, revealToken: 0 });
   await act(async () => useRepoUiStore.getState().select(A, { kind: "wip" }));
   expect(seen.at(-1)).toMatchObject({ selection: { kind: "wip" } });
   await act(async () => root.unmount());

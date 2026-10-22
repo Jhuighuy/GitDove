@@ -14,6 +14,9 @@ import { commands } from "./commands";
 import { DetailsPanel } from "./details/DetailsPanel";
 import { DiffView } from "./diff/DiffView";
 import { CommitGraph } from "./graph/CommitGraph";
+import { historyCommands } from "./history/commands";
+import { OperationBar } from "./history/OperationBar";
+import { RebaseEditor } from "./history/RebaseEditor";
 import { Sidebar } from "./sidebar/Sidebar";
 import { Toolbar } from "./toolbar/Toolbar";
 
@@ -67,7 +70,7 @@ export function RepoView({ repo, active }: { repo: RepoId; active: boolean }) {
 
 function RepoLayout({ repo, active }: { repo: RepoId; active: boolean }) {
   const layout = useLayout();
-  const { diff } = useRepoUi(repo);
+  const { diff, rebase } = useRepoUi(repo);
   // The panel library keeps layout state per group id, and every tab has a group: a shared id
   // made a tab opened after a hidden one inherit its unmeasured layout (equal thirds).
   const id = useId();
@@ -103,6 +106,15 @@ function RepoLayout({ repo, active }: { repo: RepoId; active: boolean }) {
       case "toggle-details":
         layout.toggleDetails();
         break;
+      case "undo":
+      case "redo":
+        // In a text field, the menu edits its text instead.
+        if (isEditable(document.activeElement)) void commands.edit(command);
+        else void historyCommands[command](repo);
+        break;
+      case "apply-patch":
+        void historyCommands.applyPatch(repo);
+        break;
     }
   });
 
@@ -127,7 +139,18 @@ function RepoLayout({ repo, active }: { repo: RepoId; active: boolean }) {
           </>
         )}
         <ResizablePanel id={`${id}center`} minSize={320}>
-          {diff ? <DiffView repo={repo} target={diff} /> : <CommitGraph repo={repo} />}
+          <div className="flex h-full min-h-0 flex-col">
+            <OperationBar repo={repo} />
+            <div className="min-h-0 flex-1">
+              {rebase ? (
+                <RebaseEditor repo={repo} base={rebase.base} selected={rebase.selected} />
+              ) : diff ? (
+                <DiffView repo={repo} target={diff} />
+              ) : (
+                <CommitGraph repo={repo} />
+              )}
+            </div>
+          </div>
         </ResizablePanel>
         {layout.details && (
           <>
@@ -141,3 +164,10 @@ function RepoLayout({ repo, active }: { repo: RepoId; active: boolean }) {
     </div>
   );
 }
+
+/** Whether `el` takes text: Undo and Redo then edit its text rather than the repository. */
+const isEditable = (el: Element | null): boolean =>
+  el instanceof HTMLElement &&
+  (el.isContentEditable ||
+    el instanceof HTMLTextAreaElement ||
+    (el instanceof HTMLInputElement && !["checkbox", "radio", "button"].includes(el.type)));

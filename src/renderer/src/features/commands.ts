@@ -5,7 +5,7 @@ import type { Ref, RefsSnapshot, RepoId, RepoInfo, RepoLocation } from "@shared/
 import { repoLocationOf } from "@shared/domain";
 import type { EditCommand, ResetMode } from "@shared/ipc";
 import { toast } from "sonner";
-import { refuseWhileBusy, runAction } from "@/lib/actions";
+import { refuseWhileBusy, reportOutcome, runAction } from "@/lib/actions";
 import { ApiError, api } from "@/lib/api";
 import { shortHash } from "@/lib/format";
 import { keys, queryClient } from "@/lib/queries";
@@ -230,9 +230,10 @@ export const commands = {
       confirmLabel: "Merge",
     });
     if (ok) {
-      await runAction(repo, "Merge", () => api("repo.merge", repo, ref, {}), {
+      const outcome = await runAction(repo, "Merge", () => api("repo.merge", repo, ref, {}), {
         status: `Merging ${ref}…`,
       });
+      reportOutcome(repo, outcome, `Merged ${ref}`);
     }
   },
 
@@ -245,23 +246,21 @@ export const commands = {
       confirmLabel: "Rebase",
     });
     if (ok) {
-      await runAction(repo, "Rebase", () => api("repo.rebase", repo, onto), {
+      const outcome = await runAction(repo, "Rebase", () => api("repo.rebase", repo, onto), {
         status: `Rebasing onto ${onto}…`,
       });
+      reportOutcome(repo, outcome, `Rebased onto ${onto}`);
     }
   },
 
-  cherryPick: (repo: RepoId, hash: string) =>
-    runAction(repo, "Cherry-pick", () => api("repo.cherryPick", repo, hash), {
-      status: `Cherry-picking ${shortHash(hash)}…`,
-      success: `Cherry-picked ${shortHash(hash)}`,
-    }),
-
-  revert: (repo: RepoId, hash: string) =>
-    runAction(repo, "Revert", () => api("repo.revert", repo, hash), {
-      status: `Reverting ${shortHash(hash)}…`,
-      success: `Reverted ${shortHash(hash)}`,
-    }),
+  revert: async (repo: RepoId, hash: string) =>
+    reportOutcome(
+      repo,
+      await runAction(repo, "Revert", () => api("repo.revert", repo, hash), {
+        status: `Reverting ${shortHash(hash)}…`,
+      }),
+      `Reverted ${shortHash(hash)}`,
+    ),
 
   reset: async (repo: RepoId, hash: string, mode: ResetMode) => {
     if (refuseWhileBusy(repo, "Reset")) return;
@@ -286,10 +285,22 @@ export const commands = {
 
   abort: (repo: RepoId) =>
     runAction(repo, "Abort", () => api("repo.abortOperation", repo), { status: "Aborting…" }),
-  continue: (repo: RepoId) =>
-    runAction(repo, "Continue", () => api("repo.continueOperation", repo), {
-      status: "Continuing…",
-    }),
+  continue: async (repo: RepoId) =>
+    reportOutcome(
+      repo,
+      await runAction(repo, "Continue", () => api("repo.continueOperation", repo), {
+        status: "Continuing…",
+      }),
+      "Done",
+    ),
+  skip: async (repo: RepoId) =>
+    reportOutcome(
+      repo,
+      await runAction(repo, "Skip", () => api("repo.skipOperation", repo), {
+        status: "Skipping…",
+      }),
+      "Done",
+    ),
 
   /** Cancels the running fetch, pull or push. */
   cancel: (repo: RepoId) => void api("repo.cancel", repo),

@@ -252,7 +252,7 @@ it("opens a commit menu that selects the commit", async () => {
   await mouse(rowOf("Commit 2"), "contextmenu");
   expect(selection()).toEqual({ kind: "commit", hash: "c2" });
   expect(menuItems()).toContain("feature");
-  expect(menuItems()).toContain("Cherry-pick commit");
+  expect(menuItems()).toContain("Cherry-pick commit…");
   const copy = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
     (e) => e.textContent?.trim() === "Copy commit SHA",
   )!;
@@ -261,7 +261,7 @@ it("opens a commit menu that selects the commit", async () => {
 
   await mouse(rowOf("// WIP"), "contextmenu");
   expect(selection()).toEqual({ kind: "wip" });
-  expect(menuItems()).toEqual(["Stage all changes", "Stash all changes"]);
+  expect(menuItems().slice(0, 2)).toEqual(["Stage all changes", "Stash all changes"]);
 });
 
 it("opens stash actions on a stash commit", async () => {

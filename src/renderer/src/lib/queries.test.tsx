@@ -366,7 +366,7 @@ it("invalidates queries on repository change events", async () => {
     mocks.listeners.get("repo.changed")!({ repo, scopes });
     return [...invalidated];
   };
-  const refsKeys = [keys.info(repo), keys.refs(repo)];
+  const refsKeys = [keys.info(repo), keys.refs(repo), keys.editable(repo), keys.undo(repo)];
   const wtKeys = [keys.status(repo), ["repo", repo, "diff"]];
   expect(changed("refs")).toEqual(refsKeys);
   expect(changed("config")).toEqual(refsKeys);

@@ -4,6 +4,9 @@ import { Spinner } from "@/components/ui/spinner";
 import { useRepoEvents } from "@/lib/queries";
 import { useTabs } from "@/stores/tabs";
 import { DialogHost } from "./features/dialogs/dialogs";
+import { CherryPickDialogHost } from "./features/history/CherryPickDialog";
+import { MessageDialogHost } from "./features/history/MessageDialog";
+import { PatchDialogHost } from "./features/history/PatchDialog";
 import { OpenRepoPage, RemoteRepoDialog, useOpenCommands } from "./features/open/OpenRepo";
 import { RepoView } from "./features/RepoView";
 import { TabBar } from "./features/tabs/TabBar";
@@ -42,6 +45,9 @@ export function App() {
       </main>
       <StatusBar repo={tabs.find((t) => t.key === active)?.repo ?? null} />
       <DialogHost />
+      <MessageDialogHost />
+      <CherryPickDialogHost />
+      <PatchDialogHost />
       <RemoteRepoDialog />
       <TextContextMenu />
     </div>

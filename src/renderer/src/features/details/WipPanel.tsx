@@ -1,11 +1,5 @@
 import type { FileChange, RepoId } from "@shared/domain";
-import {
-  IconChevronDown,
-  IconMinus,
-  IconPlus,
-  IconArrowBackUp,
-  IconAlertTriangle,
-} from "@tabler/icons-react";
+import { IconChevronDown, IconMinus, IconPlus, IconArrowBackUp } from "@tabler/icons-react";
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { Button } from "@/components/ui/button";
@@ -77,30 +71,6 @@ export function WipPanel({ repo }: { repo: RepoId }) {
           {info?.head.branch ?? (info?.head.hash ? "detached HEAD" : "—")}
         </span>
       </div>
-
-      {info && info.state !== "clean" && (
-        <div className="flex items-center gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs">
-          <IconAlertTriangle className="size-4 shrink-0 text-amber-500" />
-          <span className="flex-1 capitalize">{info.state.replace("-", " ")} in progress</span>
-          <BusyHint reason={blocked} className="gap-2">
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!!busy}
-              onClick={() => void commands.abort(repo)}
-            >
-              Abort
-            </Button>
-            <Button
-              size="xs"
-              onClick={() => void commands.continue(repo)}
-              disabled={!!busy || conflicted.length > 0}
-            >
-              Continue
-            </Button>
-          </BusyHint>
-        </div>
-      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {conflicted.length > 0 && (

@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   status: null as unknown,
   info: null as unknown,
   listeners: new Map<string, (payload: unknown) => void>(),
-  commands: { abort: vi.fn(), continue: vi.fn(), discard: vi.fn() },
+  commands: { discard: vi.fn() },
   toast: {
     loading: vi.fn(),
     success: vi.fn(),
@@ -202,7 +202,7 @@ it("disables staging, discarding and committing while another operation runs", a
   ]) {
     expect(el.disabled).toBe(true);
   }
-  for (const label of ["Stage All", "Unstage All", "Abort", "Continue", "Commit Changes"]) {
+  for (const label of ["Stage All", "Unstage All", "Commit Changes"]) {
     expect(button(label).disabled).toBe(true);
     // Disabled buttons get no pointer events: a wrapper explains why.
     expect(button(label).parentElement!.title).toBe(reason);
@@ -236,25 +236,15 @@ it("collapses sections", async () => {
   expect(container.querySelector('li[title="staged.ts"]')).not.toBeNull();
 });
 
-it("shows conflicts and the operation in progress", async () => {
+it("shows conflicts to mark resolved", async () => {
   mocks.status = status({ conflicted: [file("both.ts", "conflicted")] });
   mocks.info = info({ state: "cherry-picking" });
   await render();
   expect(text()).toContain("Conflicts(1)");
-  expect(text()).toContain("cherry picking in progress");
-  expect(button("Continue").disabled).toBe(true);
   await click(rowAction("both.ts", 0));
   expect(apiCalls("repo.stage")).toEqual([[repo, ["both.ts"]]]);
   await click(row("both.ts"));
   expect(ui()?.diff).toEqual({ kind: "unstaged", path: "both.ts", untracked: false });
-  await click(button("Abort"));
-  expect(mocks.commands.abort).toHaveBeenCalledWith(repo);
-
-  mocks.status = status();
-  await render();
-  expect(button("Continue").disabled).toBe(false);
-  await click(button("Continue"));
-  expect(mocks.commands.continue).toHaveBeenCalledWith(repo);
 });
 
 it("limits long file lists", async () => {

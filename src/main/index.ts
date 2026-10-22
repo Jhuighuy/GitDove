@@ -78,7 +78,25 @@ const buildMenu = () => {
         ...(isMac ? [] : [{ type: "separator" as const }, { role: "quit" as const }]),
       ],
     },
-    { role: "editMenu" },
+    {
+      label: "Edit",
+      submenu: [
+        // Undo and Redo edit the focused text field, or else the repository (see RepoView).
+        { label: "Undo", accelerator: "CmdOrCtrl+Z", click: command("undo") },
+        {
+          label: "Redo",
+          accelerator: isMac ? "Shift+CmdOrCtrl+Z" : "CmdOrCtrl+Y",
+          click: command("redo"),
+        },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
+        { role: "selectAll" },
+      ],
+    },
     {
       label: "View",
       submenu: [
@@ -114,6 +132,7 @@ const buildMenu = () => {
         { label: "Pop Stash", accelerator: "CmdOrCtrl+Shift+P", click: command("pop") },
         { type: "separator" },
         { label: "Commit…", accelerator: "CmdOrCtrl+Shift+C", click: command("commit-focus") },
+        { label: "Apply Patch…", click: command("apply-patch") },
       ],
     },
     { role: "windowMenu" },
