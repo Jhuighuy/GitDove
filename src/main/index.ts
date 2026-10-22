@@ -14,7 +14,7 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import dockIcon from "../../build/icon.png?asset";
 import windowIcon from "../../resources/icon.png?asset";
 import { activity } from "./activity";
-import { handleAvatarProtocol, registerAvatarScheme } from "./avatars";
+import { handleAvatarProtocol, pruneAvatarCache, registerAvatarScheme } from "./avatars";
 import { fixProcessPath } from "./exec/environment";
 import { HostsLive } from "./exec/hosts";
 import { isWebUrl, registerIpc } from "./ipc";
@@ -286,6 +286,8 @@ const main = async () => {
   createWindow();
   started = true;
   updater.init((s) => broadcast("updater.status", s));
+  // Housekeeping, once startup work has settled.
+  setTimeout(() => void pruneAvatarCache(), 60_000).unref();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
