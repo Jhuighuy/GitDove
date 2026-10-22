@@ -40,8 +40,8 @@ export interface Api {
   "shell.openTerminal": (repo: RepoId) => void;
   "shell.revealInFinder": (repo: RepoId, path?: string) => void;
   "shell.openExternal": (url: string) => void;
-  /** Whether a remote's host runs GitLab (self-hosted instances can have any name). */
-  "web.isGitlab": (host: string) => boolean;
+  /** Whether a web origin (`https://host:port`) runs GitLab; self-hosted ones have any name. */
+  "web.isGitlab": (origin: string) => boolean;
 
   // Remote hosts
   "ssh.hosts": () => string[];

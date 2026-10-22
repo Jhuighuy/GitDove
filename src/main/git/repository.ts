@@ -952,7 +952,8 @@ export class Repository {
         // from both the index and the work tree).
         const hasHead = yield* this.hasHead();
         yield* hasHead
-          ? this.run(["reset", "--hard", "-q"])
+          ? // Never into submodules, whatever `submodule.recurse` says: their changes are reported.
+            this.run(["reset", "--hard", "-q", "--no-recurse-submodules"])
           : this.run(["rm", "-r", "-q", "-f", "--ignore-unmatch", "."]);
         // What is left is not ours to delete without asking: say so. `clean` keeps untracked
         // nested repositories (unless forced twice), and the reset leaves the files inside

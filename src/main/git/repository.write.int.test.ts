@@ -161,7 +161,9 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
                 `git -C '${dir}-sub' -c user.name=T -c user.email=t@x commit -qm s && ` +
                 "git init -q -b main . && git config user.name T && git config user.email t@x && " +
                 `git -c protocol.file.allow=always submodule add -q '${dir}-sub' sub && ` +
-                "git commit -qm sub && echo x >> sub/s.txt && echo y > top.txt",
+                "git commit -qm sub && echo x >> sub/s.txt && echo y > top.txt && " +
+                // Even when configured to, discarding must not recurse into submodules.
+                "git config submodule.recurse true",
               { cwd: dir },
             );
             const location: RepoLocation =

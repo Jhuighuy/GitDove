@@ -198,14 +198,29 @@ describe("shell handlers", () => {
     expect(electron.shell.openExternal).toHaveBeenCalledTimes(1);
   });
 
-  it("asks only plausible hosts whether they run GitLab", async () => {
-    avatars.isGitlab.mockImplementation((host: string) => Effect.succeed(host === "git.corp.io"));
-    expect(await call("web.isGitlab", "git.corp.io")).toBe(true);
-    expect(await call("web.isGitlab", "git.other.io")).toBe(false);
-    // Not asked: GitHub, ssh aliases, and anything that is not a host name.
-    for (const host of ["github.com", "fedora", "evil.io/path", "x.io:22@y"])
-      expect(await call("web.isGitlab", host)).toBe(false);
-    expect(avatars.isGitlab.mock.calls).toEqual([["git.corp.io"], ["git.other.io"]]);
+  it("asks only plausible web origins whether they run GitLab", async () => {
+    avatars.isGitlab.mockImplementation((origin: string) =>
+      Effect.succeed(origin !== "https://git.other.io"),
+    );
+    expect(await call("web.isGitlab", "https://git.corp.io")).toBe(true);
+    // With its own scheme and port.
+    expect(await call("web.isGitlab", "http://code.corp.io:8443")).toBe(true);
+    expect(await call("web.isGitlab", "https://git.other.io")).toBe(false);
+    // Not asked: GitHub, ssh aliases, and anything that is not a bare http(s) origin.
+    for (const origin of [
+      "https://github.com",
+      "https://fedora",
+      "git.corp.io",
+      "https://git.corp.io/path",
+      "ftp://git.corp.io",
+      "https://user@git.corp.io",
+    ])
+      expect(await call("web.isGitlab", origin)).toBe(false);
+    expect(avatars.isGitlab.mock.calls).toEqual([
+      ["https://git.corp.io"],
+      ["http://code.corp.io:8443"],
+      ["https://git.other.io"],
+    ]);
   });
 
   it("reveals local files and folders", async () => {

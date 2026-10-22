@@ -78,6 +78,16 @@ end tell`;
     }
   });
 
+/** An http(s) origin, e.g. `https://git.example.com:8443`, of a host that may run GitLab. */
+const isWebOrigin = (origin: string) => {
+  try {
+    const url = new URL(origin);
+    return /^https?:$/.test(url.protocol) && url.origin === origin && mayRunGitlab(url.hostname);
+  } catch {
+    return false;
+  }
+};
+
 export const handlers: Handlers = {
   // App / window -------------------------------------------------------------
   "app.getState": () => Effect.sync(loadState),
@@ -111,7 +121,7 @@ export const handlers: Handlers = {
       ? Effect.promise(() => shell.openExternal(url))
       : Effect.fail(new InvalidInputError({ message: `Refusing to open ${url}` })),
 
-  "web.isGitlab": (host) => (mayRunGitlab(host) ? isGitlab(host) : Effect.succeed(false)),
+  "web.isGitlab": (origin) => (isWebOrigin(origin) ? isGitlab(origin) : Effect.succeed(false)),
 
   // Remote hosts ---------------------------------------------------------------
   "ssh.hosts": () =>

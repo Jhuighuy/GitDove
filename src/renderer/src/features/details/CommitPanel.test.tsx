@@ -217,17 +217,20 @@ it("links pull requests and URLs in the message", async () => {
 });
 
 it("links merge requests on a self-hosted GitLab, whatever its name", async () => {
-  mocks.gitlabHosts = ["git.corp.example.com"];
+  mocks.gitlabHosts = ["https://git.corp.example.com:8443"];
   mocks.refs = {
     ...snapshot(),
-    remotes: [{ name: "origin", fetchUrl: "git@git.corp.example.com:group/repo.git", pushUrl: "" }],
+    remotes: [
+      { name: "origin", fetchUrl: "https://git.corp.example.com:8443/group/repo.git", pushUrl: "" },
+    ],
   };
   mocks.commit = details({ subject: "Merge branch 'x' into 'main'", body: "See group/repo!1234" });
   await render();
   await act(async () => new Promise((r) => setTimeout(r, 0)));
-  expect(mocks.probed).toEqual(["git.corp.example.com"]);
+  // Asked at the remote's own port.
+  expect(mocks.probed).toEqual(["https://git.corp.example.com:8443"]);
   expect([...container.querySelectorAll("a")].map((a) => [a.textContent, a.href])).toEqual([
-    ["group/repo!1234", "https://git.corp.example.com/group/repo/-/merge_requests/1234"],
+    ["group/repo!1234", "https://git.corp.example.com:8443/group/repo/-/merge_requests/1234"],
   ]);
   // Hosts known by name are not asked.
   mocks.probed = [];

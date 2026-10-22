@@ -13,16 +13,17 @@ import { keys, useRefs } from "@/lib/queries";
 const useReferenceRepo = (repo: RepoId): WebRepo | null => {
   const { data } = useRefs(repo);
   const web = useMemo(() => referenceRepo(data?.remotes ?? []), [data?.remotes]);
-  const host = web?.forge === "other" && mayRunGitlab(web.host) ? web.host : null;
+  // Asked at the remote's own scheme and port (e.g. http://git.lan:8080).
+  const origin = web?.forge === "other" && mayRunGitlab(web.host) ? web.origin : null;
   const { data: gitlab } = useQuery({
-    queryKey: keys.isGitlab(host ?? ""),
-    queryFn: () => api("web.isGitlab", host!),
-    enabled: host !== null,
+    queryKey: keys.isGitlab(origin ?? ""),
+    queryFn: () => api("web.isGitlab", origin!),
+    enabled: origin !== null,
     retry: false,
   });
   return useMemo(
-    () => (web && host && gitlab ? { ...web, forge: "gitlab" } : web),
-    [web, host, gitlab],
+    () => (web && origin && gitlab ? { ...web, forge: "gitlab" } : web),
+    [web, origin, gitlab],
   );
 };
 
