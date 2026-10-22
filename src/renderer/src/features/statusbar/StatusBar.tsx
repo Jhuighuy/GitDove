@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { api, useEvent } from "@/lib/api";
-import { keys } from "@/lib/queries";
+import { keys, refreshRepo } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { type Busy, busyLabel, useBusy } from "@/stores/busy";
 import { APP, type Notice, useActivity, useNotice } from "@/stores/status";
@@ -143,19 +143,9 @@ function CopyButton({
  */
 function GraphError({ repo, graph, error }: { repo: RepoId; graph?: GraphInfo; error: string }) {
   const client = useQueryClient();
-  const retry = () => {
-    // The graph's queries only: its info and pages.
-    void client.invalidateQueries({ queryKey: [...keys.repo(repo), "graph"] });
-    // Asked for explicitly: with the graph view closed (e.g. a diff is open), the only graph
-    // query left is the disabled one above, which invalidating does not refetch.
-    client
-      .query({
-        queryKey: keys.graphInfo(repo),
-        queryFn: () => api("repo.graphInfo", repo),
-        staleTime: 0,
-      })
-      .catch(() => {});
-  };
+  // The graph's info only (the graph view stays mounted, under a diff too): its pages never
+  // change, and a reloaded graph comes with a new version and pages of its own.
+  const retry = () => void refreshRepo(repo, ["graph"], client);
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-amber-500" title={error}>
       <IconAlertTriangle />
