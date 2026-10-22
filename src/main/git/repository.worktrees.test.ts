@@ -6,7 +6,7 @@ describe.skipIf(noShell).each(targets)("Repository worktrees and submodules on %
   const t = useRepoFixture(hostId);
   const { run, fails, sh } = t;
 
-  it("manages worktrees and submodules", async () => {
+  it("adds and prunes worktrees", async () => {
     const wt = `${t.root}/wt${t.n}`;
     await run(t.repo.addWorktree(wt, "HEAD~1", "wt-branch"));
     let refs = await run(t.repo.refs());
@@ -15,7 +15,10 @@ describe.skipIf(noShell).each(targets)("Repository worktrees and submodules on %
     await run(t.repo.pruneWorktrees());
     refs = await run(t.repo.refs());
     expect(refs.worktrees).toHaveLength(1);
+  });
 
+  it("removes changed and locked worktrees only by force", async () => {
+    const wt = `${t.root}/wt${t.n}`;
     await run(t.repo.addWorktree(wt, "main~1", null));
     await sh(`echo dirty > '${wt}/f.txt'`);
     expect((await fails(t.repo.removeWorktree(wt, false)))._tag).toBe("WorktreeNeedsForceError");
@@ -40,16 +43,26 @@ describe.skipIf(noShell).each(targets)("Repository worktrees and submodules on %
       "CommandError",
     );
     expect((await run(t.repo.refs())).worktrees).toHaveLength(1);
+  });
 
-    await sh(
-      `git -c protocol.file.allow=always submodule add -q '${t.origin}' sub && git commit -qm sub && ` +
-        "rm -rf sub && mkdir sub",
+  /** Adds `origin` as a submodule at `path` and commits it. */
+  const addSubmodule = (path: string) =>
+    sh(
+      `git -c protocol.file.allow=always submodule add -q '${t.origin}' '${path}' && ` +
+        `git commit -qm 'add ${path}'`,
     );
+
+  it("updates submodules", async () => {
+    await addSubmodule("sub");
+    await sh("rm -rf sub && mkdir sub");
     expect((await run(t.repo.refs())).submodules.map((s) => s.path)).toEqual(["sub"]);
     await sh("git config protocol.file.allow always");
     await run(t.repo.updateSubmodule("sub"));
     expect(await sh("cat sub/f.txt")).toBe("a\nb\nc\nd");
+  });
 
+  it("removes a worktree with a checked out submodule only by force", async () => {
+    await addSubmodule("sub");
     // A worktree with a checked out submodule is clean, but git removes it only by force.
     const subWt = `${t.root}/subwt${t.n}`;
     await run(t.repo.addWorktree(subWt, "HEAD", null));
