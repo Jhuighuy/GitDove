@@ -30,6 +30,9 @@ vi.stubGlobal("self", {
 const SLOW = 180_000;
 vi.setConfig({ testTimeout: SLOW, hookTimeout: SLOW });
 
+/** Palette entries the warm-up produced. */
+let warmed = 0;
+
 beforeAll(async () => {
   await import("./highlight.worker");
   const { bundledLanguages } = await import("shiki/langs");
@@ -38,6 +41,24 @@ beforeAll(async () => {
     import("shiki/themes/github-dark.mjs"),
     ...(["typescript", "javascript", "c", "python"] as const).map((l) => bundledLanguages[l]()),
   ]);
+  // The first tokenization compiles the grammar's patterns; on a loaded machine that can pass
+  // shiki's per-line time limit, which leaves the rest of the line plain. Get it done here, in
+  // the light theme, so that the tests see the dark one's styles arrive as new.
+  let warm: (() => void) | null = null;
+  const done = new Promise<void>((r) => (warm = r));
+  onPost = (m) => m.type === "tokens" && warm?.();
+  send({
+    type: "open",
+    doc: 0,
+    path: "warm.ts",
+    sides: [[], ["const a = 1; // b", "let s = `x${1}`;"]],
+    resets: [[0], [0]],
+  });
+  send({ type: "highlight", doc: 0, theme: "light", side: 1, chunk: 0 });
+  await done;
+  send({ type: "close", doc: 0 });
+  onPost = null;
+  warmed = collectPalette().length;
 });
 
 beforeEach(() => {
@@ -100,7 +121,7 @@ it("highlights a chunk of lines and sends new styles along", async () => {
   expect(msg.starts).toHaveLength(lines.length + 1);
   // Typed arrays are transferred, not copied.
   expect(transfers[0]).toEqual([msg.starts.buffer, msg.tokens.buffer]);
-  expect(msg.paletteBase).toBe(0);
+  expect(msg.paletteBase).toBe(warmed);
   expect(msg.palette!.every((s) => /^#[0-9a-f]{6,8}\|\d+$/i.test(s))).toBe(true);
 
   const styles = collectPalette();
@@ -118,7 +139,7 @@ it("highlights a chunk of lines and sends new styles along", async () => {
   await waitFor(() => expect(tokensOf(doc)).toHaveLength(2));
   const light = tokensOf(doc)[1]!;
   expect(light.theme).toBe("light");
-  expect(light.paletteBase).toBe(msg.palette!.length);
+  expect(light.paletteBase).toBe(warmed + msg.palette!.length);
   send({ type: "close", doc });
 });
 
