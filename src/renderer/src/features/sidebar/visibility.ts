@@ -168,13 +168,15 @@ export const useVisibility = (repo: RepoId) => {
       saveSeq.set(repo, seq);
       useSaving.setState((s) => ({ byRepo: { ...s.byRepo, [repo]: next } }));
       client.setQueryData(keys.hidden(repo), next);
-      const stamp = client.getQueryState(keys.hidden(repo))?.dataUpdatedAt;
+      // Counted, not timed: a refresh can end within the same millisecond.
+      const stamp = client.getQueryState(keys.hidden(repo))?.dataUpdateCount;
       const saved = (ok: boolean) => {
         if (saveSeq.get(repo) !== seq) return;
         // A refresh meanwhile may have read the names from before the save, and a failed save
         // leaves them as they were: then they are read again.
         const query = client.getQueryState(keys.hidden(repo));
-        const outdated = !ok || query?.dataUpdatedAt !== stamp || query?.fetchStatus === "fetching";
+        const outdated =
+          !ok || query?.dataUpdateCount !== stamp || query?.fetchStatus === "fetching";
         if (ok) client.setQueryData(keys.hidden(repo), next);
         useSaving.setState((s) => {
           const { [repo]: _, ...rest } = s.byRepo;

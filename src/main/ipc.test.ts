@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { RepoLocation } from "@shared/domain";
 import { IPC_CANCEL, IPC_INVOKE, type RpcResult } from "@shared/ipc";
 import type { WebContents } from "electron";
@@ -291,7 +291,9 @@ describe("shell handlers", () => {
 
   it("reveals local files and folders", async () => {
     await call("shell.revealInFinder", "local:/work/repo", "src/a b.ts");
-    expect(electron.shell.showItemInFolder).toHaveBeenCalledWith("/work/repo/src/a b.ts");
+    expect(electron.shell.showItemInFolder).toHaveBeenCalledWith(
+      resolve("/work/repo", "src/a b.ts"),
+    );
     await call("shell.revealInFinder", "local:/work/repo");
     expect(electron.shell.openPath).toHaveBeenCalledWith("/work/repo");
   });
