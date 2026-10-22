@@ -12,7 +12,7 @@ import {
 import { homedir, tmpdir, userInfo } from "node:os";
 import { isAbsolute, join, win32 } from "node:path";
 import { Context, Data, Effect, Layer, RcMap, Schedule, Semaphore } from "effect";
-import { gitEnv, REMOTE_ENV_SCRIPT } from "./environment";
+import { environmentReady, gitEnv, REMOTE_ENV_SCRIPT } from "./environment";
 import { CommandError, SshError } from "./errors";
 import { Runner, RUNNER_SCRIPT, RunnerExitError, runOnRunner } from "./runner";
 import { shellJoin, shellQuote } from "./shell";
@@ -81,7 +81,7 @@ let localShellPath: Promise<string> | undefined;
 const localShell: Effect.Effect<string> = Effect.suspend(() => {
   if (process.platform !== "win32") return Effect.succeed("/bin/sh");
   localShellPath ??= Effect.runPromise(
-    spawn("git", ["--exec-path"], { env: gitEnv() }).pipe(
+    Effect.andThen(environmentReady, () => spawn("git", ["--exec-path"], { env: gitEnv() })).pipe(
       Effect.map((r) => r.stdout.toString("utf8").trim() || null),
       Effect.orElseSucceed(() => null),
       Effect.map(
@@ -94,13 +94,16 @@ const localShell: Effect.Effect<string> = Effect.suspend(() => {
   return Effect.promise(() => localShellPath!);
 });
 
+// The environment is copied once the login shell's (e.g. its SSH_AUTH_SOCK) is in.
 const localHost: Host = {
   id: LOCAL_HOST,
   kind: "local",
   exec: (program, args, options = {}) =>
-    spawn(program, args, { ...options, env: gitEnv(), display: shellJoin([program, ...args]) }),
+    Effect.andThen(environmentReady, () =>
+      spawn(program, args, { ...options, env: gitEnv(), display: shellJoin([program, ...args]) }),
+    ),
   sh: (script, options = {}) =>
-    Effect.flatMap(localShell, (shell) =>
+    Effect.flatMap(Effect.andThen(environmentReady, localShell), (shell) =>
       spawn(shell, ["-c", script], { ...options, env: gitEnv(), display: script }),
     ),
 };
@@ -233,10 +236,14 @@ const control = (controlPath: string, op: "check" | "exit", host: string) =>
 /** The last line of ssh's stderr, which says why it failed. */
 const lastLine = (stderr: string) => stderr.trim().split("\n").at(-1)?.trim() ?? "";
 
-/** Starts a long-lived SSH master connection that all commands multiplex over. */
+/**
+ * Starts a long-lived SSH master connection that all commands multiplex over, once the login
+ * shell's environment (e.g. its SSH_AUTH_SOCK) is in.
+ */
 const acquireMaster = (host: string, layer: number, root: string | undefined) =>
   Effect.acquireRelease(
     Effect.gen(function* () {
+      yield* environmentReady;
       const controlPath = yield* Effect.try({
         try: () => controlPathFor(host, layer, root),
         catch: (e) =>

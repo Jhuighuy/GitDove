@@ -31,6 +31,26 @@ import {
   windowsShellCandidates,
 } from "./hosts";
 
+/** The login shell's environment gate (see `loadEnvironment`): open unless a test holds it. */
+const gate = vi.hoisted(() => ({ pending: null as Promise<void> | null }));
+vi.mock("./environment", async (importOriginal) => {
+  const { Effect: E } = await import("effect");
+  return {
+    ...(await importOriginal<typeof import("./environment")>()),
+    environmentReady: E.suspend(() => (gate.pending ? E.promise(() => gate.pending!) : E.void)),
+  };
+});
+
+/** Holds the gate until the returned function is called. */
+const holdEnvironment = () => {
+  let open!: () => void;
+  gate.pending = new Promise((resolve) => (open = resolve));
+  return () => {
+    gate.pending = null;
+    open();
+  };
+};
+
 const FAKE_SSH = String.raw`#!/bin/sh
 # Fake ssh: logs "<kind> <host>" and runs remote commands with the local sh. The host must
 # come after "--"; its options are logged to "opts".
@@ -59,6 +79,7 @@ if [ -n "$master" ]; then
       fi ;;
   esac
   echo $$ >"$d/master-$host.pid"
+  printf %s "$SSH_AUTH_SOCK" >"$d/master-$host.agent"
   echo $$ >"$cp.pid"
   echo "$host" >"$cp.alias"
   exec sleep 600
@@ -207,6 +228,20 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
       expect(log()).toEqual([]);
     });
 
+    it("takes the environment once the login shell's is in", async () => {
+      const { runtime, run } = hosts();
+      const local = await run((h) => Effect.succeed(h.get(LOCAL_HOST)));
+      vi.stubEnv("SSH_AUTH_SOCK", "/tmp/before.sock");
+      const open = holdEnvironment();
+      const agent = runtime.runPromise(out(local, "/bin/sh", ["-c", 'printf %s "$SSH_AUTH_SOCK"']));
+      const shell = runtime.runPromise(shOut(local, 'printf %s "$SSH_AUTH_SOCK"'));
+      vi.stubEnv("SSH_AUTH_SOCK", "/tmp/login-shell.sock");
+      open();
+      expect(await agent).toBe("/tmp/login-shell.sock");
+      expect(await shell).toBe("/tmp/login-shell.sock");
+      vi.unstubAllEnvs();
+    });
+
     it("reports failures with the command line", async () => {
       const { runExit } = hosts();
       const exit = await runExit((h) => h.get(LOCAL_HOST).exec("/bin/sh", ["-c", "exit 2", "x y"]));
@@ -307,6 +342,20 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
       expect(await run(() => shOut(good, "cat", { stdin: "small stdin" }))).toBe("small stdin");
       // All commands went through the runner.
       expect(log()).toEqual(["master good", "check good", "runner good"]);
+    });
+
+    it("connects once the login shell's environment (its SSH agent) is in", async () => {
+      const { runtime } = hosts();
+      vi.stubEnv("SSH_AUTH_SOCK", "/tmp/before.sock");
+      const open = holdEnvironment();
+      const connected = runtime.runPromise(Effect.flatMap(Hosts, (h) => h.connect("good")));
+      await new Promise((r) => setTimeout(r, 300));
+      expect(log()).toEqual([]);
+      vi.stubEnv("SSH_AUTH_SOCK", "/tmp/login-shell.sock");
+      open();
+      await connected;
+      expect(readFileSync(join(state, "master-good.agent"), "utf8")).toBe("/tmp/login-shell.sock");
+      vi.unstubAllEnvs();
     });
 
     it("keeps the user's forwardings and remote command out of its connections", async () => {
