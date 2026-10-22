@@ -8,6 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   api: vi.fn(),
   signals: [] as (AbortSignal | undefined)[],
+  bridge: [] as unknown[][],
   listeners: new Map<string, (payload: unknown) => void>(),
 }));
 vi.mock("./api", () => ({
@@ -26,6 +27,15 @@ vi.mock("./api", () => ({
   },
 }));
 
+// A bridge that can cancel requests: queries go through `apiWithSignal`.
+(window as unknown as { gitdove: object }).gitdove = {
+  invokeCancellable: () => {},
+  invoke: (...args: unknown[]) => {
+    mocks.bridge.push(args);
+    return Promise.resolve({ ok: true, value: undefined });
+  },
+};
+
 const q = await import("./queries");
 const { ApiError } = (await import("./api")) as unknown as {
   ApiError: new (tag: string) => Error;
@@ -40,6 +50,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.api.mockReset();
   mocks.signals.length = 0;
+  mocks.bridge.length = 0;
   mocks.listeners.clear();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root = createRoot(document.createElement("div"));
@@ -465,7 +476,7 @@ it("holds change events back while an operation runs in the repository", async (
 it("only marks data of background repositories stale, and refetches it when shown", async () => {
   mocks.api.mockResolvedValue("status");
   const statusCalls = () => calls().filter(([method]) => method === "repo.status");
-  const visibility = () => calls().filter(([method]) => method === "repo.setVisible");
+  const visibility = () => mocks.bridge.filter(([method]) => method === "repo.setVisible");
   await renderHook(() => [q.useRepoEvents(), q.useStatus(repo)], null);
   await until(() => expect(statusCalls()).toHaveLength(1));
   q.setBackgroundRepos([repo], client);

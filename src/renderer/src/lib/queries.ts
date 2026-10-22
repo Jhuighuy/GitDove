@@ -1,5 +1,5 @@
 import type { DiffTarget, GraphInfo, GraphRow, Ref, RepoId, RepoInfo } from "@shared/domain";
-import type { RepoChangeScope } from "@shared/ipc";
+import type { ApiArgs, CancellableMethod, RepoChangeScope } from "@shared/ipc";
 import {
   type InvalidateQueryFilters,
   keepPreviousData,
@@ -28,6 +28,15 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+/**
+ * A read-only request that `signal` (a query's) also cancels in the main process, stopping its
+ * git commands. Without a bridge that can cancel (e.g. in component tests), a plain request.
+ */
+const read = <M extends CancellableMethod>(signal: AbortSignal, method: M, ...args: ApiArgs<M>) =>
+  typeof window.gitdove?.invokeCancellable === "function"
+    ? apiWithSignal(signal, method, ...args)
+    : api(method, ...args);
 
 export const keys = {
   repo: (repo: RepoId) => ["repo", repo] as const,
@@ -63,31 +72,31 @@ export const keys = {
 export const useRepoInfo = (repo: RepoId) =>
   useQuery({
     queryKey: keys.info(repo),
-    queryFn: ({ signal }) => apiWithSignal(signal, "repo.info", repo),
+    queryFn: ({ signal }) => read(signal, "repo.info", repo),
   });
 
 export const useRefs = (repo: RepoId) =>
   useQuery({
     queryKey: keys.refs(repo),
-    queryFn: ({ signal }) => apiWithSignal(signal, "repo.refs", repo),
+    queryFn: ({ signal }) => read(signal, "repo.refs", repo),
   });
 
 export const useHiddenRefs = (repo: RepoId) =>
   useQuery({
     queryKey: keys.hidden(repo),
-    queryFn: ({ signal }) => apiWithSignal(signal, "repo.hiddenRefs", repo),
+    queryFn: ({ signal }) => read(signal, "repo.hiddenRefs", repo),
   });
 
 export const useStatus = (repo: RepoId) =>
   useQuery({
     queryKey: keys.status(repo),
-    queryFn: ({ signal }) => apiWithSignal(signal, "repo.status", repo),
+    queryFn: ({ signal }) => read(signal, "repo.status", repo),
   });
 
 export const useGraphInfo = (repo: RepoId) =>
   useQuery({
     queryKey: keys.graphInfo(repo),
-    queryFn: ({ signal }) => apiWithSignal(signal, "repo.graphInfo", repo),
+    queryFn: ({ signal }) => read(signal, "repo.graphInfo", repo),
   });
 
 // Commits never change and change events leave these queries alone, but a commit's file list
@@ -106,9 +115,7 @@ export const useCommitDetails = (
   useQuery({
     queryKey: keys.commit(repo, hash ?? ""),
     queryFn:
-      hash === null
-        ? skipToken
-        : ({ signal }) => apiWithSignal(signal, "repo.commitDetails", repo, hash),
+      hash === null ? skipToken : ({ signal }) => read(signal, "repo.commitDetails", repo, hash),
     gcTime: COMMIT_GC_MS,
     placeholderData: keepPrevious ? keepPreviousData : undefined,
   });
@@ -118,19 +125,14 @@ export const useCompare = (repo: RepoId, base: string | null, tip: string | null
   useQuery({
     queryKey: keys.compare(repo, base, tip ?? ""),
     queryFn:
-      tip === null
-        ? skipToken
-        : ({ signal }) => apiWithSignal(signal, "repo.compare", repo, base, tip),
+      tip === null ? skipToken : ({ signal }) => read(signal, "repo.compare", repo, base, tip),
     gcTime: COMMIT_GC_MS,
   });
 
 export const useDiff = (repo: RepoId, target: DiffTarget | null) =>
   useQuery({
     queryKey: [...keys.diffs(repo), target],
-    queryFn:
-      target === null
-        ? skipToken
-        : ({ signal }) => apiWithSignal(signal, "repo.diff", repo, target),
+    queryFn: target === null ? skipToken : ({ signal }) => read(signal, "repo.diff", repo, target),
     placeholderData: keepPreviousData,
     gcTime: 30 * 1000,
   });
@@ -138,7 +140,7 @@ export const useDiff = (repo: RepoId, target: DiffTarget | null) =>
 export const useFileVersions = (repo: RepoId, target: DiffTarget) =>
   useQuery({
     queryKey: keys.fileVersions(repo, target),
-    queryFn: ({ signal }) => apiWithSignal(signal, "repo.fileVersions", repo, target),
+    queryFn: ({ signal }) => read(signal, "repo.fileVersions", repo, target),
     // Whole files can be large: drop them as soon as no view shows them.
     gcTime: 0,
   });
@@ -199,14 +201,7 @@ export const useGraphRows = (
     queries: pages.map(({ page, size }) => ({
       queryKey: keys.graphPage(repo, version, page, size),
       queryFn: ({ signal }) =>
-        apiWithSignal(
-          signal,
-          "repo.graphRows",
-          repo,
-          version,
-          page * GRAPH_PAGE,
-          page * GRAPH_PAGE + size,
-        ),
+        read(signal, "repo.graphRows", repo, version, page * GRAPH_PAGE, page * GRAPH_PAGE + size),
       staleTime: Infinity,
       gcTime: 60 * 1000,
       placeholderData: () => placeholderPage(client, repo, version, page),
@@ -360,8 +355,10 @@ export const refreshRepo = (
   Promise.all([...new Set(scopes)].map((s) => refetchScope(client, repo, s))).then(() => {});
 
 /** Tells the main process whether a repository is shown, so hidden ones do little work there. */
-const setVisible = (repo: RepoId, visible: boolean) =>
-  void api("repo.setVisible", repo, visible).catch(() => {});
+const setVisible = async (repo: RepoId, visible: boolean) => {
+  // Straight through the bridge: a hint, not an operation; there is no error to show.
+  await window.gitdove?.invoke("repo.setVisible", repo, visible).catch(() => {});
+};
 
 /**
  * Sets which repositories are in background tabs; those brought forward catch up. The main
@@ -371,10 +368,10 @@ export const setBackgroundRepos = (repos: Iterable<RepoId>, client: QueryClient 
   const next = new Set(repos);
   for (const repo of background) {
     if (next.has(repo)) continue;
-    setVisible(repo, true);
+    void setVisible(repo, true);
     void client.refetchQueries({ queryKey: keys.repo(repo), type: "active", stale: true });
   }
-  for (const repo of next) if (!background.has(repo)) setVisible(repo, false);
+  for (const repo of next) if (!background.has(repo)) void setVisible(repo, false);
   background.clear();
   for (const repo of next) background.add(repo);
 };
