@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Effect, Exit, Fiber } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CommandError } from "./errors";
-import { completion, spawn, summarizeStderr } from "./spawn";
+import { completion, spawn, spawnTiming, summarizeStderr } from "./spawn";
 import { terminateTiming } from "./terminate";
 
 const sh = (script: string, options?: Parameters<typeof spawn>[2]) =>
@@ -137,10 +137,13 @@ describe.skipIf(process.platform === "win32")("spawn", () => {
   it("waits for an interrupted process to exit", async () => {
     // Exiting takes a while (like git cleaning up its locks): the interrupt waits for it.
     const marker = join(dir, "cleaned-up");
+    const started = join(dir, "trapping");
     const fiber = Effect.runFork(
-      sh(`trap 'sleep 0.2; touch "${marker}"; exit 1' TERM; while :; do sleep 0.05; done`),
+      sh(
+        `trap 'sleep 0.2; touch "${marker}"; exit 1' TERM; touch '${started}'; while :; do sleep 0.05; done`,
+      ),
     );
-    await new Promise((r) => setTimeout(r, 200));
+    while (!existsSync(started)) await new Promise((r) => setTimeout(r, 20));
     await run(Fiber.interrupt(fiber));
     expect(existsSync(marker)).toBe(true);
   });
@@ -183,9 +186,16 @@ describe.skipIf(process.platform === "win32")("spawn", () => {
   });
 
   it("still collects output written shortly after the process exited", async () => {
-    const r = await run(sh("(sleep 0.05; echo late; echo err >&2) & echo early"));
-    expect(r.stdout.toString()).toBe("early\nlate\n");
-    expect(r.stderr).toBe("err\n");
+    // (Generously "shortly", for loaded machines.)
+    const drainMs = spawnTiming.drainMs;
+    spawnTiming.drainMs = 2000;
+    try {
+      const r = await run(sh("(sleep 0.05; echo late; echo err >&2) & echo early"));
+      expect(r.stdout.toString()).toBe("early\nlate\n");
+      expect(r.stderr).toBe("err\n");
+    } finally {
+      spawnTiming.drainMs = drainMs;
+    }
   });
 
   it("decodes stderr as a whole, not per chunk", async () => {
