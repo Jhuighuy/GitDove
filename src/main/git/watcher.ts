@@ -106,15 +106,27 @@ const isInside = (child: string, parent: string) => {
   return r === "" || (!r.startsWith("..") && !r.startsWith(sep) && r !== "..");
 };
 
-/** The paths that `.gitignore` and friends ignore (tracked files never are). */
+/**
+ * The paths that `.gitignore` and friends ignore (tracked files never are). `check-ignore` reads
+ * pathspecs, dies on magic it does not support (a file named `:!x`) and does not take
+ * `--literal-pathspecs`: each path goes behind `./`, which it prints back as given.
+ */
 const ignoredPaths = (repo: Repository, paths: readonly string[]): Effect.Effect<Set<string>> =>
   repo
     .gitText(["check-ignore", "-z", "--stdin"], {
-      stdin: paths.join("\0") + "\0",
+      stdin: paths.map((p) => `./${p}\0`).join(""),
       okCodes: [0, 1],
     })
     .pipe(
-      Effect.map((out) => new Set(out.split("\0").filter(Boolean))),
+      Effect.map(
+        (out) =>
+          new Set(
+            out
+              .split("\0")
+              .filter(Boolean)
+              .map((p) => (p.startsWith("./") ? p.slice(2) : p)),
+          ),
+      ),
       Effect.orElseSucceed(() => new Set<string>()),
     );
 

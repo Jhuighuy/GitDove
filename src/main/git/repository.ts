@@ -1973,7 +1973,9 @@ export class Repository {
   updateSubmodule(path: string) {
     return this.networkWrite(
       validatePath(path).pipe(
-        Effect.andThen(this.run(["submodule", "update", "--init", "--recursive", "--", path])),
+        Effect.andThen(
+          this.run([LITERAL, "submodule", "update", "--init", "--recursive", "--", path]),
+        ),
       ),
     );
   }

@@ -61,6 +61,16 @@ describe.skipIf(noShell).each(targets)("Repository worktrees and submodules on %
     expect(await sh("cat sub/f.txt")).toBe("a\nb\nc\nd");
   });
 
+  it("updates a submodule by its name, not as a pattern", async () => {
+    // `s?b` first: as a pattern, it would match `sub`.
+    await addSubmodule("s?b");
+    await addSubmodule("sub");
+    await sh("rm -rf sub 's?b' && mkdir sub 's?b' && git config protocol.file.allow always");
+    await run(t.repo.updateSubmodule("s?b"));
+    expect(await sh("cat 's?b/f.txt'")).toBe("a\nb\nc\nd");
+    expect(await sh("ls sub")).toBe("");
+  });
+
   it("removes a worktree with a checked out submodule only by force", async () => {
     await addSubmodule("sub");
     // A worktree with a checked out submodule is clean, but git removes it only by force.

@@ -157,6 +157,19 @@ describe.skipIf(process.platform === "win32")("watchRepository on a local reposi
     });
   });
 
+  it("drops ignored files whose names read as pathspec magic", async () => {
+    const dir = freshRepo("magic");
+    writeFileSync(join(dir, ".gitignore"), "*.o\n");
+    const w = watch(localRepo({ workTree: dir, gitDir: join(dir, ".git") }));
+    await w.until("worktree", () => touch(join(dir, "probe")));
+    await w.quiet();
+    touch(join(dir, "a.o"));
+    touch(join(dir, ":!x.o"));
+    touch(join(dir, ":(glob)y.o"));
+    await sleep(600);
+    expect(w.batches).toEqual([]);
+  });
+
   it("stops after dispose", async () => {
     const dir = freshRepo("dispose");
     const w = watch(localRepo({ workTree: dir, gitDir: join(dir, ".git") }));
