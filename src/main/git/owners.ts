@@ -169,7 +169,10 @@ export const branchOwners = (refsOut: string, logs: OwnerLogs, userOut: string):
     const at = position.get(tip.hash);
     if (at === undefined) continue;
     let names = tipsAt.get(at);
-    if (!names) tipsAt.set(at, (names = new Map()));
+    if (!names) {
+      names = new Map();
+      tipsAt.set(at, names);
+    }
     const n = branchName(tip.name);
     const refs = names.get(n);
     if (refs) refs.push(tip.name);
