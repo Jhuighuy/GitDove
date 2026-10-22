@@ -419,6 +419,10 @@ it("works from the keyboard", async () => {
   const eyeButton = row("user/my-branch").querySelector("button")!;
   expect(eyeButton.getAttribute("aria-label")).toBe("Hide from graph: user/my-branch");
   expect(eyeButton.tabIndex).toBe(-1);
+  // Clicking one leaves the focus with the list.
+  const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+  eyeButton.dispatchEvent(down);
+  expect(down.defaultPrevented).toBe(true);
   // The menu key opens the menu of the row under the cursor.
   await press("ContextMenu");
   expect(menuItems()).toContain("Delete user/my-branch");

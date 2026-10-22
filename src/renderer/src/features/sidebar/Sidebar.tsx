@@ -1113,6 +1113,8 @@ function VisibilityToggle({
         "text-muted-foreground hover:text-foreground flex w-5 shrink-0 justify-center",
         !off && "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
       )}
+      // The focus stays with the list, whose keys go on from this row.
+      onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => {
         e.stopPropagation();
         onToggle?.();

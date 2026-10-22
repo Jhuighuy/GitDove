@@ -39,6 +39,13 @@ export const useSectionStack = create<StackState>()(
   ),
 );
 
+/** The upper of two sections' share of their weights, in whole percent. */
+const share = (weights: Readonly<Record<string, number>>, upper: string, lower: string) => {
+  const a = weights[upper] ?? 1;
+  const b = weights[lower] ?? 1;
+  return a + b > 0 ? Math.round((100 * a) / (a + b)) : 50;
+};
+
 export interface SectionDef {
   readonly id: string;
   readonly title: string;
@@ -144,6 +151,10 @@ export function SectionStack({ sections: all }: { sections: readonly SectionDef[
                 role="separator"
                 aria-orientation="horizontal"
                 aria-label={`Resize ${s.title}`}
+                // Where the boundary is: the upper section's share of the two, in percent.
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={share(shown, resizeWith, s.id)}
                 tabIndex={0}
                 className="hover:bg-primary/50 active:bg-primary/70 focus-visible:bg-primary/50 absolute -top-[3px] right-0 left-0 z-20 h-[5px] cursor-row-resize transition-colors outline-none"
                 onPointerDown={(e) => startResize(e, resizeWith, s.id)}

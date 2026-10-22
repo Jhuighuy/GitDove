@@ -104,6 +104,8 @@ it("resizes neighbouring sections by dragging the boundary", () => {
   fire("pointermove", 230);
   expect(flex("a")).toBe("130 1 0px");
   expect(flex("c")).toBe("70 1 0px");
+  // The boundary reports where it is.
+  expect(target.getAttribute("aria-valuenow")).toBe("65");
   // Saved once the drag ends.
   expect(useSectionStack.getState().weights).toEqual({});
   // Sections keep a minimum height.
