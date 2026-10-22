@@ -469,8 +469,12 @@ export class Repository {
   /** Local changes: the index, the work tree and local refs. */
   private readonly writes = Semaphore.makeUnsafe(1);
   /**
-   * Fetches and pushes, which only change remote-tracking refs: they do not hold up staging and
-   * committing while they wait for the network.
+   * Network operations. Fetches and pushes take only this lock, so they do not hold up staging
+   * and committing while they wait for the network; they change remote-tracking refs, and also
+   * tags (`fetch --tags`) and upstream config (`push -u`), which local operations seldom touch
+   * at the same time (git's own locks make such a collision fail, not corrupt anything).
+   * Network operations that change local state too (pull…) take this lock and then
+   * {@link writes}, always in that order, so they never overlap a fetch.
    */
   private readonly transfers = Semaphore.makeUnsafe(1);
   /** Signals that cancel the running operations, and whether each uses the network. */
@@ -546,11 +550,15 @@ export class Repository {
    * {@link cancel} stops it, killing its command: a hook or a signing prompt
    * that never returns must not hold the lock forever.
    */
-  private write<A, E>(
-    effect: Effect.Effect<A, E>,
-    network = false,
-  ): Effect.Effect<A, E | CancelledError> {
-    return this.writes.withPermits(1)(this.cancellable(effect, network)).pipe(this.refsMayChange);
+  private write<A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | CancelledError> {
+    return this.writes.withPermits(1)(this.cancellable(effect, false)).pipe(this.refsMayChange);
+  }
+
+  /** Like {@link write}, for operations that also fetch, e.g. a pull (see {@link transfers}). */
+  private networkWrite<A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | CancelledError> {
+    return this.transfers
+      .withPermits(1)(this.writes.withPermits(1)(this.cancellable(effect, true)))
+      .pipe(this.refsMayChange);
   }
 
   /** Like {@link write}, for operations that only change the index and the work tree. */
@@ -1715,12 +1723,11 @@ export class Repository {
   }
 
   pull(mode: "ff-only" | "merge" | "rebase") {
-    return this.write(
+    return this.networkWrite(
       this.run([
         "pull",
         mode === "ff-only" ? "--ff-only" : mode === "rebase" ? "--rebase" : "--no-rebase",
       ]),
-      true,
     );
   }
 
@@ -1796,7 +1803,7 @@ export class Repository {
 
   /** Fast-forwards a branch that is not checked out to its upstream. */
   fastForwardBranch(branch: string) {
-    return this.write(
+    return this.networkWrite(
       Effect.gen({ self: this }, function* () {
         yield* validateBranchName(branch);
         const [remote = "", merge = ""] = (yield* this.gitText([
@@ -1813,7 +1820,6 @@ export class Repository {
         }
         yield* this.run(["fetch", "--", remote, `${merge}:refs/heads/${branch}`]);
       }),
-      true,
     );
   }
 
@@ -1906,11 +1912,10 @@ export class Repository {
   }
 
   updateSubmodule(path: string) {
-    return this.write(
+    return this.networkWrite(
       validatePath(path).pipe(
         Effect.andThen(this.run(["submodule", "update", "--init", "--recursive", "--", path])),
       ),
-      true,
     );
   }
 

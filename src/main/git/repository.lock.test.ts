@@ -80,6 +80,25 @@ describe.skipIf(noShell).each(targets)("Repository write lock on %s", (hostId) =
       await sh("touch go");
     });
 
+    it("runs a pull after a running push, not alongside it", async () => {
+      // A pull fetches too: alongside a fetch, the two collide on ref locks.
+      await blockingHook("pre-push");
+      await sh("echo e > e.txt && git add e.txt && git commit -qm three");
+      const order: string[] = [];
+      const push = run(t.repo.push({ force: false, setUpstream: false })).then(() =>
+        order.push("push"),
+      );
+      await until(() => exists("pre-push.started"));
+      const pull = run(t.repo.pull("ff-only")).then(() => order.push("pull"));
+      await new Promise((r) => setTimeout(r, 300));
+      expect(order).toEqual([]);
+      // Local writes still go ahead.
+      await run(t.repo.createBranch("meanwhile", "HEAD", false));
+      await sh("touch go");
+      await Promise.all([push, pull]);
+      expect(order).toEqual(["push", "pull"]);
+    });
+
     it("cancels a running push and lets the next write run", async () => {
       await blockingHook("pre-push");
       await sh("echo e > e.txt && git add e.txt && git commit -qm three");
