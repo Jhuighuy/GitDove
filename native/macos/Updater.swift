@@ -132,12 +132,13 @@ final class Updater: NSObject, SPUUpdaterDelegate, SPUUserDriver {
     version = item.displayVersionString
     if item.isInformationOnlyUpdate {
       reply(.dismiss)
-    } else if state.stage == .notDownloaded {
-      reply(.install)  // Download it; Sparkle comes back with showReady once it is extracted.
-    } else {
-      // Downloaded in an earlier session (.downloaded) or already staged (.installing): installing
-      // now would quit and relaunch GitDove, so wait for Restart like any other ready update.
+    } else if state.stage == .installing {
+      // Already staged: installing now would quit and relaunch GitDove, so wait for Restart.
       ready { reply(.install) }
+    } else {
+      // Not downloaded yet, or downloaded in an earlier session: download or extract it; Sparkle
+      // comes back with showReady once it can be installed.
+      reply(.install)
     }
   }
 

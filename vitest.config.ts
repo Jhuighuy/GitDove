@@ -5,7 +5,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 const integration = [
   "src/main/git/repository*.test.ts",
   "src/main/git/watcher.test.ts",
-  "src/main/exec/{hosts,runner,spawn}.test.ts",
+  "src/main/exec/{hosts,runner,runner.*,spawn,terminate}.test.ts",
   "src/**/*.int.test.ts",
 ];
 

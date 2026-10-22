@@ -127,16 +127,6 @@ describe("buildPatch property", () => {
       return null;
     }
   };
-  // Until the main process parses them, take the extended headers from the raw diff.
-  const parse = (raw: string): FileDiff => {
-    const created = /^new file mode (\d+)$/m.exec(raw);
-    const deleted = /^deleted file mode (\d+)$/m.exec(raw);
-    return {
-      ...parseDiff(raw, "f", null, false),
-      ...(created && { created: true, mode: created[1] }),
-      ...(deleted && { deleted: true, mode: deleted[1] }),
-    };
-  };
 
   it.each([1, 2, 3])(
     "stages, unstages and discards random selections (seed %i)",
@@ -163,7 +153,7 @@ describe("buildPatch property", () => {
         else writeFileSync(path, newText);
         if (created) git(["add", "-N", "f"]);
         const raw = git(["diff", "--no-color", "--no-ext-diff", "--no-renames", "-U3", "--", "f"]);
-        const diff = parse(raw);
+        const diff = parseDiff(raw, "f", null, false);
 
         const picked = new Set<string>();
         diff.hunks.forEach((h, hi) =>
