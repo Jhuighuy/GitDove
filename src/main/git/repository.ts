@@ -66,6 +66,11 @@ const GIT_CONFIG = [
   "log.showSignature=false",
 ];
 
+/** Tracked files that a folder replaced in the work tree, one per line. */
+const FOLDERS_FOR_FILES =
+  `git ${GIT_CONFIG.join(" ")} diff --name-only --diff-filter=D | ` +
+  `while IFS= read -r p; do if [ -d "$p" ]; then printf '%s\\n' "$p"; fi; done`;
+
 /** Largest diff we render before truncating (bytes). */
 const MAX_DIFF_BYTES = 8 * 1024 * 1024;
 
@@ -934,6 +939,17 @@ export class Repository {
         if (state !== "clean") {
           return yield* new InvalidInputError({
             message: `Abort or finish the ${state.replace("-", " ")} first`,
+          });
+        }
+        // A folder where a tracked file belongs: restoring the file would delete it, with what
+        // is in it (git lists none of that as a change). Refuse before deleting anything.
+        const blocking = (yield* this.host.sh(FOLDERS_FOR_FILES, { cwd: this.workTree })).stdout
+          .toString()
+          .split("\n")
+          .filter(Boolean);
+        if (blocking.length > 0) {
+          return yield* new InvalidInputError({
+            message: `Folders are where tracked files belong: ${blocking.join(", ")}. Move them away first.`,
           });
         }
         const untracked = this.gitText([

@@ -147,6 +147,42 @@ describe.skipIf(process.platform === "win32")("Repository write ops (integration
       );
     });
 
+    it(`does not delete folders in the way of tracked files on ${name}`, async () => {
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const host = (yield* Hosts).get(hostId);
+          const dir = (yield* host.sh("mktemp -d /tmp/gitdove-test.XXXXXX")).stdout
+            .toString()
+            .trim();
+          try {
+            // The tracked file `a` replaced by a repository with work in it.
+            yield* host.sh(
+              "git init -q -b main . && git config user.name T && git config user.email t@x && " +
+                "echo a > a && git add a && git commit -qm a && rm a && mkdir a && " +
+                "git -C a init -q && echo n > a/n.txt && echo j > junk.txt",
+              { cwd: dir },
+            );
+            const location: RepoLocation =
+              hostId === LOCAL_HOST
+                ? { kind: "local", path: dir }
+                : { kind: "ssh", host: hostId, path: dir };
+            const repo = yield* Repository.open(host, location, { onGraphProgress: () => {} });
+            const stopped = yield* Effect.flip(repo.discardAll());
+            expect(stopped.message).toBe(
+              "Folders are where tracked files belong: a. Move them away first.",
+            );
+            // Nothing was deleted.
+            const left = (yield* host.sh("ls -A . a", { cwd: dir })).stdout.toString();
+            expect(left).toContain("n.txt");
+            expect(left).toContain(".git");
+            expect(left).toContain("junk.txt");
+          } finally {
+            yield* host.sh(`rm -rf -- '${dir}'`).pipe(Effect.ignore);
+          }
+        }),
+      );
+    });
+
     it(`reports submodule changes it keeps on ${name}`, async () => {
       await runtime.runPromise(
         Effect.gen(function* () {
