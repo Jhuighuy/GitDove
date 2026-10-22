@@ -2,9 +2,10 @@
 //
 //   npm run icons
 //
-// Outputs (committed, so packaging needs no extra tools):
+// Outputs (committed; macOS packaging compiles Fold.icon with Xcode 26+):
+//   build/Fold.icon/Assets/*.svg  macOS vector layers; materials live in icon.json
 //   build/icon.png       1024px, macOS grid (tile with transparent margin)
-//   build/icon.icns      macOS (needs `iconutil`, i.e. run on macOS)
+//   build/icon.icns      static macOS fallback (generation needs macOS iconutil)
 //   build/icon.ico       Windows, tile cropped to fill the canvas
 //   build/icons/NxN.png  Linux, cropped
 //   resources/icon.png   window/dock icon at runtime, cropped
@@ -28,21 +29,58 @@ const write = (path, data) => {
   console.log("wrote", path);
 };
 
-// macOS
+// Icon Composer supplies its own full-bleed background and system mask. Map the
+// existing 824px tile to a 1024px canvas, without baking in the desktop margin.
+// Keep the dove's facets on one glass surface so they retain their paper folds.
+const defs = /<defs>([\s\S]*?)<\/defs>/.exec(source)[1];
+const artworkTransform = /<g transform="([^"]+)"/.exec(source)[1];
+const layer = (names) => {
+  const groups = names
+    .map((name) => {
+      const match = new RegExp(String.raw`<g id="${name}"[\s\S]*?</g>`).exec(source);
+      if (!match) throw new Error(`Missing icon group: ${name}`);
+      return match[0];
+    })
+    .join("\n");
+  const gradients = [...defs.matchAll(/<linearGradient\b[\s\S]*?<\/linearGradient>/g)]
+    .map(([gradient]) => gradient)
+    .filter((gradient) => groups.includes(`url(#${/id="([^"]+)"/.exec(gradient)[1]})`))
+    .join("\n");
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Generated from build/icon.svg by npm run icons. -->
+  <defs>${gradients}</defs>
+  <g transform="scale(${1024 / 824}) translate(-100 -100)">
+    <g transform="${artworkTransform}">
+${groups}
+    </g>
+  </g>
+</svg>\n`;
+};
+mkdirSync("build/Fold.icon/Assets", { recursive: true });
+write("build/Fold.icon/Assets/git-branch.svg", layer(["git-branch"]));
+write(
+  "build/Fold.icon/Assets/dove.svg",
+  layer(["tail", "rear-wing-layer", "body", "foreground-wing", "beak"]),
+);
+
+// Development Dock icon and static fallback for packaging without Xcode.
 write("build/icon.png", render(source, 1024));
 if (process.platform === "darwin") {
-  const work = mkdtempSync(join(tmpdir(), "gitdove-icon-"));
-  const dir = join(work, "icon.iconset");
-  mkdirSync(dir);
-  for (const size of [16, 32, 128, 256, 512]) {
-    writeFileSync(join(dir, `icon_${size}x${size}.png`), render(source, size));
-    writeFileSync(join(dir, `icon_${size}x${size}@2x.png`), render(source, size * 2));
+  const temp = mkdtempSync(join(tmpdir(), "gitdove-icon-"));
+  const iconset = join(temp, "icon.iconset");
+  try {
+    mkdirSync(iconset);
+    for (const size of [16, 32, 128, 256, 512]) {
+      writeFileSync(join(iconset, `icon_${size}x${size}.png`), render(source, size));
+      writeFileSync(join(iconset, `icon_${size}x${size}@2x.png`), render(source, size * 2));
+    }
+    execFileSync("/usr/bin/iconutil", ["-c", "icns", iconset, "-o", "build/icon.icns"]);
+    console.log("wrote build/icon.icns");
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
   }
-  execFileSync("/usr/bin/iconutil", ["-c", "icns", dir, "-o", "build/icon.icns"]);
-  rmSync(work, { recursive: true, force: true });
-  console.log("wrote build/icon.icns");
 } else {
-  console.warn("skipping build/icon.icns (requires macOS iconutil)");
+  console.warn("keeping committed build/icon.icns (regenerate on macOS with iconutil)");
 }
 
 // Windows: an ICO container with PNG-encoded entries (supported since Vista).
