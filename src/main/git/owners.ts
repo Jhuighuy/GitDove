@@ -8,7 +8,7 @@ import type { BranchOwners } from "@shared/domain";
 /** Branch names that are shared by everyone, besides each remote's `HEAD`. */
 const SHARED = ["main", "master", "trunk"];
 
-/** Commits per branch considered when looking for its owners (newest first). */
+/** Commits per branch considered when looking for its owner (newest first). */
 const COMMITS_PER_BRANCH = 100;
 
 const AUTHOR_FORMAT = "%aN%x00%aE%x00%at";
@@ -60,40 +60,36 @@ interface Commit {
 }
 
 /**
- * The first `limit` commits of `log` reachable from `start`, by position in the log. As
- * parents come after their children, a best-first walk finds them without visiting more.
+ * The first `limit` commits of `log` that are reachable from `start` but not from a base,
+ * by position in the log. Bases are the tips of other branches that `start` was built on
+ * (see `isBase`), so that a branch made on top of another one gets its own commits only.
+ * As parents come after their children, one pass from `start` finds them.
  */
-const newest = (
+const ownCommits = (
   start: number,
   log: readonly { readonly parents: readonly number[] }[],
+  isBase: (position: number) => boolean,
   limit: number,
 ): number[] => {
-  const heap = [start];
-  const seen = new Set(heap);
+  /** 1: reachable from `start`, 2: reachable from a base. */
+  const mark = new Map<number, number>([[start, 1]]);
+  /** Positions marked reachable from `start` and not processed yet. */
+  let pending = 1;
   const out: number[] = [];
-  while (heap.length > 0 && out.length < limit) {
-    out.push(heap[0]!);
-    // Pop the smallest position.
-    const last = heap.pop()!;
-    if (heap.length > 0) {
-      heap[0] = last;
-      for (let i = 0; ;) {
-        const l = 2 * i + 1;
-        const m = l + 1 < heap.length && heap[l + 1]! < heap[l]! ? l + 1 : l;
-        if (m >= heap.length || heap[i]! <= heap[m]!) break;
-        [heap[i], heap[m]] = [heap[m]!, heap[i]!];
-        i = m;
-      }
-    }
-    for (const p of log[out.at(-1)!]!.parents) {
-      if (seen.has(p)) continue;
-      seen.add(p);
-      heap.push(p);
-      for (let i = heap.length - 1; i > 0;) {
-        const up = (i - 1) >> 1;
-        if (heap[up]! <= heap[i]!) break;
-        [heap[i], heap[up]] = [heap[up]!, heap[i]!];
-        i = up;
+  for (let i = start; i < log.length && pending > 0 && out.length < limit; i++) {
+    const m = mark.get(i);
+    if (m === undefined) continue;
+    if (m === 1) pending--;
+    const excluded = m === 2 || (i !== start && isBase(i));
+    if (!excluded) out.push(i);
+    for (const p of log[i]!.parents) {
+      const pm = mark.get(p);
+      if (excluded) {
+        if (pm === 1) pending--;
+        if (pm !== 2) mark.set(p, 2);
+      } else if (pm === undefined) {
+        mark.set(p, 1);
+        pending++;
       }
     }
   }
@@ -164,28 +160,42 @@ export const branchOwners = (refsOut: string, logs: OwnerLogs, userOut: string):
   }));
   const tipEmails = new Map(read(logs.tips).map((c) => [c.hash, c.email]));
 
-  const byRef: Record<string, string[]> = {};
+  /** Branch tips by log position, to find the branches a branch was built on. */
+  const tipsAt = new Map<number, typeof tips>();
+  for (const tip of tips) {
+    const at = position.get(tip.hash);
+    if (at !== undefined) tipsAt.set(at, [...(tipsAt.get(at) ?? []), tip]);
+  }
+
+  const byRef: Record<string, string> = {};
   const used = new Set<string>();
   for (const tip of tips) {
     if (isDefault(tip.name)) continue;
-    // Count the authors of the branch's newest own commits.
-    const counts = new Map<string, number>();
+    // Its copies elsewhere (its upstream, the same name on a remote) are not its bases.
+    const name = branchName(tip.name);
+    const isBase = (at: number) =>
+      (tipsAt.get(at) ?? []).some((t) => t.name !== tip.upstream && branchName(t.name) !== name);
+    // Weigh the authors of its own commits by closeness to the tip: the k-th newest commit
+    // that is not a merge counts 1/k, so whoever works on it now owns it.
+    const weights = new Map<string, number>();
     const start = position.get(tip.hash);
-    for (const i of start === undefined ? [] : newest(start, log, COMMITS_PER_BRANCH)) {
-      const e = commits[i]!.email;
-      if (e) counts.set(e, (counts.get(e) ?? 0) + 1);
+    let k = 0;
+    for (const i of start === undefined ? [] : ownCommits(start, log, isBase, COMMITS_PER_BRANCH)) {
+      const { email, parents } = commits[i]!;
+      if (!email || parents.length > 1) continue;
+      weights.set(email, (weights.get(email) ?? 0) + 1 / ++k);
     }
-    if (counts.size === 0) {
+    let owner = [...weights].toSorted((a, b) => b[1] - a[1])[0]?.[0];
+    if (owner === undefined) {
       // Without commits of its own, a branch is merged, or a local copy of a default branch.
       const copy =
         (tip.upstream && isDefault(tip.upstream)) ||
-        (tip.name.startsWith("refs/heads/") && headNames.has(branchName(tip.name)));
-      const tipEmail = tipEmails.get(tip.hash);
-      if (copy || !tipEmail) continue;
-      counts.set(tipEmail, 1);
+        (tip.name.startsWith("refs/heads/") && headNames.has(name));
+      owner = tipEmails.get(tip.hash);
+      if (copy || !owner) continue;
     }
-    byRef[tip.name] = [...counts].toSorted((a, b) => b[1] - a[1]).map(([e]) => e);
-    for (const e of counts.keys()) used.add(e);
+    byRef[tip.name] = owner;
+    used.add(owner);
   }
   return {
     byRef,

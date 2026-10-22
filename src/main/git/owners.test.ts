@@ -35,8 +35,8 @@ describe("branchOwners", () => {
 
   it("attributes branches to the authors of their own commits", () => {
     const o = branchOwners(refs, { commits, tips }, user);
-    expect(o.byRef["refs/heads/topic"]).toEqual(["ann@x", "cid@x"]);
-    expect(o.byRef["refs/remotes/origin/topic"]).toEqual(["cid@x", "ann@x"]);
+    expect(o.byRef["refs/heads/topic"]).toBe("ann@x");
+    expect(o.byRef["refs/remotes/origin/topic"]).toBe("cid@x");
     // The newest commit names the email.
     expect(o.people).toEqual({
       "ann@x": { name: "Ann", time: 30 },
@@ -48,7 +48,7 @@ describe("branchOwners", () => {
 
   it("falls back to the tip author of merged branches", () => {
     const o = branchOwners(refs, { commits, tips }, "");
-    expect(o.byRef["refs/heads/merged"]).toEqual(["bob@x"]);
+    expect(o.byRef["refs/heads/merged"]).toBe("bob@x");
     expect(o.me).toEqual({ email: null, name: null });
   });
 
@@ -63,8 +63,8 @@ describe("branchOwners", () => {
 
   it("works with tips only", () => {
     const o = branchOwners(refs, { commits: "", tips }, "");
-    expect(o.byRef["refs/heads/topic"]).toEqual(["ann@x"]);
-    expect(o.byRef["refs/remotes/origin/topic"]).toEqual(["cid@x"]);
+    expect(o.byRef["refs/heads/topic"]).toBe("ann@x");
+    expect(o.byRef["refs/remotes/origin/topic"]).toBe("cid@x");
     expect(branchOwners(refs, { commits: "", tips: "" }, "").byRef).toEqual({});
   });
 
@@ -74,7 +74,7 @@ describe("branchOwners", () => {
       { commits: commit("f1", "m1", "Ann", "ann@x", 1), tips: commit("f1", "", "Ann", "ann@x", 1) },
       "",
     );
-    expect(o.byRef).toEqual({ "refs/heads/feature": ["ann@x"] });
+    expect(o.byRef).toEqual({ "refs/heads/feature": "ann@x" });
   });
 
   it("scopes a remote's default branch to that remote", () => {
@@ -90,7 +90,7 @@ describe("branchOwners", () => {
       },
       "",
     );
-    expect(o.byRef).toEqual({ "refs/remotes/origin/develop": ["ann@x"] });
+    expect(o.byRef).toEqual({ "refs/remotes/origin/develop": "ann@x" });
   });
 
   it("counts the newest commits, not the closest ones", () => {
@@ -110,6 +110,71 @@ describe("branchOwners", () => {
       },
       "",
     );
-    expect(o.byRef["refs/heads/topic"]).toEqual(["ann@x"]);
+    expect(o.byRef["refs/heads/topic"]).toBe("ann@x");
+  });
+
+  /** A linear history of `authors` (newest first) on top of `m1`, as commits `c0`, `c1`... */
+  const linear = (authors: readonly string[]) =>
+    authors
+      .map((a, i) =>
+        commit(`c${i}`, i + 1 < authors.length ? `c${i + 1}` : "m1", a, `${a}@x`, 100 - i),
+      )
+      .join("\n");
+
+  it("owns a branch by its newest commits", () => {
+    const owner = (authors: readonly string[]) =>
+      branchOwners(ref("refs/heads/b", "c0"), { commits: linear(authors), tips: "" }, "").byRef[
+        "refs/heads/b"
+      ];
+    // Two commits on top of three: 1 + 1/2 against 1/3 + 1/4 + 1/5.
+    expect(owner(["two", "two", "one", "one", "one"])).toBe("two@x");
+    // A fixup on top of a long branch does not take it over.
+    expect(owner(["two", ...Array.from({ length: 10 }, () => "one")])).toBe("one@x");
+  });
+
+  it("leaves out the branches a branch was built on", () => {
+    // One's A, Two's B on top of it with a single commit, and A's copy on origin.
+    const log = linear(["two", "one", "one", "one"]);
+    const refsWith = (...names: string[]) =>
+      [
+        ref("refs/heads/b", "c0"),
+        ...names.map((n) =>
+          ref(n, "c1", { upstream: n === "refs/heads/a" ? "refs/remotes/origin/a" : "" }),
+        ),
+      ].join("\n");
+    const owners = (...names: string[]) =>
+      branchOwners(refsWith(...names), { commits: log, tips: "" }, "").byRef;
+    expect(owners("refs/heads/a", "refs/remotes/origin/a")).toEqual({
+      "refs/heads/a": "one@x",
+      "refs/remotes/origin/a": "one@x",
+      "refs/heads/b": "two@x",
+    });
+    // Once A is gone, nothing tells Two's commit from a fixup on top of One's branch.
+    expect(owners()).toEqual({ "refs/heads/b": "one@x" });
+  });
+
+  it("does not leave out the upstream or copies of a branch", () => {
+    const o = branchOwners(
+      [
+        ref("refs/heads/b", "c0", { upstream: "refs/remotes/origin/b" }),
+        ref("refs/remotes/origin/b", "c1"),
+        ref("refs/remotes/fork/b", "c2"),
+      ].join("\n"),
+      { commits: linear(["one", "two", "two", "two"]), tips: "" },
+      "",
+    );
+    expect(o.byRef["refs/heads/b"]).toBe("two@x");
+  });
+
+  it("skips merge commits", () => {
+    const o = branchOwners(
+      ref("refs/heads/b", "merge"),
+      {
+        commits: [commit("merge", "c0 m1", "Bob", "bob@x", 200), linear(["ann"])].join("\n"),
+        tips: "",
+      },
+      "",
+    );
+    expect(o.byRef["refs/heads/b"]).toBe("ann@x");
   });
 });
