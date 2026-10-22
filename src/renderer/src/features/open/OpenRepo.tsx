@@ -1,5 +1,5 @@
 import type { RepoId, RepoLocation } from "@shared/domain";
-import { repoDisplayName, repoLocationOf } from "@shared/domain";
+import { repoDisplayName, repoIdOf, repoLocationOf } from "@shared/domain";
 import {
   IconArrowUp,
   IconFolder,
@@ -32,6 +32,18 @@ import { useStatusStore } from "@/stores/status";
 import { useTabs } from "@/stores/tabs";
 
 /**
+ * Opens running per location. The main process shares one open between them, so one that was
+ * cancelled must not close a repository that another one still opens.
+ */
+const inFlight = new Map<RepoId, number>();
+
+/** Whether an open other than the caller's own (of `location`) may still show `id`. */
+const openedElsewhere = (location: RepoLocation, id: RepoId) =>
+  useTabs.getState().tabs.some((t) => t.repo === id) ||
+  (inFlight.get(repoIdOf(location)) ?? 0) > 1 ||
+  (id !== repoIdOf(location) && (inFlight.get(id) ?? 0) > 0);
+
+/**
  * Opens a repository location in the active tab, reporting failures. Once `signal` aborts (the
  * user cancelled), a repository that opens anyway is not shown.
  */
@@ -46,13 +58,15 @@ export const openLocation = async (
     .startActivity(
       location.kind === "ssh" ? `Connecting to ${location.host}…` : "Opening repository…",
     );
+  // Once cancelled, it is no longer the user's business, even while the connection settles.
+  signal?.addEventListener("abort", done, { once: true });
+  const key = repoIdOf(location);
+  inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
   try {
     const info = await api("repo.open", location);
     if (signal?.aborted) {
-      // Nothing shows it: close it again, unless a tab does.
-      if (!useTabs.getState().tabs.some((t) => t.repo === info.id)) {
-        void api("repo.close", info.id).catch(() => {});
-      }
+      // Nothing shows it: close it again, unless something else does or is about to.
+      if (!openedElsewhere(location, info.id)) void api("repo.close", info.id).catch(() => {});
       return false;
     }
     // The tab shows the repository without asking for it again.
@@ -66,6 +80,10 @@ export const openLocation = async (
     });
     return false;
   } finally {
+    const left = inFlight.get(key)! - 1;
+    if (left > 0) inFlight.set(key, left);
+    else inFlight.delete(key);
+    signal?.removeEventListener("abort", done);
     done();
   }
 };

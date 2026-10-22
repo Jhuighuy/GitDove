@@ -356,6 +356,39 @@ it("opens a repository once, and gives it up when cancelled", async () => {
   expect(mocks.toast.error).not.toHaveBeenCalled();
 });
 
+it("keeps a repository that is opened again while a cancelled open of it settles", async () => {
+  const releases: (() => void)[] = [];
+  const closed: unknown[] = [];
+  mocks.api.mockImplementation(async (method: string, ...args: unknown[]) => {
+    if (method === "ssh.hosts") return ["box"];
+    if (method === "ssh.listDir") return listings["box:null"];
+    if (method === "repo.close") return void closed.push(args[0]);
+    if (method === "repo.open") {
+      opened.push(args[0]);
+      await new Promise<void>((r) => releases.push(r));
+      return { id: "ssh://box/home/me/proj" };
+    }
+    return undefined;
+  });
+  await showDialog("blank");
+  await connect();
+  await click(open("proj"));
+  expect(useStatusStore.getState().activities.map((a) => a.text)).toEqual(["Connecting to box…"]);
+  await click(button("Cancel"));
+  // Cancelled: the status bar no longer says it connects, though the first open still runs.
+  expect(useStatusStore.getState().activities).toEqual([]);
+  await showDialog("blank");
+  await connect();
+  await click(open("proj"));
+  expect(opened).toHaveLength(2);
+  // The main process settles both opens together; the cancelled one must not close it.
+  await act(async () => releases.forEach((r) => r()));
+  await flush();
+  expect(closed).toEqual([]);
+  expect(tabRepos()).toEqual(["ssh://box/home/me/proj"]);
+  expect(useStatusStore.getState().activities).toEqual([]);
+});
+
 it("fills the caches with the opened repository's info", async () => {
   const { keys, queryClient } = await import("@/lib/queries");
   await openLocation({ kind: "local", path: "/r" });
