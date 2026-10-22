@@ -114,6 +114,8 @@ const item = (name: string) => {
   if (!el) throw new Error(`No "${name}" item`);
   return el;
 };
+/** The button that opens (or enters) an item. */
+const open = (name: string) => item(name).querySelector("button")!;
 const click = async (el: HTMLElement) => {
   await act(async () => el.click());
   await flush();
@@ -215,7 +217,7 @@ it("lists, opens and forgets recent repositories", async () => {
   expect(useTabs.getState().recent).toEqual(["ssh://box/srv/beta"]);
   expect(opened).toEqual([]);
 
-  await click(item("beta"));
+  await click(open("beta"));
   expect(opened).toEqual([{ kind: "ssh", host: "box", path: "/srv/beta" }]);
   expect(tabRepos()).toEqual(["ssh://box/srv/beta"]);
 });
@@ -229,14 +231,19 @@ const showDialog = async (tabKey?: string) => {
 };
 const hostInput = () => document.querySelector<HTMLInputElement>("#ssh-host")!;
 const pathInput = () => document.querySelector<HTMLInputElement>("input.font-mono")!;
+const connect = () => submit(hostInput());
 
-it("browses the first configured host", async () => {
+it("suggests the first configured host, and connects only when asked", async () => {
   await showDialog("blank");
   expect(text()).toContain("Open remote repository");
   expect(hostInput().value).toBe("box");
   expect(
     [...document.querySelectorAll("#ssh-hosts option")].map((o) => o.getAttribute("value")),
   ).toEqual(["box", "other"]);
+  // Connecting may need a key touch or a second factor, or reach the wrong machine.
+  expect(listDirCalls()).toEqual([]);
+  expect(text()).toContain("Choose a host and press Connect");
+  await connect();
   expect(listDirCalls()).toEqual([["box", null]]);
   expect(pathInput().value).toBe("/home/me");
   expect([...document.querySelectorAll("li")].map((l) => l.textContent)).toEqual([
@@ -249,7 +256,8 @@ it("browses the first configured host", async () => {
 
 it("navigates folders and opens repositories", async () => {
   await showDialog("blank");
-  await click(item("docs"));
+  await connect();
+  await click(open("docs"));
   expect(listDirCalls().at(-1)).toEqual(["box", "/home/me/docs"]);
   expect(text()).toContain("Empty directory");
   await click(button("Parent directory"));
@@ -257,7 +265,7 @@ it("navigates folders and opens repositories", async () => {
   expect(pathInput().value).toBe("/home/me");
 
   // "browse" enters a repository instead of opening it.
-  await click(item("proj").querySelector("button")!);
+  await click(document.querySelector<HTMLElement>('[aria-label="Browse proj"]')!);
   expect(listDirCalls().at(-1)).toEqual(["box", "/home/me/proj"]);
   expect(text()).toContain("No such directory /home/me/proj");
   expect(button("Open This Folder").disabled).toBe(true);
@@ -271,11 +279,11 @@ it("navigates folders and opens repositories", async () => {
   expect(button("Parent directory").disabled).toBe(true);
   // Listings are cached for a while.
   const count = listDirCalls().length;
-  await click(item("home"));
+  await click(open("home"));
   expect(pathInput().value).toBe("/home");
   expect(listDirCalls()).toHaveLength(count);
-  await click(item("me"));
-  await click(item("proj"));
+  await click(open("me"));
+  await click(open("proj"));
   expect(opened).toEqual([{ kind: "ssh", host: "box", path: "/home/me/proj" }]);
   expect(tabRepos()).toEqual(["ssh://box/home/me/proj"]);
   expect(useRemoteDialog.getState().open).toBe(false);
@@ -289,11 +297,11 @@ it("connects to another host", async () => {
   await submit(hostInput());
   expect(listDirCalls().at(-1)).toEqual(["other", null]);
   expect(text()).toContain("Permission denied (publickey)");
-  // An empty host keeps browsing the default host.
+  // An empty host connects nowhere.
   await type(hostInput(), "  ");
   await submit(hostInput());
   expect(hostInput().value).toBe("  ");
-  expect(pathInput().value).toBe("/home/me");
+  expect(text()).toContain("Choose a host and press Connect");
 });
 
 it("remembers the last host", async () => {
@@ -307,6 +315,7 @@ it("remembers the last host", async () => {
 it("opens the current folder and keeps the dialog open on failure", async () => {
   listings["box:null"] = { path: "/srv/broken", entries: [] };
   await showDialog("blank");
+  await connect();
   await click(button("Open This Folder"));
   expect(opened).toEqual([{ kind: "ssh", host: "box", path: "/srv/broken" }]);
   expect(useRemoteDialog.getState().open).toBe(true);
@@ -314,6 +323,44 @@ it("opens the current folder and keeps the dialog open on failure", async () => 
   await click(button("Cancel"));
   expect(useRemoteDialog.getState().open).toBe(false);
   expect(text()).not.toContain("Open remote repository");
+});
+
+it("opens a repository once, and gives it up when cancelled", async () => {
+  let release!: () => void;
+  const closed: unknown[] = [];
+  mocks.api.mockImplementation(async (method: string, ...args: unknown[]) => {
+    if (method === "ssh.hosts") return ["box"];
+    if (method === "ssh.listDir") return listings["box:null"];
+    if (method === "repo.close") return void closed.push(args[0]);
+    if (method === "repo.open") {
+      opened.push(args[0]);
+      await new Promise<void>((r) => (release = r));
+      return { id: "ssh://box/home/me/proj" };
+    }
+    return undefined;
+  });
+  await showDialog("blank");
+  await connect();
+  await click(open("proj"));
+  // Clicking again while it opens does nothing.
+  expect(open("proj").disabled).toBe(true);
+  await click(open("proj"));
+  expect(opened).toHaveLength(1);
+  await click(button("Cancel"));
+  expect(useRemoteDialog.getState().open).toBe(false);
+  await act(async () => release());
+  await flush();
+  // The repository opened after all, but nothing shows it: it is closed again.
+  expect(tabRepos()).toEqual([null]);
+  expect(closed).toEqual(["ssh://box/home/me/proj"]);
+  expect(mocks.toast.error).not.toHaveBeenCalled();
+});
+
+it("fills the caches with the opened repository's info", async () => {
+  const { keys, queryClient } = await import("@/lib/queries");
+  await openLocation({ kind: "local", path: "/r" });
+  expect(queryClient.getQueryData(keys.open("local:/r"))).toEqual({ id: "local:/r" });
+  expect(queryClient.getQueryData(keys.info("local:/r"))).toEqual({ id: "local:/r" });
 });
 
 it("handles the global open and tab commands", async () => {
