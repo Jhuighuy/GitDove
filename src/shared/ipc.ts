@@ -1,9 +1,9 @@
 /**
  * Typed IPC contract between the renderer and the main process.
  *
- * All requests go through a single `invoke` channel carrying `{ method, args }`
- * and resolve to an {@link RpcResult}. Push notifications from main go through
- * the `event` channel.
+ * All requests go through a single invoke channel ({@link IPC_INVOKE}) as separate arguments,
+ * `(method, args, requestId?)`, and resolve to an {@link RpcResult}. Push notifications from
+ * main go through the event channel ({@link IPC_EVENT}).
  */
 import {
   type AppState,

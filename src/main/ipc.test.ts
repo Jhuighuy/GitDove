@@ -11,6 +11,7 @@ import {
   CommandError,
   InvalidInputError,
   NotARepositoryError,
+  RepoNotOpenError,
   StaleGraphError,
 } from "./exec/errors";
 import { type Host, Hosts, LOCAL_HOST } from "./exec/hosts";
@@ -589,7 +590,7 @@ describe("repository handlers", () => {
   it("reads and stores hidden refs", async () => {
     services.hidden.set("local:/work/repo", ["refs/heads/x"]);
     expect(await call("repo.hiddenRefs", "local:/work/repo")).toEqual(["refs/heads/x"]);
-    await call("repo.setHiddenRefs", "local:/work/repo", ["refs/heads/y", 42, null, "refs/tags/t"]);
+    await call("repo.setHiddenRefs", "local:/work/repo", ["refs/heads/y", "refs/tags/t"]);
     expect(services.hidden.get("local:/work/repo")).toEqual(["refs/heads/y", "refs/tags/t"]);
     expect(services.repo.setHiddenRefs).toHaveBeenCalledWith(["refs/heads/y", "refs/tags/t"]);
   });
@@ -641,6 +642,7 @@ describe("registerIpc", () => {
       ["repo.status", ["ssh://-oProxyCommand=x/srv"]],
       ["repo.stage", [id, "a"]],
       ["repo.stage", [id, ["a", 1]]],
+      ["repo.setHiddenRefs", [id, ["refs/heads/y", 42, null]]],
       ["repo.stashPop", [id, -1]],
       ["repo.stashPop", [id, 1.5]],
       ["repo.reset", [id, "HEAD", "keep"]],
@@ -755,6 +757,12 @@ describe("registerIpc", () => {
     await invoke("repo.status", ["local:/x"]);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.debug).toHaveBeenCalledWith("repo.status: outdated");
+    // A late request for a closed repository, too.
+    services.getRepo = () =>
+      Effect.fail(new RepoNotOpenError({ message: "closed", repo: "local:/x" })) as never;
+    await invoke("repo.status", ["local:/x"]);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.debug).toHaveBeenCalledWith("repo.status: closed");
   });
 
   it("reports interruptions and defects", async () => {

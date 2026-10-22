@@ -369,11 +369,9 @@ export const handlers: Handlers = {
   "app.setState": (state) => Effect.sync(() => saveState(state)),
   "app.version": () => Effect.succeed({ version: app.getVersion(), platform: process.platform }),
   "app.edit": (command) =>
-    EDIT_COMMANDS.includes(command)
-      ? Effect.gen(function* () {
-          (yield* Caller).webContents[command]();
-        })
-      : Effect.fail(new InvalidInputError({ message: `Unknown edit command: ${String(command)}` })),
+    Effect.gen(function* () {
+      (yield* Caller).webContents[command]();
+    }),
   // Windows follow through `nativeTheme`'s "updated" event (see index.ts).
   "app.setTheme": (theme) => Effect.sync(() => void (nativeTheme.themeSource = theme)),
   "dialog.pickDirectory": () =>
@@ -528,9 +526,8 @@ export const handlers: Handlers = {
   "repo.setHiddenRefs": (id, hidden) =>
     withRepo(id, (r) =>
       Effect.gen(function* () {
-        const clean = hidden.filter((h) => typeof h === "string");
-        (yield* RepoSettings).setHidden(r.id, clean);
-        r.setHiddenRefs(clean);
+        (yield* RepoSettings).setHidden(r.id, hidden);
+        r.setHiddenRefs(hidden);
       }),
     ),
 
@@ -591,7 +588,7 @@ const serializeError = (cause: Cause.Cause<AppError>): RpcError => {
 const CANCELLABLE: ReadonlySet<string> = new Set(CANCELLABLE_METHODS);
 
 /** Failures that are part of normal operation, not worth a warning. */
-const EXPECTED = new Set(["StaleGraphError", "CancelledError", "Interrupted"]);
+const EXPECTED = new Set(["StaleGraphError", "CancelledError", "Interrupted", "RepoNotOpenError"]);
 
 const badRequest = (message: string): RpcResult<never> => {
   log.warn(`Bad request: ${message}`);
