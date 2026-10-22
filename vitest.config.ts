@@ -1,4 +1,3 @@
-import { devNull } from "node:os";
 import { resolve } from "node:path";
 import { configDefaults, defineConfig } from "vitest/config";
 
@@ -21,7 +20,8 @@ export default defineConfig({
     testTimeout: 30000,
     // Throwaway repositories must not pick up the developer's git configuration (commit signing,
     // hooks, fsmonitor, ...). Tests that need an identity or other settings set them explicitly.
-    env: { GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" },
+    // "/dev/null" on every platform: Git for Windows maps it to NUL.
+    env: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
     projects: [
       {
         extends: true,
