@@ -393,9 +393,18 @@ esac
           const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) =>
             child.on("exit", (code, signal) => resolve([code, signal])),
           );
+          const dir = mkdtempSync(join(tmpdir(), "gitdove-runner-"));
+          const ready = join(dir, "ready");
           try {
-            child.stdin.write(encodeRequest(1, "sleep 30 & wait"));
-            await new Promise((resolve) => setTimeout(resolve, 200));
+            // Ready once the runner has the command's process id (1.p, in the runner's directory,
+            // which is the command's working directory), so the kill has processes to confirm.
+            child.stdin.write(
+              encodeRequest(
+                1,
+                `sleep 30 & until [ -s 1.p ]; do sleep 0.01; done; : >"${ready}"; wait`,
+              ),
+            );
+            await expect.poll(() => existsSync(ready), { timeout: 10_000 }).toBe(true);
             child.stdin.end("K 1\n");
             return await Promise.race([
               exited,
@@ -403,6 +412,7 @@ esac
             ]);
           } finally {
             child.kill();
+            rmSync(dir, { recursive: true, force: true });
           }
         });
         expect(exit).toEqual([0, null]);
