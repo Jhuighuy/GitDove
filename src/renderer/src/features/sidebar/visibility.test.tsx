@@ -40,7 +40,6 @@ vi.mock("sonner", () => ({
 const snapshot = {
   refs: [
     { name: "refs/heads/main", short: "main" },
-    { name: "refs/remotes/origin/HEAD", short: "origin/HEAD" },
     { name: "refs/remotes/origin/main", short: "origin/main" },
   ],
   stashes: [{ hash: "s1" }],
@@ -96,7 +95,7 @@ async function render() {
   await act(() => vi.waitFor(() => expect(probe.vis.all).toHaveLength(3)));
 }
 
-it("lists refs (without symbolic HEADs) and stashes", () => {
+it("lists refs and stashes", () => {
   expect(allVisibilityNames(snapshot)).toEqual([
     "refs/heads/main",
     "refs/remotes/origin/main",

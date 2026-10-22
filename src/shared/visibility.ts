@@ -16,9 +16,25 @@ export const stashKey = (hash: string): string => `stash:${hash}`;
 
 export const authorKey = (email: string): string => `author:${email.toLowerCase()}`;
 
+/** `personOf` results: it runs per owner email on every contributor-filter lookup. */
+const persons = new Map<string, string>();
+
 /** Contributors are grouped by name, ignoring case, accents and extra spaces. */
-export const personOf = (name: string): string =>
-  name.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/\s+/g, " ");
+export const personOf = (name: string): string => {
+  let person = persons.get(name);
+  if (person === undefined) {
+    person = name
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, " ");
+    // Names are few, but bound the cache anyway.
+    if (persons.size >= 10_000) persons.clear();
+    persons.set(name, person);
+  }
+  return person;
+};
 
 export const personKey = (person: string): string => `person:${person}`;
 
@@ -31,39 +47,66 @@ type People = BranchOwners["people"];
 export const personOfEmail = (email: string, people: People): string =>
   personOf(people[email]?.name ?? email);
 
-const asSet = (hidden: ReadonlySet<string> | readonly string[]): ReadonlySet<string> =>
-  hidden instanceof Set ? hidden : new Set(hidden as readonly string[]);
+/** A hidden list: treated as immutable, it is compiled once (see `compile`). */
+type HiddenList = ReadonlySet<string> | readonly string[];
 
-/** Whether the contributor filter hides an email, by itself or by its person. */
-export const isEmailHidden = (
-  hidden: ReadonlySet<string> | readonly string[],
-  email: string,
-  people: People,
-): boolean => {
-  const list = asSet(hidden);
-  return list.has(authorKey(email)) || list.has(personKey(personOfEmail(email, people)));
+/** A hidden list compiled for lookups that do not scan it. */
+interface Compiled {
+  /** The size of the list when compiled, to notice a list changed in place. */
+  readonly size: number;
+  readonly exact: ReadonlySet<string>;
+  /** Group prefixes (entries ending in `/`). */
+  readonly prefixes: readonly string[];
+  /** Whether the contributor filter is on (there are `author:` or `person:` entries). */
+  readonly contributors: boolean;
+}
+
+const compiled = new WeakMap<HiddenList, Compiled>();
+
+const compile = (hidden: HiddenList): Compiled => {
+  const size = hidden instanceof Set ? hidden.size : (hidden as readonly string[]).length;
+  const cached = compiled.get(hidden);
+  if (cached?.size === size) return cached;
+  const exact: ReadonlySet<string> =
+    hidden instanceof Set ? hidden : new Set(hidden as readonly string[]);
+  const prefixes: string[] = [];
+  let contributors = false;
+  for (const entry of exact) {
+    if (entry.endsWith("/")) prefixes.push(entry);
+    else if (!contributors && isContributorKey(entry)) contributors = true;
+  }
+  const c: Compiled = { size, exact, prefixes, contributors };
+  compiled.set(hidden, c);
+  return c;
 };
 
-export const isHidden = (
-  hidden: ReadonlySet<string> | readonly string[],
-  name: string,
-): boolean => {
-  const list = asSet(hidden);
-  if (list.has(name)) return true;
-  for (const entry of list) if (entry.endsWith("/") && name.startsWith(entry)) return true;
+const emailHidden = (c: Compiled, email: string, people: People): boolean =>
+  c.contributors &&
+  (c.exact.has(authorKey(email)) || c.exact.has(personKey(personOfEmail(email, people))));
+
+/** Whether the contributor filter hides an email, by itself or by its person. */
+export const isEmailHidden = (hidden: HiddenList, email: string, people: People): boolean =>
+  emailHidden(compile(hidden), email, people);
+
+/** Whether a name is hidden by its own entry or a group prefix (not the contributor filter). */
+export const isHidden = (hidden: HiddenList, name: string): boolean => {
+  const c = compile(hidden);
+  if (c.exact.has(name)) return true;
+  for (const prefix of c.prefixes) if (name.startsWith(prefix)) return true;
   return false;
 };
 
 /** Whether the contributor filter hides a branch with these owners. */
 export const isFilteredOut = (
-  hidden: ReadonlySet<string> | readonly string[],
+  hidden: HiddenList,
   name: string,
   owners: Pick<BranchOwners, "byRef" | "people">,
 ): boolean => {
+  const c = compile(hidden);
+  if (!c.contributors) return false;
   const emails = owners.byRef[name];
   if (!emails || emails.length === 0) return false;
-  const list = asSet(hidden);
-  return emails.every((e) => isEmailHidden(list, e, owners.people));
+  return emails.every((e) => emailHidden(c, e, owners.people));
 };
 
 /**
