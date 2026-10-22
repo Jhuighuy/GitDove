@@ -516,6 +516,15 @@ const liveMaster = (ctx: SshContext, host: string, verify = false) =>
         }),
       );
 
+/** Returns the host's runner, starting another one if it died (e.g. a dropped connection). */
+const liveRunner = (ctx: SshContext, host: string) =>
+  Effect.gen(function* () {
+    const runner = yield* getOrRetry(ctx.runners, host);
+    if (runner.alive) return runner;
+    yield* RcMap.invalidate(ctx.runners, host);
+    return yield* getOrRetry(ctx.runners, host);
+  });
+
 /** A host whose alias is not valid: every command fails before running ssh. */
 const invalidHost = (host: string, message: string): Host => {
   const fail = Effect.fail(new SshError({ message, host, stderr: "", mayHaveRun: false }));
@@ -585,11 +594,7 @@ const makeSshHost = (host: string, ctx: SshContext): Host => {
     return Effect.scoped(
       Effect.gen(function* () {
         // A runner that failed to start is tried again after RUNNER_RETRY_MS (see `run`).
-        let runner = yield* getOrRetry(ctx.runners, host);
-        if (!runner.alive) {
-          yield* RcMap.invalidate(ctx.runners, host);
-          runner = yield* getOrRetry(ctx.runners, host);
-        }
+        const runner = yield* liveRunner(ctx, host);
         return yield* runOnRunner(runner, host, remote, { ...watched.options, display });
       }),
     ).pipe(
@@ -776,7 +781,7 @@ export const makeHostsLayer = (
             return Date.now() < (runnerRetryAt.get(id) ?? 0)
               ? // The runner is backed off: commands use plain sessions, which need just the master.
                 Effect.scoped(liveMaster(ctx, id)).pipe(Effect.asVoid)
-              : Effect.scoped(getOrRetry(ctx.runners, id)).pipe(
+              : Effect.scoped(liveRunner(ctx, id)).pipe(
                   Effect.asVoid,
                   // Commands will fall back to plain sessions for a while.
                   Effect.catchTag("RunnerUnavailable", (e) =>

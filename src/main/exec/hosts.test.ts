@@ -542,6 +542,14 @@ describe.skipIf(process.platform === "win32")("Hosts", () => {
       expect(log().at(-1)).toBe("runner dying");
     });
 
+    it("connects with a fresh runner when the cached one died", async () => {
+      const { run, runExit } = hosts();
+      await runExit((h) => h.get("dying").sh("echo once"));
+      expect(log().filter((l) => l === "runner dying")).toHaveLength(1);
+      await run((h) => h.connect("dying"));
+      expect(log().filter((l) => l === "runner dying")).toHaveLength(2);
+    });
+
     /** The first run kills the master and fails like ssh does (255); later runs print ok. */
     const dropOnce = (host: string) => {
       const marker = join(state, "dropped");
