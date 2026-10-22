@@ -79,17 +79,54 @@ it("resizes neighbouring sections by dragging the boundary", () => {
     act(() =>
       target.dispatchEvent(new PointerEvent(type, { bubbles: true, clientY: y, pointerId: 1 })),
     );
+  const flex = (id: string) => sectionEl(id)!.style.flex;
   fire("pointerdown", 200);
   fire("pointermove", 230);
-  expect(useSectionStack.getState().weights).toEqual({ a: 130, c: 70, d: 100 });
-  expect(sectionEl("a")!.style.flex).toBe("130 1 0px");
+  expect(flex("a")).toBe("130 1 0px");
+  expect(flex("c")).toBe("70 1 0px");
+  // Saved once the drag ends.
+  expect(useSectionStack.getState().weights).toEqual({});
   // Sections keep a minimum height.
   fire("pointermove", 1000);
-  expect(useSectionStack.getState().weights).toMatchObject({ a: 156, c: 44 });
+  expect([flex("a"), flex("c")]).toEqual(["156 1 0px", "44 1 0px"]);
   fire("pointermove", -1000);
-  expect(useSectionStack.getState().weights).toMatchObject({ a: 44, c: 156 });
+  expect([flex("a"), flex("c")]).toEqual(["44 1 0px", "156 1 0px"]);
   fire("pointerup", 0);
+  expect(useSectionStack.getState().weights).toEqual({ a: 44, c: 156, d: 100 });
   fire("pointermove", 230);
   expect(useSectionStack.getState().weights).toMatchObject({ a: 44, c: 156 });
   expect(aboveD).toBeDefined();
+});
+
+it("ends a cancelled drag and moves boundaries with the arrow keys", () => {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    height: 128,
+  } as DOMRect);
+  render([section("a"), section("b")]);
+  const [target] = separators();
+  target!.setPointerCapture = () => {};
+  const fire = (type: string, y: number) =>
+    act(() =>
+      target!.dispatchEvent(new PointerEvent(type, { bubbles: true, clientY: y, pointerId: 1 })),
+    );
+  fire("pointerdown", 200);
+  fire("pointermove", 210);
+  fire("pointercancel", 210);
+  fire("pointermove", 260);
+  expect(useSectionStack.getState().weights).toEqual({ a: 110, b: 90 });
+
+  act(() =>
+    target!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })),
+  );
+  expect(useSectionStack.getState().weights).toEqual({ a: 124, b: 76 });
+  expect(target!.getAttribute("aria-label")).toBe("Resize B");
+});
+
+it("tells assistive technology whether a section is expanded", () => {
+  render([section("a"), section("b", { defaultOpen: false })]);
+  expect(header("A").getAttribute("aria-expanded")).toBe("true");
+  expect(document.getElementById(header("A").getAttribute("aria-controls")!)).toBe(
+    body("a")!.parentElement,
+  );
+  expect(header("B").getAttribute("aria-expanded")).toBe("false");
 });

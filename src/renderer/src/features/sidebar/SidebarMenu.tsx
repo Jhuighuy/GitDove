@@ -10,6 +10,7 @@ import {
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
+import { platform } from "@/lib/api";
 import { useRefs, useRepoInfo } from "@/lib/queries";
 import { WriteMenuItem } from "@/components/busy";
 import { commands } from "../commands";
@@ -46,9 +47,17 @@ export type SidebarTarget =
 
 interface Props {
   readonly repo: RepoId;
-  readonly target: SidebarTarget | null;
+  readonly target: SidebarTarget;
   readonly vis: ReturnType<typeof useVisibility>;
 }
+
+/** What the platform's file manager calls showing a file. */
+const REVEAL =
+  platform === "darwin"
+    ? "Reveal in Finder"
+    : platform === "win32"
+      ? "Show in Explorer"
+      : "Show in file manager";
 
 const Item = ContextMenuItem;
 const Sep = ContextMenuSeparator;
@@ -122,9 +131,7 @@ function RemoteMenu({
 }) {
   const { data: refs } = useRefs(repo);
   const prefix = `refs/remotes/${r.name}/`;
-  const members = (refs?.refs ?? [])
-    .filter((x) => x.name.startsWith(prefix) && !x.short.endsWith("/HEAD"))
-    .map((x) => x.name);
+  const members = (refs?.refs ?? []).filter((x) => x.name.startsWith(prefix)).map((x) => x.name);
   // Branches the contributor filter hides keep their state.
   const active = members.filter((m) => !vis.isFiltered(m));
   const allHidden = active.length > 0 && active.every((m) => vis.isHiddenByEye(m));
@@ -214,13 +221,15 @@ function FolderMenu({
   );
 }
 
+/**
+ * The menu for a right-clicked sidebar item; rendered only while it is open. Git arguments
+ * name refs in full: a branch, a remote branch and a tag can share a short name.
+ */
 export function SidebarMenu({ repo, target, vis }: Props) {
   const { data: info } = useRepoInfo(repo);
   const { data: refs } = useRefs(repo);
   const head = info?.head.branch ?? "HEAD";
   const isLocal = repoLocationOf(repo).kind === "local";
-
-  if (!target) return <ContextMenuContent className="hidden" />;
 
   switch (target.kind) {
     case "branch": {
@@ -243,10 +252,10 @@ export function SidebarMenu({ repo, target, vis }: Props) {
           {!r.isHead && (
             <>
               <Sep />
-              <WriteMenuItem repo={repo} onClick={() => void commands.merge(repo, r.short)}>
+              <WriteMenuItem repo={repo} onClick={() => void commands.merge(repo, r.name)}>
                 Merge {r.short} into {head}
               </WriteMenuItem>
-              <WriteMenuItem repo={repo} onClick={() => void commands.rebase(repo, r.short)}>
+              <WriteMenuItem repo={repo} onClick={() => void commands.rebase(repo, r.name)}>
                 Rebase {head} onto {r.short}
               </WriteMenuItem>
               <Sep />
@@ -301,16 +310,16 @@ export function SidebarMenu({ repo, target, vis }: Props) {
           <WriteMenuItem repo={repo} onClick={() => void commands.checkoutRef(repo, r)}>
             Checkout {r.short}
           </WriteMenuItem>
-          <WriteMenuItem repo={repo} onClick={() => void commands.merge(repo, r.short)}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.merge(repo, r.name)}>
             Merge {r.short} into {head}
           </WriteMenuItem>
-          <WriteMenuItem repo={repo} onClick={() => void commands.rebase(repo, r.short)}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.rebase(repo, r.name)}>
             Rebase {head} onto {r.short}
           </WriteMenuItem>
           <Sep />
           <WriteMenuItem
             repo={repo}
-            onClick={() => void commands.createWorktree(repo, r.short, r.short)}
+            onClick={() => void commands.createWorktree(repo, r.name, r.short)}
           >
             Create worktree from {r.short}…
           </WriteMenuItem>
@@ -350,7 +359,7 @@ export function SidebarMenu({ repo, target, vis }: Props) {
       const r = target.ref;
       return (
         <Menu>
-          <WriteMenuItem repo={repo} onClick={() => void commands.checkout(repo, r.short)}>
+          <WriteMenuItem repo={repo} onClick={() => void commands.checkoutRef(repo, r)}>
             Checkout {r.short} (detached)
           </WriteMenuItem>
           <WriteMenuItem
@@ -423,7 +432,7 @@ export function SidebarMenu({ repo, target, vis }: Props) {
           <Item disabled={current} onClick={() => commands.openSibling(repo, w.path)}>
             Open in new tab
           </Item>
-          {isLocal && <Item onClick={() => commands.reveal(repo, w.path)}>Reveal in Finder</Item>}
+          {isLocal && <Item onClick={() => commands.reveal(repo, w.path)}>{REVEAL}</Item>}
           <Item onClick={() => commands.copy(w.path, "Path copied")}>Copy path</Item>
           {!w.isMain && !current && (
             <>
@@ -482,9 +491,7 @@ export function SidebarMenu({ repo, target, vis }: Props) {
 
     case "section": {
       const names = (prefix: string) =>
-        (refs?.refs ?? [])
-          .filter((r) => r.name.startsWith(prefix) && !r.isHead && !r.short.endsWith("/HEAD"))
-          .map((r) => r.name);
+        (refs?.refs ?? []).filter((r) => r.name.startsWith(prefix) && !r.isHead).map((r) => r.name);
       const groupItems = (prefix: string) => {
         const members = names(prefix);
         return (

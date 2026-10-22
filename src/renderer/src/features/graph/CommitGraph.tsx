@@ -18,6 +18,8 @@ import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import {
   ContextMenu,
   ContextMenuTrigger,
+  isMenuKey,
+  openMenuAt,
   useContextMenuTarget,
 } from "@/components/ui/context-menu";
 import { Spinner } from "@/components/ui/spinner";
@@ -108,24 +110,6 @@ const useMinuteClock = () => {
     return () => clearInterval(id);
   }, []);
   return now;
-};
-
-/** Whether a key press opens the context menu (the menu key or Shift+F10). */
-export const isMenuKey = (e: React.KeyboardEvent) =>
-  e.key === "ContextMenu" || (e.shiftKey && e.key === "F10");
-
-/** Opens the context menu of `el` as a right-click on it would. */
-export const openMenuAt = (el: HTMLElement | null) => {
-  if (!el) return;
-  const r = el.getBoundingClientRect();
-  el.dispatchEvent(
-    new MouseEvent("contextmenu", {
-      bubbles: true,
-      cancelable: true,
-      clientX: r.left + Math.min(40, r.width / 2),
-      clientY: r.bottom,
-    }),
-  );
 };
 
 /** `then` for a value that may not be a promise yet, staying synchronous when it is not. */

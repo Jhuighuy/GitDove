@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
+  platform: "darwin",
   useEvent: () => {},
   api: async (method: string, _repo: string, arg?: string[]) => {
     switch (method) {
@@ -72,7 +73,7 @@ const stash = { index: 0, name: "stash@{0}", hash: "stash-hash", message: "WIP o
 const origin = { name: "origin", fetchUrl: "git@github.com:me/repo.git", pushUrl: "" };
 
 const base: RefsSnapshot = {
-  refs: [main, feature, originMain, originFeature, ref("refs/remotes/origin/HEAD"), tag],
+  refs: [main, feature, originMain, originFeature, tag],
   stashes: [stash],
   remotes: [origin],
   worktrees: [
@@ -108,6 +109,8 @@ beforeEach(() => {
   mocks.setHidden = [];
   mocks.commands = [];
   snapshot = base;
+  // Sections render the rows on screen: make room for them all.
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(2000);
   // Expand every section, including the ones collapsed by default.
   useSectionStack.setState({
     open: { worktrees: true, tags: true, submodules: true },
@@ -118,6 +121,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   document.body.innerHTML = "";
+  vi.restoreAllMocks();
 });
 
 async function render(snap = base, hidden: string[] = [], repo = `local:/repo${++n}`) {
@@ -191,8 +195,9 @@ it("runs local branch actions", async () => {
   const cases: [string, unknown[]][] = [
     ["Push", ["pushBranch", feature]],
     ["Set upstream…", ["setUpstream", feature]],
-    ["Merge feature into main", ["merge", "feature"]],
-    ["Rebase main onto feature", ["rebase", "feature"]],
+    // Git arguments name refs in full: a tag can have the same short name.
+    ["Merge feature into main", ["merge", "refs/heads/feature"]],
+    ["Rebase main onto feature", ["rebase", "refs/heads/feature"]],
     ["Checkout feature", ["checkoutRef", feature]],
     ["Create worktree from feature…", ["createWorktree", "feature", "feature"]],
     ["Create branch here…", ["createBranch", feature.hash, "feature"]],
@@ -257,11 +262,11 @@ it("runs remote branch actions", async () => {
   const r = originFeature;
   const cases: [string, unknown[]][] = [
     ["Checkout origin/feature", ["checkoutRef", r]],
-    ["Merge origin/feature into main", ["merge", "origin/feature"]],
-    ["Rebase main onto origin/feature", ["rebase", "origin/feature"]],
+    ["Merge origin/feature into main", ["merge", "refs/remotes/origin/feature"]],
+    ["Rebase main onto origin/feature", ["rebase", "refs/remotes/origin/feature"]],
     [
       "Create worktree from origin/feature…",
-      ["createWorktree", "origin/feature", "origin/feature"],
+      ["createWorktree", "refs/remotes/origin/feature", "origin/feature"],
     ],
     ["Create branch here…", ["createBranch", r.hash, "origin/feature"]],
     ["Create tag here…", ["createTag", r.hash]],
@@ -277,7 +282,8 @@ it("runs remote branch actions", async () => {
 it("runs tag actions", async () => {
   await render();
   const cases: [string, unknown[]][] = [
-    ["Checkout v1.0 (detached)", ["checkout", "v1.0"]],
+    // By its commit: a branch may have the same name.
+    ["Checkout v1.0 (detached)", ["checkoutRef", tag]],
     ["Create branch here…", ["createBranch", tag.hash, "v1.0"]],
     ["Push v1.0 to remote", ["pushTag", "v1.0"]],
     ["Delete v1.0 locally", ["deleteTag", "v1.0"]],
@@ -431,7 +437,7 @@ it("opens items by double-clicking them", async () => {
     ["openSibling", "/wt/feature"],
     ["openSibling", "libs/b"],
     ["applyStash", 0],
-    ["checkout", "v1.0"],
+    ["checkoutRef", tag],
   ]);
   mocks.commands = [];
   for (const title of ["stash@{0}: WIP on main", "v1.0"]) await fire(row(title), "click");

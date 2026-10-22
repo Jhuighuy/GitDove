@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useSectionStack } from "./SectionStack";
 import { Sidebar } from "./Sidebar";
 
 const mocks = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
+  platform: "darwin",
   useEvent: () => {},
   api: async (method: string, _repo: string, arg?: string[]) => {
     switch (method) {
@@ -75,6 +77,8 @@ let repo = 0;
 
 beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  // Sections render the rows on screen: make room for them all.
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(2000);
   mocks.hidden = [];
   mocks.setHidden = [];
   mocks.commands = [];
@@ -85,6 +89,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount());
   document.body.innerHTML = "";
+  vi.restoreAllMocks();
 });
 
 async function render(hidden: string[] = [], snap = base) {
@@ -102,7 +107,7 @@ async function render(hidden: string[] = [], snap = base) {
     ),
   );
   // Wait for both the refs and the hidden-refs queries to land.
-  const names = snapshot.refs.filter((r) => !r.short.endsWith("/HEAD")).map((r) => r.name);
+  const names = snapshot.refs.map((r) => r.name);
   const viewing = `Viewing ${names.filter((n) => !isHidden(hidden, n)).length}/${names.length}`;
   await act(() =>
     vi.waitFor(() => {
@@ -292,9 +297,111 @@ it("offers to show a remote whose branches are all hidden one by one", async () 
   const origin = base.refs.filter((r) => r.remote === "origin").map((r) => r.name);
   await render(origin, {
     ...base,
-    refs: [...base.refs, ref("refs/remotes/origin/HEAD"), ref("refs/remotes/upstream/main")],
+    refs: [...base.refs, ref("refs/remotes/upstream/main")],
     remotes: [...base.remotes, { name: "upstream", fetchUrl: "upstream-url", pushUrl: "" }],
   });
   await menu("git@example.com:repo", "Show origin branches");
   expect(mocks.setHidden.at(-1)).toEqual([]);
+});
+
+/** The context menu's items. */
+const menuItems = () =>
+  [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((e) =>
+    e.textContent?.trim(),
+  );
+const sectionHeader = (title: string) =>
+  [...document.querySelectorAll<HTMLElement>("button")].find((b) =>
+    b.textContent?.startsWith(title),
+  )!;
+
+it("opens no menu where there is none, rather than the last one", async () => {
+  await render();
+  // Stashes have no section menu.
+  await fire(sectionHeader("Stashes"), "contextmenu");
+  expect(menuItems()).toEqual([]);
+  await fire(row("release/2023.0"), "contextmenu");
+  expect(menuItems()).toContain("Delete release/2023.0");
+  await click(
+    [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (e) => e.textContent?.trim() === "Copy branch name",
+    )!,
+  );
+  await act(async () => new Promise((r) => setTimeout(r, 0)));
+  await fire(sectionHeader("Stashes"), "contextmenu");
+  expect(menuItems()).toEqual([]);
+});
+
+it("renders only the rows on screen, and lists every tag", async () => {
+  const tags = Array.from({ length: 3000 }, (_, i) => ref(`refs/tags/t${i}`));
+  await render([], { ...base, refs: [...base.refs, ...tags] });
+  await act(async () => useSectionStack.getState().setOpen("tags", true));
+  const shown = () =>
+    document.querySelectorAll('[role="tree"][aria-label="Tags"] [role="treeitem"]');
+  expect(shown().length).toBeGreaterThan(10);
+  expect(shown().length).toBeLessThan(200);
+  // All of them can be scrolled to, not just the first thousand.
+  const body = document.querySelector<HTMLElement>('[role="tree"][aria-label="Tags"] > div')!;
+  expect(Number.parseInt(body.style.height)).toBeGreaterThanOrEqual(3000 * 24);
+  const filter = document.querySelector<HTMLInputElement>('input[placeholder="Filter"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      filter,
+      "t1500",
+    );
+    filter.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(has("t1500")).toBe(true);
+  expect(filter.getAttribute("aria-label")).toBe("Filter branches, tags and more");
+});
+
+it("works from the keyboard", async () => {
+  await render();
+  const tree = document.querySelector<HTMLElement>('[role="tree"][aria-label="Local branches"]')!;
+  const press = (key: string) =>
+    act(async () => {
+      tree.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  await act(async () => tree.focus());
+  const cursor = () => document.getElementById(tree.getAttribute("aria-activedescendant")!);
+  expect(cursor()?.title).toBe("main");
+  await press("ArrowDown");
+  expect(cursor()?.title).toBe("release/");
+  expect(cursor()?.getAttribute("aria-expanded")).toBe("true");
+  // Left collapses a folder, Right expands it.
+  await press("ArrowLeft");
+  expect(has("release/2023.0")).toBe(false);
+  expect(cursor()?.getAttribute("aria-expanded")).toBe("false");
+  await press("ArrowRight");
+  expect(has("release/2023.0")).toBe(true);
+  // Enter reveals a branch, Space toggles its eye.
+  await press("ArrowDown");
+  expect(cursor()?.title).toBe("release/2023.0");
+  await press("Enter");
+  expect(mocks.commands).toEqual(["selectCommit"]);
+  await press(" ");
+  expect(mocks.setHidden.at(-1)).toEqual(["refs/heads/release/2023.0"]);
+  await press("End");
+  expect(cursor()?.title).toBe("user/my-branch");
+  // The eyes are named, and out of the tab order.
+  const eyeButton = row("user/my-branch").querySelector("button")!;
+  expect(eyeButton.getAttribute("aria-label")).toBe("Hide from graph: user/my-branch");
+  expect(eyeButton.tabIndex).toBe(-1);
+  // The menu key opens the menu of the row under the cursor.
+  await press("ContextMenu");
+  expect(menuItems()).toContain("Delete user/my-branch");
+});
+
+it("forgets collapsed folders that are gone", async () => {
+  await render();
+  await click(row("release/"));
+  expect(has("release/2023.0")).toBe(false);
+  // One branch left: no folder.
+  await act(async () => root.unmount());
+  const one = base.refs.filter((r) => r.name !== "refs/heads/release/2023.1");
+  await render([], { ...base, refs: one });
+  expect(has("release/2023.0")).toBe(true);
+  // Two again: the folder is new, so open.
+  await act(async () => root.unmount());
+  await render();
+  expect(has("release/2023.0")).toBe(true);
 });

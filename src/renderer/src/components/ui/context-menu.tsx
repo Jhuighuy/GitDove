@@ -45,6 +45,27 @@ function useContextMenuTarget<T>() {
   return { target, capture, rootProps: { onOpenChange, onOpenChangeComplete } };
 }
 
+/** Whether a key press asks for a context menu (the menu key or Shift+F10). */
+const isMenuKey = (e: React.KeyboardEvent) =>
+  e.key === "ContextMenu" || (e.shiftKey && e.key === "F10");
+
+/**
+ * Opens the context menu of `el` (e.g. a list's active row) as a right-click on it would:
+ * lists handle the menu key themselves, as the browser's event goes to the focused list.
+ */
+const openMenuAt = (el: HTMLElement | null) => {
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  el.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: r.left + Math.min(40, r.width / 2),
+      clientY: r.bottom,
+    }),
+  );
+};
+
 function ContextMenuPortal({ ...props }: ContextMenuPrimitive.Portal.Props) {
   return <ContextMenuPrimitive.Portal data-slot="context-menu-portal" {...props} />;
 }
@@ -275,4 +296,6 @@ export {
   ContextMenuSubTrigger,
   ContextMenuRadioGroup,
   useContextMenuTarget,
+  isMenuKey,
+  openMenuAt,
 };
