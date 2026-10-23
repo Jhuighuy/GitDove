@@ -129,9 +129,13 @@ export const resolvePatch = (
   diff: FileDiff,
   choices: readonly { readonly conflict: Conflict; readonly choice: ConflictChoice }[],
 ): string | null => {
+  // Blocks do not overlap: in order, a cursor finds the one a line is in.
+  const ordered = choices.toSorted(
+    (a, b) => a.conflict.hunk - b.conflict.hunk || a.conflict.start - b.conflict.start,
+  );
+  let next = 0;
   // The working tree file, as the old side of a diff that drops the lines the choices remove.
   const hunks = diff.hunks.map((hunk, h): DiffHunk => {
-    const here = choices.filter((c) => c.conflict.hunk === h);
     const lines: DiffLine[] = [];
     let no = hunk.newStart;
     hunk.lines.forEach((l, i) => {
@@ -141,7 +145,13 @@ export const resolvePatch = (
         return;
       }
       if (!inFile(l)) return;
-      const kept = here.every((c) => keeps(c.conflict, i, c.choice));
+      while (next < ordered.length) {
+        const { conflict: c } = ordered[next]!;
+        if (c.hunk > h || (c.hunk === h && c.end >= i)) break;
+        next++;
+      }
+      const c = ordered[next];
+      const kept = c?.conflict.hunk !== h || keeps(c.conflict, i, c.choice);
       lines.push({ kind: kept ? "context" : "del", oldNo: no++, newNo: null, text: l.text });
     });
     const kept = lines.filter((l) => l.kind === "context").length;

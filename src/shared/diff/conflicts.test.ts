@@ -187,3 +187,26 @@ describe("resolvePatch", () => {
     expect(resolvePatch(d, [])).toBeNull();
   });
 });
+
+describe("resolvePatch with many blocks", () => {
+  it("takes choices in any order, in time linear in the lines", () => {
+    // Built without spreading: that many arguments would overflow the stack.
+    const lines: DiffLine[] = [];
+    for (let k = 0, no = 1; k < 20_000; k++) {
+      for (const text of ["<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> side"]) {
+        lines.push({ kind: "add", oldNo: null, newNo: no++, text });
+      }
+      lines.push({ kind: "context", oldNo: k + 1, newNo: no++, text: "between" });
+    }
+    const empty = conflicted(1);
+    const d: FileDiff = { ...empty, hunks: [{ ...empty.hunks[0]!, lines }] };
+    const choices = findConflicts(d)
+      .map((conflict) => ({ conflict, choice: "current" as const }))
+      .toReversed();
+    const started = performance.now();
+    const patch = resolvePatch(d, choices)!;
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(patch.split("\n").filter((l) => l === "-theirs")).toHaveLength(20_000);
+    expect(patch).not.toContain(" theirs");
+  });
+});
