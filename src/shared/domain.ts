@@ -170,6 +170,16 @@ export interface GraphInfo {
   readonly error?: string;
 }
 
+/** Where the work-in-progress row's line runs down to HEAD's row (see `repo.wipLane`). */
+export interface WipLane {
+  /** HEAD's row. */
+  readonly index: number;
+  /** The line's column, HEAD's unless a row above HEAD's uses it. */
+  readonly lane: number;
+  /** HEAD's lane color. */
+  readonly color: number;
+}
+
 /**
  * One row of the commit graph.
  *

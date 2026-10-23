@@ -44,6 +44,26 @@ describe("GraphBuilder", () => {
     const g = build([c("x", "a"), c("y", "b"), c("b", "a"), c("a"), c("z")]);
     expect(g.rows.at(-1)!.lane).toBe(0);
   });
+
+  describe("wipLane", () => {
+    it("continues HEAD's lane when no row above HEAD uses it", () => {
+      // HEAD at b, below x on another branch (e.g. while rebasing onto b).
+      const g = build([c("x", "a"), c("b", "a"), c("a")]);
+      expect(g.wipLane("b")).toEqual({ index: 1, lane: 1, color: g.rows[1]!.color });
+      expect(g.wipLane("x")).toEqual({ index: 0, lane: 0, color: g.rows[0]!.color });
+    });
+
+    it("takes a free column when a row above HEAD uses HEAD's", () => {
+      // q's lane ends at p, which frees lane 1 for HEAD's branch tip h.
+      const g = build([c("y", "p"), c("q", "p"), c("p", "a"), c("h", "a"), c("a")]);
+      expect(g.rows.map((r) => r.lane)).toEqual([0, 1, 0, 1, 0]);
+      expect(g.wipLane("h")).toEqual({ index: 3, lane: 2, color: g.rows[3]!.color });
+    });
+
+    it("is null for a commit not in the graph", () => {
+      expect(build([c("a")]).wipLane("b")).toBeNull();
+    });
+  });
 });
 
 describe("LogParser", () => {

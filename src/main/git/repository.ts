@@ -13,6 +13,7 @@ import type {
   RepoState,
   Stash,
   Submodule,
+  WipLane,
   WorkingStatus,
 } from "@shared/domain";
 import { repoDisplayName, repoIdOf } from "@shared/domain";
@@ -1114,6 +1115,11 @@ export class Repository {
       };
       return Effect.succeed(hashes.map(find));
     });
+  }
+
+  /** Where the WIP row's line runs down to HEAD's commit `head`, null when it is not in the graph. */
+  wipLane(version: number, head: string): Effect.Effect<WipLane | null, StaleGraphError> {
+    return Effect.map(this.graphOf(version), (g) => g.builder.wipLane(head));
   }
 
   private snapshotInfo(g: GraphSnapshot): GraphInfo {

@@ -50,7 +50,6 @@ it("draws straight and curved edges in their lane colors", () => {
       row={row({ edges: [0, 0, 0, 1, 2, 0, 1, 1, 2, 3], width: 2 })}
       isHead={false}
       isStash={false}
-      wipAbove={false}
     />,
   );
   const svg = container.querySelector("svg")!;
@@ -76,7 +75,8 @@ it("marks merges, HEAD, stashes and a WIP row above", () => {
       row={row({ lane: 1, color: 4, parents: ["p1", "p2"] })}
       isHead
       isStash={false}
-      wipAbove
+      wipLane={1}
+      wipColor={4}
     />,
   );
   const circles = all("circle");
@@ -86,13 +86,32 @@ it("marks merges, HEAD, stashes and a WIP row above", () => {
   expect(circles[1]!.getAttribute("class")).toBe("fill-background");
   const dashed = container.querySelector("path")!;
   expect(dashed.getAttribute("d")).toBe(`M30 0V${ROW_HEIGHT / 2}`);
-  expect(dashed.getAttribute("stroke-dasharray")).toBe("3 3");
+  expect(dashed.getAttribute("stroke")).toBe(laneColor(4));
+  expect(dashed.getAttribute("stroke-dasharray")).toBe("4 3");
 
-  render(<GraphCell row={row()} isHead={false} isStash wipAbove={false} />);
+  render(<GraphCell row={row()} isHead={false} isStash />);
   expect(all("circle")).toHaveLength(0);
   const rect = container.querySelector("rect")!;
   expect(rect.getAttribute("stroke-dasharray")).toBe("2 2");
   expect(rect.getAttribute("x")).toBe("9");
+});
+
+it("runs the WIP line through rows above HEAD, and bends it into HEAD's lane", () => {
+  // A row above HEAD: the line passes through, in its own column, which widens the row.
+  render(<GraphCell row={row()} isHead={false} isStash={false} wipLane={2} wipColor={3} />);
+  expect(container.querySelector("svg")!.getAttribute("width")).toBe(String(graphWidthFor(3)));
+  const through = container.querySelector("path")!;
+  expect(through.getAttribute("d")).toBe(`M46 0V${ROW_HEIGHT}`);
+  expect(through.getAttribute("stroke")).toBe(laneColor(3));
+  // HEAD's row, in another column: the line curves into its dot.
+  render(<GraphCell row={row({ color: 3 })} isHead isStash={false} wipLane={2} wipColor={3} />);
+  const end = container.querySelector("path")!;
+  expect(end.getAttribute("d")).toBe(
+    `M46 0C46 ${ROW_HEIGHT / 4} 14 ${ROW_HEIGHT / 4} 14 ${ROW_HEIGHT / 2}`,
+  );
+  // The dashes fit a half row, so that they join up across rows.
+  const [dash, gap] = end.getAttribute("stroke-dasharray")!.split(" ").map(Number);
+  expect((ROW_HEIGHT / 2) % (dash! + gap!)).toBe(0);
 });
 
 it("draws the WIP node with a dashed line down to HEAD", () => {
@@ -107,22 +126,14 @@ it("draws the WIP node with a dashed line down to HEAD", () => {
 });
 
 it("marks HEAD on a regular commit with a dot in its color", () => {
-  render(<GraphCell row={row()} isHead isStash={false} wipAbove={false} />);
+  render(<GraphCell row={row()} isHead isStash={false} />);
   const circles = all("circle");
   expect(circles.map((c) => c.getAttribute("r"))).toEqual(["6", "2.5"]);
   expect(circles[1]!.getAttribute("fill")).toBe(laneColor(0));
 });
 
 it("draws a line from the ref pills to the dot", () => {
-  render(
-    <GraphCell
-      row={row({ lane: 1, color: 2 })}
-      isHead={false}
-      isStash={false}
-      wipAbove={false}
-      refLine
-    />,
-  );
+  render(<GraphCell row={row({ lane: 1, color: 2 })} isHead={false} isStash={false} refLine />);
   const line = container.querySelector("path")!;
   expect(line.getAttribute("d")).toBe(`M0 ${ROW_HEIGHT / 2}H30`);
   expect(line.getAttribute("stroke")).toBe(laneColor(2));

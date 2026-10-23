@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { keys } from "@/lib/queries";
 import { useRepoUiStore } from "@/stores/repo-ui";
 import { CommitGraph } from "./CommitGraph";
+import { ROW_HEIGHT } from "./GraphCell";
 
 const mocks = vi.hoisted(() => ({
   api: [] as unknown[][],
@@ -16,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   rows: [] as unknown[],
   status: null as unknown,
   refs: null as unknown,
+  head: "c0",
+  /** The column `repo.wipLane` answers, or `null` for HEAD's own. */
+  wipLane: null as number | null,
   /** The index `repo.findCommit` answers, or `null` to look the commit up in `rows`. */
   found: 0 as number | null,
   /** Holds `repo.findCommit` answers back until it settles. */
@@ -56,7 +60,7 @@ vi.mock("@/lib/api", () => ({
       case "repo.status":
         return mocks.status;
       case "repo.info":
-        return { workTree: "/repo", head: { branch: "main", hash: "c0", detached: false } };
+        return { workTree: "/repo", head: { branch: "main", hash: mocks.head, detached: false } };
       case "repo.refs":
         return mocks.refs;
       case "repo.hiddenRefs":
@@ -64,6 +68,12 @@ vi.mock("@/lib/api", () => ({
       case "repo.findCommit":
         await mocks.gate;
         return mocks.found ?? mocks.rows.findIndex((r) => (r as GraphRow).hash === args[2]);
+      case "repo.wipLane": {
+        const index = mocks.rows.findIndex((r) => (r as GraphRow).hash === args[2]);
+        if (index < 0) return null;
+        const row = mocks.rows[index] as GraphRow;
+        return { index, lane: mocks.wipLane ?? row.lane, color: row.color };
+      }
       case "repo.findCommits":
         await mocks.gate;
         return (args[2] as string[]).map((h) =>
@@ -139,6 +149,8 @@ beforeEach(() => {
   mocks.info = { version: 1, count: 5, complete: true, maxLanes: 1 } satisfies GraphInfo;
   mocks.status = clean;
   mocks.refs = snapshot;
+  mocks.head = "c0";
+  mocks.wipLane = null;
   mocks.found = 0;
   mocks.gate = null;
   mocks.infoGate = null;
@@ -236,6 +248,30 @@ it("shows a WIP row above HEAD when there are changes", async () => {
   await mouse(rowOf("Commit 2"), "mousedown", 2);
   await mouse(wip, "mousedown", 2);
   expect(selection()).toEqual({ kind: "commit", hash: "c1" });
+});
+
+it("runs the WIP line down to HEAD through the rows above it", async () => {
+  mocks.status = { ...clean, unstaged: [change] };
+  mocks.head = "c2";
+  mocks.wipLane = 1;
+  mocks.rows = Array.from({ length: 5 }, (_, i) => commit(i, i === 2 ? { color: 3 } : {}));
+  await render();
+  await act(() =>
+    vi.waitFor(() => {
+      if (!rowOf("Commit 0").querySelector("[stroke-dasharray]")) throw new Error("No WIP line");
+    }),
+  );
+  const dashed = (text: string) =>
+    [...rowOf(text).querySelectorAll("path[stroke-dasharray]")].map((p) => p.getAttribute("d"));
+  // The WIP row's node sits in the line's column.
+  expect(rowOf("// WIP").querySelector("circle")!.getAttribute("cx")).toBe("30");
+  expect(dashed("Commit 0")).toEqual([`M30 0V${ROW_HEIGHT}`]);
+  expect(dashed("Commit 1")).toEqual([`M30 0V${ROW_HEIGHT}`]);
+  // It bends into HEAD's lane, and stops there.
+  expect(dashed("Commit 2")).toHaveLength(1);
+  expect(dashed("Commit 2")[0]).toMatch(/^M30 0C.* 14 14$/);
+  expect(dashed("Commit 3")).toEqual([]);
+  expect(mocks.api).toContainEqual(["repo.wipLane", 1, "c2"]);
 });
 
 it("moves the selection with the arrow keys", async () => {
