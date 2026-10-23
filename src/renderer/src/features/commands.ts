@@ -4,6 +4,7 @@
 import type { Ref, RefsSnapshot, RepoId, RepoInfo, RepoLocation, Stash } from "@shared/domain";
 import { repoLocationOf } from "@shared/domain";
 import type { EditCommand, ResetMode } from "@shared/ipc";
+import { hashKey } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { refuseWhileBusy, runAction } from "@/lib/actions";
 import { ApiError, api } from "@/lib/api";
@@ -31,16 +32,37 @@ const UNDO_MS = 15_000;
 
 /**
  * Runs `action` on `stash` (the latest one when not given), then goes back to the graph from the
- * stash's details or diff if the stash is gone (popped or dropped).
+ * stash's details or diff if the stash is gone (popped or dropped), as the refs refreshed after
+ * the action say: also when the refresh outlasts the action (a slow connection).
  */
 const onStash = async <R>(repo: RepoId, stash: StashRef | undefined, action: () => Promise<R>) => {
   const hash =
     stash?.hash ?? refs(repo)?.stashes.find((s) => s.index === (stash?.index ?? 0))?.hash;
-  const result = await action();
-  // The refs were refreshed when the action finished.
-  if (hash && refs(repo)?.stashes.some((s) => s.hash === hash) === false)
-    useRepoUiStore.getState().forgetCommit(repo, hash);
-  return result;
+  if (!hash) return action();
+  const leave = () => {
+    if (refs(repo)?.stashes.some((s) => s.hash === hash) === false)
+      useRepoUiStore.getState().forgetCommit(repo, hash);
+  };
+  const refsKey = hashKey(keys.refs(repo));
+  let done = false;
+  let refreshed = false;
+  const stop = queryClient.getQueryCache().subscribe((e) => {
+    if (e.query.queryHash !== refsKey || e.type !== "updated" || e.action.type !== "success")
+      return;
+    refreshed = true;
+    if (!done) return;
+    stop();
+    leave();
+  });
+  try {
+    return await action();
+  } finally {
+    done = true;
+    if (refreshed) {
+      stop();
+      leave();
+    }
+  }
 };
 const info = (repo: RepoId) => queryClient.getQueryData<RepoInfo>(keys.info(repo));
 const defaultRemote = (repo: RepoId) => {

@@ -110,7 +110,9 @@ export const useWipLane = (repo: RepoId, info: GraphInfo | undefined, head: stri
       !info || head === null
         ? skipToken
         : ({ signal }) => read(signal, "repo.wipLane", repo, info.version, head),
-    placeholderData: keepPreviousData,
+    // The lane for the same HEAD in the previous graph, while this one's loads (as its rows do).
+    placeholderData: (previous, query) =>
+      head !== null && query?.queryKey[5] === head ? previous : undefined,
   });
 
 // Commits never change and change events leave these queries alone, but a commit's file list

@@ -212,8 +212,9 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
   const lastIndex = Math.max(0, (items.at(-1)?.index ?? 0) - offset + 1);
   const { rows, current } = useGraphRows(repo, info, firstIndex, lastIndex);
   // The WIP row's line runs down to HEAD, through the rows above it.
-  const { data: wipData } = useWipLane(repo, info, offset > 0 ? headHash : null);
-  const wip = offset > 0 ? (wipData ?? null) : null;
+  const wipHead = offset > 0 ? headHash : null;
+  const { data: wipData } = useWipLane(repo, info, wipHead);
+  const wip = wipHead === null ? null : (wipData ?? null);
   const wipLaneAt = (index: number) => (wip && index <= wip.index ? wip.lane : null);
 
   // What callbacks and queued steps (below) see: the latest render's rows and graph version,

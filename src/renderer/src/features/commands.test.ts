@@ -392,6 +392,19 @@ it("goes back to the graph from a stash that is gone", async () => {
   await commands.pop(repo);
   expect(ui().selection).toBeNull();
   expect(ui().diff).toBeNull();
+
+  // A refresh that lands after the action ended (it waits for so long only).
+  setStashes([stash(0)]);
+  mocks.api.mockImplementationOnce(async () => {});
+  useRepoUiStore.getState().select(repo, { kind: "commit", hash: "s0" });
+  await commands.dropStash(repo, { index: 0, hash: "s0" });
+  expect(ui().selection).toEqual({ kind: "commit", hash: "s0" });
+  setStashes([]);
+  expect(ui().selection).toBeNull();
+  // Only that refresh counts.
+  useRepoUiStore.getState().select(repo, { kind: "commit", hash: "s0" });
+  setStashes([]);
+  expect(ui().selection).toEqual({ kind: "commit", hash: "s0" });
 });
 
 it("goes back to the graph from working tree changes that are gone", async () => {
