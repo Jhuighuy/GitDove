@@ -1,4 +1,5 @@
 /** Merges, rebases, cherry-picks and reverts that stop on conflicts, and how they end. See `repository.fixture.ts` for the setup. */
+import { findConflicts, resolvePatch } from "@shared/diff/conflicts";
 import { describe, expect, it } from "vitest";
 import { noShell, targets, useRepoFixture } from "./repository.fixture";
 
@@ -50,6 +51,47 @@ describe.skipIf(noShell).each(targets)("Repository conflicts on %s", (hostId) =>
       expect(working.hunks[0]!.oldStart).toBe(1);
       const staged = await run(t.repo.diff({ kind: "staged", path: "f.txt" }));
       expect(staged).toMatchObject({ hunks: [], readOnly: "conflict" });
+    });
+
+    it("resolves blocks of conflict markers with patches", async () => {
+      await run(t.repo.createBranch("side", "HEAD", true));
+      await sh("printf 'a\\nS1\\nc\\nd\\ne\\nf\\ng\\nh\\nS2\\n' > f.txt && git commit -qam side");
+      await run(t.repo.checkout("main"));
+      await sh("printf 'a\\nM1\\nc\\nd\\ne\\nf\\ng\\nh\\nM2\\n' > f.txt && git commit -qam main");
+      await fails(t.repo.merge("side", {}));
+      const target = { kind: "unstaged", path: "f.txt" } as const;
+      const diff = await run(t.repo.diff(target));
+      const conflicts = findConflicts(diff);
+      expect(conflicts.map((c) => [c.current, c.incoming])).toEqual([
+        ["HEAD", "side"],
+        ["HEAD", "side"],
+      ]);
+      // One block, then the other in the diff made after.
+      await run(
+        t.repo.applyPatch(resolvePatch(diff, [{ conflict: conflicts[1]!, choice: "both" }])!, {
+          cached: false,
+          reverse: false,
+        }),
+      );
+      const next = await run(t.repo.diff(target));
+      const [first] = findConflicts(next);
+      await run(
+        t.repo.applyPatch(resolvePatch(next, [{ conflict: first!, choice: "incoming" }])!, {
+          cached: false,
+          reverse: false,
+        }),
+      );
+      expect(await sh("cat f.txt")).toBe("a\nS1\nc\nd\ne\nf\ng\nh\nM2\nS2");
+      // The file stays conflicted until it is marked resolved.
+      expect((await run(t.repo.status())).conflicted.map((f) => f.path)).toEqual(["f.txt"]);
+      // A patch from an outdated diff does not apply.
+      await fails(
+        t.repo.applyPatch(resolvePatch(diff, [{ conflict: conflicts[0]!, choice: "current" }])!, {
+          cached: false,
+          reverse: false,
+        }),
+      );
+      expect(await sh("cat f.txt")).toContain("S1");
     });
 
     it("aborts and continues a rebase", async () => {

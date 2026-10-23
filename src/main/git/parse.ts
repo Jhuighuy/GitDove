@@ -460,7 +460,8 @@ const isSectionOf = (lines: readonly string[], path: string): boolean => {
  * Parses the diff of a single file. Output with several sections (e.g. a staged rename below
  * the similarity threshold, which diffs as a deletion and an addition) is narrowed to the
  * section of `path`. A combined diff of a conflicted file (`diff --cc`) is shown against the
- * first parent ("ours") and is read-only, as are submodules and text that is not valid UTF-8.
+ * first parent ("ours") and is read-only, as are submodules and text that is not valid UTF-8
+ * (which takes precedence, since conflicts are resolved with patches made from the text).
  * When the output was cut short, the last, incomplete hunk is dropped.
  */
 export const parseDiff = (
@@ -600,14 +601,13 @@ export const parseDiff = (
   flush();
   if (mode === GITLINK_MODE) gitlink = true;
 
-  const readOnly =
-    combined || unmerged
+  const readOnly = decoded.lossy
+    ? "encoding"
+    : combined || unmerged
       ? "conflict"
       : gitlink
         ? "submodule"
-        : decoded.lossy
-          ? "encoding"
-          : undefined;
+        : undefined;
   return {
     path,
     oldPath,

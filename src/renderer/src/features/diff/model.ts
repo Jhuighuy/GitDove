@@ -1,4 +1,10 @@
 import type { DiffLineKind, FileDiff } from "@shared/domain";
+import {
+  type Conflict,
+  conflictPart,
+  type ConflictPart,
+  findConflicts,
+} from "@shared/diff/conflicts";
 
 /** One diff line, flattened across hunks. */
 export interface Line {
@@ -16,11 +22,15 @@ export interface Line {
   /** Index into `DiffModel.sides[side]` used for highlighting, or -1. */
   readonly side: 0 | 1;
   readonly sideIndex: number;
+  /** The part of a block of conflict markers the line is in, if any. */
+  readonly conflict: ConflictPart | null;
 }
 
 export type Row =
   | { readonly type: "hunk"; readonly hunk: number }
   | { readonly type: "line"; readonly id: number }
+  /** The actions on a block of conflict markers, above its first line. */
+  | { readonly type: "conflict"; readonly conflict: number }
   /** A split view row; -1 marks an empty cell. */
   | { readonly type: "split"; readonly left: number; readonly right: number };
 
@@ -37,6 +47,8 @@ export interface DiffModel {
   readonly lines: readonly Line[];
   /** Id of each hunk's first line. */
   readonly hunkStart: readonly number[];
+  /** Blocks of conflict markers, in a conflicted file's working tree diff. */
+  readonly conflicts: readonly Conflict[];
   readonly unified: readonly Row[];
   readonly split: readonly Row[];
   /** Old (0) and new (1) file contents covered by the hunks, for highlighting. */
@@ -99,6 +111,7 @@ export const capLines = (diff: FileDiff, max = MAX_LINES): FileDiff => {
 
 export const buildModel = (full: FileDiff): DiffModel => {
   const diff = capLines(full);
+  const conflicts = findConflicts(diff);
   const lines: Line[] = [];
   const hunkStart: number[] = [];
   const unified: Row[] = [];
@@ -116,6 +129,7 @@ export const buildModel = (full: FileDiff): DiffModel => {
     resets[1].push(sides[1].length);
     maxNo = Math.max(maxNo, hunk.oldStart + hunk.oldLines, hunk.newStart + hunk.newLines);
 
+    const blocks = conflicts.flatMap((c, i) => (c.hunk === h ? [{ c, i }] : []));
     // Deletions and additions of the current block of changes.
     let dels: number[] = [];
     let adds: number[] = [];
@@ -146,7 +160,15 @@ export const buildModel = (full: FileDiff): DiffModel => {
         sides[0].push(l.text);
         sideIndex = sides[1].push(l.text) - 1;
       }
-      lines.push({ id, hunk: h, index, ...l, pair: -1, side, sideIndex });
+      const block = blocks.find(({ c }) => index >= c.start && index <= c.end);
+      if (block?.c.start === index) {
+        // Split rows of the lines before go before the actions.
+        flushBlock();
+        unified.push({ type: "conflict", conflict: block.i });
+        split.push({ type: "conflict", conflict: block.i });
+      }
+      const conflict = block ? conflictPart(block.c, index) : null;
+      lines.push({ id, hunk: h, index, ...l, pair: -1, side, sideIndex, conflict });
       unified.push({ type: "line", id });
       // A line is at most TAB_SIZE columns per character wide.
       if (l.text.length * TAB_SIZE > width) width = Math.max(width, displayWidth(l.text));
@@ -177,6 +199,7 @@ export const buildModel = (full: FileDiff): DiffModel => {
     diff,
     lines,
     hunkStart,
+    conflicts,
     unified,
     split,
     sides,

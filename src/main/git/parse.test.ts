@@ -291,6 +291,11 @@ describe("parseDiff", () => {
     expect(d.readOnly).toBe("encoding");
     expect(d.hunks[0]!.lines[0]!.text).toBe("caf�");
     expect(parseDiff(head, "f", null, false).readOnly).toBeUndefined();
+    // A conflict in such text says so too: its markers are not resolved from replaced text.
+    const cc = new TextEncoder().encode(lines("diff --cc f", "@@@ -1,1 -1,1 +1,1 @@@", "++caf"));
+    expect(
+      parseDiff(new Uint8Array([...cc.subarray(0, -1), 0xe9, 10]), "f", null, false),
+    ).toMatchObject({ readOnly: "encoding" });
   });
 
   it("drops the incomplete last hunk of a truncated diff", () => {

@@ -16,14 +16,21 @@ import { type DiffMode, useLayout, useRepoUiStore } from "@/stores/repo-ui";
 import { commands } from "../commands";
 import type { ThemeKind } from "./highlight-protocol";
 import { type DocHighlighter, tokenStyle, useHighlighter } from "./highlight";
+import {
+  type Conflict,
+  type ConflictChoice,
+  type ConflictPart,
+  resolvePatch,
+} from "@shared/diff/conflicts";
 import { copiedText, type TextPoint } from "./copy";
 import { ImageDiff } from "./ImageDiff";
 import { stepTarget, useSiblingFiles } from "./targets";
-import { buildModel, type DiffModel, isChange, type Line, MAX_TEXT } from "./model";
+import { buildModel, type DiffModel, isChange, type Line, MAX_TEXT, type Row } from "./model";
 import { type DiffViewId, fileKind, viewFor } from "./views";
 
 const LINE_HEIGHT = 20;
 const HUNK_HEIGHT = 28;
+const CONFLICT_HEIGHT = 26;
 /** Rows rendered (and highlighted) beyond each edge of the view. */
 const OVERSCAN = 30;
 /** How far, in pixels, the pointer can move during a click on a line's text. */
@@ -65,7 +72,7 @@ const ownsArrows = (el: EventTarget | null) =>
 
 /** Why the hunks and lines of a diff cannot be staged, unstaged or discarded. */
 const READ_ONLY: Record<NonNullable<FileDiff["readOnly"]>, string> = {
-  conflict: "Resolve the conflict, then stage the file as a whole.",
+  conflict: "Resolve the conflicts, then mark the file resolved.",
   submodule: "Submodule changes are staged as a whole.",
   encoding: "The file is not UTF-8 text: stage or discard it as a whole.",
 };
@@ -136,6 +143,9 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   const readOnly = current ? data.readOnly : undefined;
   const hunkActions = current && !readOnly ? actionsFor(target, "Hunk") : [];
   const lineActions = current && !readOnly ? actionsFor(target, "Lines") : [];
+  // A conflicted file's working tree diff: its blocks of conflict markers can be resolved.
+  const conflicted = readOnly === "conflict" && target.kind === "unstaged";
+  const conflicts = conflicted && model ? model.conflicts : [];
 
   // `applyPatch` refreshes the working tree's diffs, this one included, before it returns.
   const apply = async (a: PatchAction, patch: string, onApplied?: () => void) => {
@@ -157,6 +167,29 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
   const applyHunk = (hunk: number, a: PatchAction) => {
     if (!model || !current) return;
     void apply(a, hunkPatch(model.diff, hunk, a.reverse));
+  };
+
+  const resolve = (label: string, choices: Parameters<typeof resolvePatch>[1]) => {
+    if (!model || !current) return;
+    const patch = resolvePatch(model.diff, choices);
+    if (!patch) return;
+    setApplying(true);
+    void commands
+      .resolveConflicts(repo, label, patch, target.path)
+      .finally(() => setApplying(false));
+  };
+  const resolveOne = (c: Conflict, choice: ConflictChoice) =>
+    resolve(CHOICES[choice].done, [{ conflict: c, choice }]);
+  const resolveAll = (choice: ConflictChoice) =>
+    resolve(
+      CHOICES[choice].done,
+      conflicts.map((conflict) => ({ conflict, choice })),
+    );
+  const markResolved = async () => {
+    const path = target.path;
+    const r = await commands.markResolved(repo, path);
+    // The file has no unstaged changes left: show what will be committed.
+    if (r.ok) useRepoUiStore.getState().openDiff(repo, { kind: "staged", path });
   };
 
   const applyLines = (a: PatchAction) => {
@@ -187,12 +220,20 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
               : `${shortHash(target.base)}..${shortHash(target.hash)}`}
         </span>
         {textual && (isPending || isPlaceholderData) && <Spinner className="size-3.5" />}
-        {textual && readOnly && (
+        {textual && readOnly && !conflicted && (
           <span className="text-muted-foreground shrink-0 text-[11px]" title={READ_ONLY[readOnly]}>
             Read-only
           </span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1">
+          {textual && conflicted && (
+            <ConflictBar
+              count={conflicts.length}
+              onAll={resolveAll}
+              onResolved={() => void markResolved()}
+              write={write}
+            />
+          )}
           {textual && selection.size > 0 && (
             <SelectionBar
               count={selection.size}
@@ -218,6 +259,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
           mode={mode}
           actions={hunkActions}
           onAction={applyHunk}
+          onResolve={conflicted ? resolveOne : null}
           write={write}
           selectable={lineActions.length > 0}
           selection={selection}
@@ -261,6 +303,71 @@ function SelectionBar({
             {a.label}
           </Button>
         ))}
+      </BusyHint>
+      <span className="bg-border mx-1 h-4 w-px" />
+    </>
+  );
+}
+
+/** Conflict resolutions: what a button says, and what the change is called once made. */
+const CHOICES: Record<ConflictChoice, { label: string; all: string; done: string }> = {
+  current: {
+    label: "Accept Current",
+    all: "Accept All Current",
+    done: "Accepted current change",
+  },
+  incoming: {
+    label: "Accept Incoming",
+    all: "Accept All Incoming",
+    done: "Accepted incoming change",
+  },
+  both: { label: "Accept Both", all: "Accept All Both", done: "Accepted both changes" },
+};
+
+/** Header actions on a conflicted file: resolve every block one way, or mark it resolved. */
+function ConflictBar({
+  count,
+  onAll,
+  onResolved,
+  write,
+}: Readonly<{
+  count: number;
+  onAll: (choice: ConflictChoice) => void;
+  onResolved: () => void;
+  write: WriteProps;
+}>) {
+  return (
+    <>
+      <span
+        className={cn("mr-1 text-[11px]", count > 0 ? "text-destructive" : "text-muted-foreground")}
+        title={READ_ONLY.conflict}
+      >
+        {count === 0 ? "No conflicts left" : count === 1 ? "1 conflict" : `${count} conflicts`}
+      </span>
+      <BusyHint reason={write.title} className="gap-1">
+        {count > 1 &&
+          (["current", "incoming"] as const).map((choice) => (
+            <Button
+              key={choice}
+              size="xs"
+              variant="secondary"
+              className="h-6 rounded-md px-2 text-[11px]"
+              disabled={write.disabled}
+              onClick={() => onAll(choice)}
+            >
+              {CHOICES[choice].all}
+            </Button>
+          ))}
+        <Button
+          size="xs"
+          variant={count === 0 ? "default" : "secondary"}
+          className="h-6 rounded-md px-2 text-[11px]"
+          disabled={write.disabled}
+          title={count > 0 ? "Stage the file as it is, conflict markers included" : undefined}
+          onClick={onResolved}
+        >
+          Mark Resolved
+        </Button>
       </BusyHint>
       <span className="bg-border mx-1 h-4 w-px" />
     </>
@@ -378,6 +485,7 @@ function DiffBody({
   mode,
   actions,
   onAction,
+  onResolve,
   write,
   selectable: canSelect,
   selection,
@@ -389,6 +497,8 @@ function DiffBody({
   mode: DiffMode;
   actions: PatchAction[];
   onAction: (hunk: number, a: PatchAction) => void;
+  /** Resolves a block of conflict markers, when they can be. */
+  onResolve: ((c: Conflict, choice: ConflictChoice) => void) | null;
   write: WriteProps;
   selectable: boolean;
   selection: ReadonlySet<number>;
@@ -451,9 +561,11 @@ function DiffBody({
       const row = rows[i]!;
       return row.type === "hunk"
         ? `h${row.hunk}`
-        : row.type === "line"
-          ? row.id
-          : `${row.left}:${row.right}`;
+        : row.type === "conflict"
+          ? `c${row.conflict}`
+          : row.type === "line"
+            ? row.id
+            : `${row.left}:${row.right}`;
     },
     [rows],
   );
@@ -461,7 +573,7 @@ function DiffBody({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     getItemKey,
-    estimateSize: (i) => (rows[i]!.type === "hunk" ? HUNK_HEIGHT : LINE_HEIGHT),
+    estimateSize: (i) => ROW_HEIGHT[rows[i]!.type],
     overscan: OVERSCAN,
     rangeExtractor: (range) => {
       const indexes = defaultRangeExtractor(range);
@@ -713,6 +825,18 @@ function DiffBody({
                 </div>
               );
             }
+            if (row.type === "conflict") {
+              return (
+                <ConflictRow
+                  key={v.key}
+                  row={v.index}
+                  style={style}
+                  conflict={model.conflicts[row.conflict]!}
+                  onResolve={onResolve}
+                  write={write}
+                />
+              );
+            }
             if (row.type === "line") {
               return <UnifiedLine key={v.key} row={v.index} style={style} id={row.id} ctx={ctx} />;
             }
@@ -754,6 +878,69 @@ function DiffBody({
   );
 }
 
+const ROW_HEIGHT: Record<Row["type"], number> = {
+  hunk: HUNK_HEIGHT,
+  conflict: CONFLICT_HEIGHT,
+  line: LINE_HEIGHT,
+  split: LINE_HEIGHT,
+};
+
+/** The actions above a block of conflict markers, as in VS Code. */
+function ConflictRow({
+  row,
+  style,
+  conflict,
+  onResolve,
+  write,
+}: {
+  row: number;
+  style: React.CSSProperties;
+  conflict: Conflict;
+  onResolve: ((c: Conflict, choice: ConflictChoice) => void) | null;
+  write: WriteProps;
+}) {
+  const titles: Record<ConflictChoice, string> = {
+    current: `Keep ${conflict.current || "the current change"}`,
+    incoming: `Keep ${conflict.incoming || "the incoming change"}`,
+    both: "Keep both, current first",
+  };
+  return (
+    <div
+      data-row={row}
+      style={style}
+      className="absolute top-0 left-0 flex w-full items-end px-3 pb-0.5 font-sans"
+    >
+      <span className="sticky left-3 flex items-center gap-1" title={write.title}>
+        {onResolve &&
+          (["current", "incoming", "both"] as const).map((choice) => (
+            <Button
+              key={choice}
+              size="xs"
+              variant="ghost"
+              className={cn(
+                "h-5 rounded-md px-1.5 text-[11px]",
+                CONFLICT_STYLE[choice === "both" ? "marker" : choice].button,
+              )}
+              disabled={write.disabled}
+              title={titles[choice]}
+              onClick={() => onResolve(conflict, choice)}
+            >
+              {CHOICES[choice].label}
+            </Button>
+          ))}
+      </span>
+    </div>
+  );
+}
+
+/** Colors of the parts of a block of conflict markers: current green, incoming blue. */
+const CONFLICT_STYLE: Record<ConflictPart, { line: string; button: string }> = {
+  marker: { line: "bg-muted text-muted-foreground", button: "text-foreground" },
+  current: { line: "bg-success/12", button: "text-success hover:text-success" },
+  base: { line: "bg-muted/50", button: "" },
+  incoming: { line: "bg-info/15", button: "text-info hover:text-info" },
+};
+
 interface CellContext {
   readonly model: DiffModel;
   readonly hl: DocHighlighter | null;
@@ -784,11 +971,13 @@ const textPoint = (node: Node, offset: number, isEnd: boolean): TextPoint | null
 const lineBg = (l: Line, selected: boolean) =>
   selected
     ? "bg-selected"
-    : l.kind === "add"
-      ? "bg-success/12"
-      : l.kind === "del"
-        ? "bg-destructive/12"
-        : undefined;
+    : l.conflict
+      ? CONFLICT_STYLE[l.conflict].line
+      : l.kind === "add"
+        ? "bg-success/12"
+        : l.kind === "del"
+          ? "bg-destructive/12"
+          : undefined;
 
 const emphasisClass = (l: Line) =>
   l.kind === "add" ? "rounded-[2px] bg-success/30" : "rounded-[2px] bg-destructive/30";
