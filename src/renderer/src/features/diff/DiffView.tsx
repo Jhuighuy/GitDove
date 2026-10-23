@@ -229,6 +229,7 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
           {textual && conflicted && (
             <ConflictBar
               count={conflicts.length}
+              complete={!model?.diff.truncated}
               onAll={resolveAll}
               onResolved={() => void markResolved()}
               write={write}
@@ -324,25 +325,32 @@ const CHOICES: Record<ConflictChoice, { label: string; all: string; done: string
   both: { label: "Accept Both", all: "Accept All Both", done: "Accepted both changes" },
 };
 
-/** Header actions on a conflicted file: resolve every block one way, or mark it resolved. */
+/**
+ * Header actions on a conflicted file: resolve every block one way, or mark it resolved. The count
+ * of a truncated diff is only a lower bound: blocks past the cut are not seen.
+ */
 function ConflictBar({
   count,
+  complete,
   onAll,
   onResolved,
   write,
 }: Readonly<{
   count: number;
+  complete: boolean;
   onAll: (choice: ConflictChoice) => void;
   onResolved: () => void;
   write: WriteProps;
 }>) {
+  const resolved = complete && count === 0;
+  const counted = `${count}${complete ? "" : "+"} ${count === 1 && complete ? "conflict" : "conflicts"}`;
   return (
     <>
       <span
-        className={cn("mr-1 text-[11px]", count > 0 ? "text-destructive" : "text-muted-foreground")}
-        title={READ_ONLY.conflict}
+        className={cn("mr-1 text-[11px]", resolved ? "text-muted-foreground" : "text-destructive")}
+        title={complete ? READ_ONLY.conflict : "The file is too large to find every conflict."}
       >
-        {count === 0 ? "No conflicts left" : count === 1 ? "1 conflict" : `${count} conflicts`}
+        {resolved ? "No conflicts left" : count === 0 ? "Conflicts not counted" : counted}
       </span>
       <BusyHint reason={write.title} className="gap-1">
         {count > 1 &&
@@ -360,10 +368,10 @@ function ConflictBar({
           ))}
         <Button
           size="xs"
-          variant={count === 0 ? "default" : "secondary"}
+          variant={resolved ? "default" : "secondary"}
           className="h-6 rounded-md px-2 text-[11px]"
           disabled={write.disabled}
-          title={count > 0 ? "Stage the file as it is, conflict markers included" : undefined}
+          title={resolved ? undefined : "Stage the file as it is, conflict markers included"}
           onClick={onResolved}
         >
           Mark Resolved

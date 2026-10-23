@@ -632,3 +632,18 @@ it("offers no conflict actions outside a conflicted file's working tree diff", a
   expect(() => buttonByText("Accept Current")).toThrow();
   expect(container.textContent).not.toContain("Mark Resolved");
 });
+
+it("does not claim a truncated conflicted diff has no conflicts left", async () => {
+  mocks.diffs.set("big.txt", diff("big.txt", { readOnly: "conflict", truncated: true }));
+  await render({ kind: "unstaged", path: "big.txt" });
+  expect(container.textContent).toContain("Conflicts not counted");
+  expect(container.textContent).not.toContain("No conflicts left");
+  expect(buttonByText("Mark Resolved").title).toBe(
+    "Stage the file as it is, conflict markers included",
+  );
+
+  mocks.diffs.set("done.txt", diff("done.txt", { readOnly: "conflict" }));
+  await render({ kind: "unstaged", path: "done.txt" });
+  expect(container.textContent).toContain("No conflicts left");
+  expect(buttonByText("Mark Resolved").title).toBe("");
+});
