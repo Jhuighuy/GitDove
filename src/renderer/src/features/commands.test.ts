@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import type { Ref, RefsSnapshot, RepoInfo } from "@shared/domain";
+import type { DiffTarget, Ref, RefsSnapshot, RepoInfo } from "@shared/domain";
 import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -355,6 +355,71 @@ it("confirms dropping a stash", async () => {
   expect(methods()).toEqual([]);
   await commands.dropStash(repo, { index: 3, hash: "s3" });
   expect(apiCalls("repo.stashDrop")).toEqual([[repo, 3, "s3"]]);
+});
+
+it("goes back to the graph from a stash that is gone", async () => {
+  const stash = (index: number) => ({
+    index,
+    name: `stash@{${index}}`,
+    hash: `s${index}`,
+    message: "WIP",
+    time: 0,
+  });
+  const setStashes = (stashes: ReturnType<typeof stash>[]) =>
+    queryClient.setQueryData<RefsSnapshot>(keys.refs(repo), (r) => ({ ...r!, stashes }));
+  setStashes([stash(0), stash(1)]);
+  const ui = () => useRepoUiStore.getState().byRepo[repo]!;
+  const diffOf = (hash: string) => ({ kind: "commit" as const, hash, path: "a.ts" });
+  // The refs are refreshed before the action ends.
+  mocks.api.mockImplementation(async (method: string) => {
+    if (method === "repo.stashDrop") setStashes([stash(0)]);
+    if (method === "repo.stashPop") setStashes([]);
+  });
+
+  useRepoUiStore.getState().select(repo, { kind: "commit", hash: "s1" });
+  useRepoUiStore.getState().openDiff(repo, diffOf("s1"));
+  await commands.dropStash(repo, { index: 1, hash: "s1" });
+  expect(ui().selection).toBeNull();
+  expect(ui().diff).toBeNull();
+
+  // A pop that keeps the stash (e.g. on conflicts) stays on it.
+  mocks.api.mockImplementationOnce(async () => {});
+  useRepoUiStore.getState().select(repo, { kind: "commit", hash: "s0" });
+  await commands.pop(repo);
+  expect(ui().selection).toEqual({ kind: "commit", hash: "s0" });
+  // Popping the latest stash, which is s0.
+  useRepoUiStore.getState().openDiff(repo, diffOf("s0"));
+  await commands.pop(repo);
+  expect(ui().selection).toBeNull();
+  expect(ui().diff).toBeNull();
+});
+
+it("goes back to the graph from working tree changes that are gone", async () => {
+  const ui = () => useRepoUiStore.getState().byRepo[repo]!;
+  const open = (diff: DiffTarget) => useRepoUiStore.getState().openDiff(repo, diff);
+  useRepoUiStore.getState().select(repo, { kind: "wip" });
+
+  open({ kind: "staged", path: "a.ts" });
+  await commands.stash(repo);
+  expect(ui().diff).toBeNull();
+
+  // Discarding other files, or the unstaged changes of a staged one, keeps the diff.
+  open({ kind: "unstaged", path: "a.ts" });
+  await commands.discard(repo, ["b.ts"], []);
+  expect(ui().diff).toEqual({ kind: "unstaged", path: "a.ts" });
+  await commands.discard(repo, ["a.ts"], []);
+  expect(ui().diff).toBeNull();
+  open({ kind: "staged", path: "a.ts" });
+  await commands.discard(repo, ["a.ts"], []);
+  expect(ui().diff).toEqual({ kind: "staged", path: "a.ts" });
+
+  await commands.discardAll(repo);
+  expect(ui().diff).toBeNull();
+  // A failed action leaves it.
+  open({ kind: "unstaged", path: "a.ts" });
+  mocks.api.mockRejectedValueOnce(new Error("no"));
+  await commands.discardAll(repo);
+  expect(ui().diff).toEqual({ kind: "unstaged", path: "a.ts" });
 });
 
 it("creates a branch from a stash", async () => {

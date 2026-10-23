@@ -432,7 +432,10 @@ function CommitBox({
       () => api("repo.commit", repo, draftMessage(draft), { amend: draft.amend }),
       { status: draft.amend ? "Amending commit…" : "Committing…" },
     );
-    if (result.ok) useDrafts.getState().clear(repo);
+    if (!result.ok) return;
+    useDrafts.getState().clear(repo);
+    // What the diff showed is committed now.
+    useRepoUiStore.getState().closeWipDiff(repo);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {

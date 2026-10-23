@@ -45,6 +45,13 @@ interface RepoUiState {
   readonly openDiff: (repo: RepoId, diff: DiffTarget | null) => void;
   /** Shows the working tree changes and focuses the commit message. */
   readonly focusCommit: (repo: RepoId) => void;
+  /**
+   * Goes back to the graph from a diff of working tree changes that are gone (committed, stashed
+   * or discarded), or only from one of `paths` (unstaged changes that were discarded).
+   */
+  readonly closeWipDiff: (repo: RepoId, paths?: readonly string[]) => void;
+  /** Goes back to the graph from a commit that is gone (a dropped stash): its details or diff. */
+  readonly forgetCommit: (repo: RepoId, hash: string) => void;
   /** Drops the state of a closed repository. */
   readonly forget: (repo: RepoId) => void;
 }
@@ -84,6 +91,24 @@ export const useRepoUiStore = create<RepoUiState>()((set) => ({
           },
         },
       };
+    }),
+  closeWipDiff: (repo, paths) =>
+    set((s) => {
+      const cur = s.byRepo[repo];
+      const diff = cur?.diff;
+      if (!diff || diff.kind === "commit") return s;
+      if (paths && (diff.kind !== "unstaged" || !paths.includes(diff.path))) return s;
+      return { byRepo: { ...s.byRepo, [repo]: { ...cur, diff: null } } };
+    }),
+  forgetCommit: (repo, hash) =>
+    set((s) => {
+      const cur = s.byRepo[repo];
+      if (!cur) return s;
+      if (selectedHashes(cur.selection).has(hash))
+        return { byRepo: { ...s.byRepo, [repo]: { ...cur, selection: null, diff: null } } };
+      if (cur.diff?.kind === "commit" && cur.diff.hash === hash)
+        return { byRepo: { ...s.byRepo, [repo]: { ...cur, diff: null } } };
+      return s;
     }),
   forget: (repo) =>
     set((s) => {

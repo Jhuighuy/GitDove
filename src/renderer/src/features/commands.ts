@@ -28,6 +28,20 @@ const commitsLabel = (hashes: readonly string[]) =>
 export type StashRef = Pick<Stash, "index"> & Partial<Pick<Stash, "hash">>;
 /** How long a discard can be undone from its toast. */
 const UNDO_MS = 15_000;
+
+/**
+ * Runs `action` on `stash` (the latest one when not given), then goes back to the graph from the
+ * stash's details or diff if the stash is gone (popped or dropped).
+ */
+const onStash = async <R>(repo: RepoId, stash: StashRef | undefined, action: () => Promise<R>) => {
+  const hash =
+    stash?.hash ?? refs(repo)?.stashes.find((s) => s.index === (stash?.index ?? 0))?.hash;
+  const result = await action();
+  // The refs were refreshed when the action finished.
+  if (hash && refs(repo)?.stashes.some((s) => s.hash === hash) === false)
+    useRepoUiStore.getState().forgetCommit(repo, hash);
+  return result;
+};
 const info = (repo: RepoId) => queryClient.getQueryData<RepoInfo>(keys.info(repo));
 const defaultRemote = (repo: RepoId) => {
   const remotes = refs(repo)?.remotes ?? [];
@@ -109,10 +123,11 @@ export const commands = {
   },
 
   stash: async (repo: RepoId) => {
-    await runAction(repo, "Stash", () => api("repo.stash", repo, null, true), {
+    const result = await runAction(repo, "Stash", () => api("repo.stash", repo, null, true), {
       status: "Stashing changes…",
       success: "Changes stashed",
     });
+    if (result.ok) useRepoUiStore.getState().closeWipDiff(repo);
   },
 
   // Stashes are named by index and hash: when the index no longer names that stash (one was
@@ -120,9 +135,14 @@ export const commands = {
 
   /** Pops `stash`, or the latest stash, whichever it is, when none is given. */
   pop: (repo: RepoId, stash?: StashRef) =>
-    runAction(repo, "Pop stash", () => api("repo.stashPop", repo, stash?.index ?? 0, stash?.hash), {
-      status: `Popping stash@{${stash?.index ?? 0}}…`,
-    }),
+    onStash(repo, stash, () =>
+      runAction(
+        repo,
+        "Pop stash",
+        () => api("repo.stashPop", repo, stash?.index ?? 0, stash?.hash),
+        { status: `Popping stash@{${stash?.index ?? 0}}…` },
+      ),
+    ),
 
   applyStash: (repo: RepoId, stash: StashRef) =>
     runAction(repo, "Apply stash", () => api("repo.stashApply", repo, stash.index, stash.hash), {
@@ -138,8 +158,8 @@ export const commands = {
       destructive: true,
     });
     if (ok)
-      await runAction(repo, "Delete stash", () =>
-        api("repo.stashDrop", repo, stash.index, stash.hash),
+      await onStash(repo, stash, () =>
+        runAction(repo, "Delete stash", () => api("repo.stashDrop", repo, stash.index, stash.hash)),
       );
   },
 
@@ -155,11 +175,13 @@ export const commands = {
       validate: validateRefName,
     });
     if (!r) return;
-    await runAction(
-      repo,
-      "Create branch",
-      () => api("repo.stashBranch", repo, r.value, stash.index, stash.hash),
-      { status: `Creating ${r.value} from stash@{${stash.index}}…` },
+    await onStash(repo, stash, () =>
+      runAction(
+        repo,
+        "Create branch",
+        () => api("repo.stashBranch", repo, r.value, stash.index, stash.hash),
+        { status: `Creating ${r.value} from stash@{${stash.index}}…` },
+      ),
     );
   },
 
@@ -402,9 +424,13 @@ export const commands = {
       destructive: true,
     });
     if (ok) {
-      await runAction(repo, "Discard", () => api("repo.discard", repo, paths, untracked), {
-        status: "Discarding changes…",
-      });
+      const result = await runAction(
+        repo,
+        "Discard",
+        () => api("repo.discard", repo, paths, untracked),
+        { status: "Discarding changes…" },
+      );
+      if (result.ok) useRepoUiStore.getState().closeWipDiff(repo, [...paths, ...untracked]);
     }
   },
 
@@ -418,9 +444,10 @@ export const commands = {
       destructive: true,
     });
     if (ok) {
-      await runAction(repo, "Discard all", () => api("repo.discardAll", repo), {
+      const result = await runAction(repo, "Discard all", () => api("repo.discardAll", repo), {
         status: "Discarding all changes…",
       });
+      if (result.ok) useRepoUiStore.getState().closeWipDiff(repo);
     }
   },
 
