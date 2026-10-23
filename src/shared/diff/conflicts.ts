@@ -39,7 +39,7 @@ const inFile = (l: DiffLine) => l.newNo !== null;
 /** The marker's label if `text` is a marker of `char` repeated `size` times, else null. */
 const marker = (text: string, char: string, size: number): string | null => {
   const t = text.endsWith("\r") ? text.slice(0, -1) : text;
-  if (t.length < size || t.charCodeAt(size) === char.charCodeAt(0)) return null;
+  if (t.length < size || t[size] === char) return null;
   for (let i = 0; i < size; i++) if (t[i] !== char) return null;
   if (t.length === size) return "";
   return t[size] === " " ? t.slice(size + 1) : null;
@@ -48,33 +48,47 @@ const marker = (text: string, char: string, size: number): string | null => {
 /** A start marker: seven `<` by default, but the `conflict-marker-size` attribute can change it. */
 const START_RE = /^(<+)(?: |\r?$)/;
 
+/**
+ * The block whose start marker of `size` is line `start`, if it is complete, and the line to go
+ * on from. Another start marker before the end abandons the block for that one.
+ */
+const blockAt = (
+  lines: readonly DiffLine[],
+  start: number,
+  size: number,
+): { block: Omit<Conflict, "hunk" | "current"> | null; next: number } => {
+  let base = -1;
+  let separator = -1;
+  for (let j = start + 1; j < lines.length; j++) {
+    const l = lines[j]!;
+    if (!inFile(l)) continue;
+    if (marker(l.text, "<", size) !== null) return { block: null, next: j };
+    if (separator < 0) {
+      if (base < 0 && marker(l.text, "|", size) !== null) base = j;
+      else if (l.text.replace(/\r$/, "") === "=".repeat(size)) separator = j;
+      continue;
+    }
+    const incoming = marker(l.text, ">", size);
+    if (incoming !== null) {
+      return { block: { start, base, separator, end: j, incoming }, next: j + 1 };
+    }
+  }
+  return { block: null, next: start + 1 };
+};
+
 const findInHunk = (hunk: DiffHunk, h: number, out: Conflict[]) => {
   const lines = hunk.lines;
-  for (let i = 0; i < lines.length; i++) {
-    const size = inFile(lines[i]!) ? START_RE.exec(lines[i]!.text)?.[1]?.length : undefined;
-    if (size === undefined) continue;
-    const current = marker(lines[i]!.text, "<", size)!;
-    let base = -1;
-    let separator = -1;
-    // Scans to the end marker; another start marker first abandons this block for that one.
-    for (let j = i + 1; j < lines.length; j++) {
-      const l = lines[j]!;
-      if (!inFile(l)) continue;
-      if (marker(l.text, "<", size) !== null) {
-        i = j - 1;
-        break;
-      }
-      if (separator < 0) {
-        if (base < 0 && marker(l.text, "|", size) !== null) base = j;
-        else if (l.text.replace(/\r$/, "") === "=".repeat(size)) separator = j;
-        continue;
-      }
-      const incoming = marker(l.text, ">", size);
-      if (incoming === null) continue;
-      out.push({ hunk: h, start: i, base, separator, end: j, current, incoming });
-      i = j;
-      break;
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i]!;
+    const size = inFile(l) ? START_RE.exec(l.text)?.[1]?.length : undefined;
+    if (size === undefined) {
+      i++;
+      continue;
     }
+    const { block, next } = blockAt(lines, i, size);
+    if (block) out.push({ hunk: h, current: marker(l.text, "<", size)!, ...block });
+    i = next;
   }
 };
 
