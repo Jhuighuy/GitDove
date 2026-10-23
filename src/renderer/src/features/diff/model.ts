@@ -113,6 +113,8 @@ export const buildModel = (full: FileDiff): DiffModel => {
   const diff = capLines(full);
   const conflicts = findConflicts(diff);
   const lines: Line[] = [];
+  /** The first conflict that does not end before the line being added. */
+  let next = 0;
   const hunkStart: number[] = [];
   const unified: Row[] = [];
   const split: Row[] = [];
@@ -129,7 +131,6 @@ export const buildModel = (full: FileDiff): DiffModel => {
     resets[1].push(sides[1].length);
     maxNo = Math.max(maxNo, hunk.oldStart + hunk.oldLines, hunk.newStart + hunk.newLines);
 
-    const blocks = conflicts.flatMap((c, i) => (c.hunk === h ? [{ c, i }] : []));
     // Deletions and additions of the current block of changes.
     let dels: number[] = [];
     let adds: number[] = [];
@@ -160,14 +161,20 @@ export const buildModel = (full: FileDiff): DiffModel => {
         sides[0].push(l.text);
         sideIndex = sides[1].push(l.text) - 1;
       }
-      const block = blocks.find(({ c }) => index >= c.start && index <= c.end);
-      if (block?.c.start === index) {
+      // Conflicts are in order: a cursor finds the one a line is in.
+      while (next < conflicts.length) {
+        const c = conflicts[next]!;
+        if (c.hunk > h || (c.hunk === h && c.end >= index)) break;
+        next++;
+      }
+      const block = conflicts[next]?.hunk === h ? conflicts[next]! : null;
+      if (block?.start === index) {
         // Split rows of the lines before go before the actions.
         flushBlock();
-        unified.push({ type: "conflict", conflict: block.i });
-        split.push({ type: "conflict", conflict: block.i });
+        unified.push({ type: "conflict", conflict: next });
+        split.push({ type: "conflict", conflict: next });
       }
-      const conflict = block ? conflictPart(block.c, index) : null;
+      const conflict = block ? conflictPart(block, index) : null;
       lines.push({ id, hunk: h, index, ...l, pair: -1, side, sideIndex, conflict });
       unified.push({ type: "line", id });
       // A line is at most TAB_SIZE columns per character wide.

@@ -94,6 +94,38 @@ describe.skipIf(noShell).each(targets)("Repository conflicts on %s", (hostId) =>
       expect(await sh("cat f.txt")).toContain("S1");
     });
 
+    it("resolves conflicts in a file without a final newline, with any marker size", async () => {
+      const target = { kind: "unstaged", path: "f.txt" } as const;
+      const resolveFirst = async (choice: "current" | "incoming" | "both") => {
+        const diff = await run(t.repo.diff(target));
+        const [conflict] = findConflicts(diff);
+        expect(conflict).toBeDefined();
+        await run(
+          t.repo.applyPatch(resolvePatch(diff, [{ conflict: conflict!, choice }])!, {
+            cached: false,
+            reverse: false,
+          }),
+        );
+      };
+      await sh("echo 'f.txt conflict-marker-size=3' > .gitattributes && git add .gitattributes");
+      await sh("printf 'a\\nend' > f.txt && git commit -qam base");
+      await run(t.repo.createBranch("side", "HEAD", true));
+      await sh("printf 'S\\nend' > f.txt && git commit -qam side");
+      await run(t.repo.checkout("main"));
+      await sh("printf 'M\\nend' > f.txt && git commit -qam main");
+      for (const choice of ["current", "incoming", "both"] as const) {
+        await fails(t.repo.merge("side", {}));
+        expect(await sh("head -1 f.txt")).toBe("<<< HEAD");
+        await resolveFirst(choice);
+        // Still without a final newline.
+        expect(await sh("tail -c 4 f.txt | tr '\\n' /")).toBe("/end");
+        await run(t.repo.abortOperation());
+      }
+      await fails(t.repo.merge("side", {}));
+      await resolveFirst("both");
+      expect(await sh("cat f.txt; echo '|'")).toBe("M\nS\nend|");
+    });
+
     it("aborts and continues a rebase", async () => {
       await diverge();
       await fails(t.repo.rebase("side"));

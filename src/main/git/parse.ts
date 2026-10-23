@@ -621,6 +621,37 @@ export const parseDiff = (
   };
 };
 
+/**
+ * Script that prints how many newlines the working tree file `$p` has, and whether it ends with
+ * one (1) or not (0). Nothing for a symlink or anything else that is not a regular file.
+ */
+export const FILE_END_SCRIPT = `if [ -f "$p" ] && [ ! -L "$p" ]; then
+  echo $(($(wc -l < "$p"))) $(($(tail -c 1 < "$p" | wc -l)))
+fi
+`;
+
+/**
+ * A combined diff has no "\ No newline at end of file" markers: `end`, the output of
+ * {@link FILE_END_SCRIPT}, says whether the working tree file ends without a newline, and then
+ * the marker goes after its last line if the diff shows it.
+ */
+export const markFileEnd = (diff: FileDiff, end: string): FileDiff => {
+  const m = /^(\d+) ([01])$/.exec(end.trim());
+  if (!m || m[2] === "1") return diff;
+  // Without a final newline, the last line is one past the newlines.
+  const last = Number(m[1]) + 1;
+  const hunk = diff.hunks.at(-1);
+  const i = hunk?.lines.findLastIndex((l) => l.newNo !== null) ?? -1;
+  if (!hunk || hunk.lines[i]?.newNo !== last || hunk.lines[i + 1]?.kind === "meta") return diff;
+  const lines = hunk.lines.toSpliced(i + 1, 0, {
+    kind: "meta",
+    oldNo: null,
+    newNo: null,
+    text: "No newline at end of file",
+  });
+  return { ...diff, hunks: [...diff.hunks.slice(0, -1), { ...hunk, lines }] };
+};
+
 // ---------------------------------------------------------------------------
 // File versions
 // ---------------------------------------------------------------------------

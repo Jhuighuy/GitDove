@@ -86,6 +86,11 @@ describe("findConflicts", () => {
     ]);
   });
 
+  it("takes the shorter markers of a smaller conflict-marker-size", () => {
+    const d = conflicted(1, ["add", "<<< HEAD"], ["add", "==="], ["add", ">>> side"]);
+    expect(findConflicts(d)).toMatchObject([{ start: 0, separator: 1, end: 2 }]);
+  });
+
   it("skips blocks that are cut short or broken", () => {
     const d = conflicted(
       1,
@@ -146,6 +151,25 @@ describe("resolvePatch", () => {
     );
     expect(patch("both")).toBe(
       header + "@@ -4,7 +4,4 @@\n a\n-<<<<<<< HEAD\n ours\n-=======\n theirs\n->>>>>>> side\n z\n",
+    );
+  });
+
+  it("keeps the end of a file without a final newline", () => {
+    const d = conflicted(
+      1,
+      ["add", "<<<<<<< HEAD"],
+      ["context", "ours"],
+      ["add", "======="],
+      ["add", "theirs"],
+      ["add", ">>>>>>> side"],
+      ["context", "end"],
+      ["meta", "No newline at end of file"],
+    );
+    const [c] = findConflicts(d);
+    expect(resolvePatch(d, [{ conflict: c!, choice: "current" }])).toBe(
+      header +
+        "@@ -1,6 +1,2 @@\n-<<<<<<< HEAD\n ours\n-=======\n-theirs\n->>>>>>> side\n end\n" +
+        "\\ No newline at end of file\n",
     );
   });
 

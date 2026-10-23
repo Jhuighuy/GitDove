@@ -36,6 +36,8 @@ import { branchOwners, type OwnerLogs, OWNERS_LOG_ARGS, TIPS_LOG_ARGS } from "./
 import {
   type ChangedFiles,
   COMMIT_FORMAT,
+  FILE_END_SCRIPT,
+  markFileEnd,
   parseCommitShow,
   parseDiff,
   parseFileVersions,
@@ -878,12 +880,27 @@ export class Repository {
         okCodes,
         idempotent: true,
       });
-      return parseDiff(
+      const diff = parseDiff(
         r.stdout,
         target.path,
         target.kind === "unstaged" ? null : (target.oldPath ?? null),
         r.truncated,
       );
+      if (target.kind !== "unstaged" || diff.readOnly !== "conflict" || !diff.hunks.length) {
+        return diff;
+      }
+      // Conflicts are resolved with patches, which need to know how the file ends. Without
+      // that, they fail to apply: no harm done.
+      const end = yield* this.host
+        .sh(`p=${shellQuote(target.path)}\n${FILE_END_SCRIPT}`, {
+          cwd: this.workTree,
+          idempotent: true,
+        })
+        .pipe(
+          Effect.map(text),
+          Effect.catch(() => Effect.succeed("")),
+        );
+      return markFileEnd(diff, end);
     });
   }
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { FileDiff } from "@shared/domain";
 import {
+  markFileEnd,
   parseCommitShow,
   parseDiff,
   parseFileVersions,
@@ -316,6 +318,29 @@ describe("parseDiff", () => {
     expect(d.truncated).toBe(true);
     expect(d.readOnly).toBeUndefined();
     expect(d.hunks.map((h) => h.oldStart)).toEqual([1]);
+  });
+});
+
+describe("markFileEnd", () => {
+  const conflicted = parseDiff(
+    ["diff --cc f", "@@@ -1,2 -1,2 +1,3 @@@", "++<<<<<<< HEAD", " +M", "  end", ""].join("\n"),
+    "f",
+    null,
+    false,
+  );
+  const tail = (d: FileDiff) => d.hunks[0]!.lines.map((l) => l.kind).join(" ");
+
+  it("marks the last line of a file without a final newline", () => {
+    expect(tail(markFileEnd(conflicted, "2 0\n"))).toBe("add context context meta");
+  });
+
+  it("leaves the diff alone otherwise", () => {
+    // A final newline; a last line the diff does not show; no answer.
+    for (const end of ["3 1\n", "5 0\n", ""]) {
+      expect(markFileEnd(conflicted, end)).toBe(conflicted);
+    }
+    const marked = markFileEnd(conflicted, "2 0");
+    expect(markFileEnd(marked, "2 0")).toBe(marked);
   });
 });
 

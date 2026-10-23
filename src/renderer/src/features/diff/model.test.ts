@@ -155,3 +155,46 @@ it("handles an empty diff", () => {
   const m = buildModel(diff());
   expect(m).toMatchObject({ lines: [], unified: [], split: [], width: 0, gutter: 1 });
 });
+
+it("puts the actions of each block of conflict markers above it", () => {
+  const block = (n: number): DiffLine[] => [
+    add(n, "<<<<<<< HEAD"),
+    add(n + 1, "ours"),
+    add(n + 2, "======="),
+    add(n + 3, ">>>>>>> side"),
+  ];
+  const lines = [ctx(1, 1, "a"), ...block(2), ...block(6), ctx(2, 10, "z")];
+  const m = buildModel({ ...diff({ start: [1, 1], lines }), readOnly: "conflict" });
+  expect(m.conflicts).toHaveLength(2);
+  expect(m.unified.map((r) => (r.type === "line" ? r.id : r.type))).toEqual([
+    "hunk",
+    0,
+    "conflict",
+    1,
+    2,
+    3,
+    4,
+    "conflict",
+    5,
+    6,
+    7,
+    8,
+    9,
+  ]);
+  expect(m.split.filter((r) => r.type === "conflict")).toEqual([
+    { type: "conflict", conflict: 0 },
+    { type: "conflict", conflict: 1 },
+  ]);
+  expect(m.lines.map((l) => l.conflict)).toEqual([
+    null,
+    "marker",
+    "current",
+    "marker",
+    "marker",
+    "marker",
+    "current",
+    "marker",
+    "marker",
+    null,
+  ]);
+});

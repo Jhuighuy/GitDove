@@ -33,8 +33,8 @@ export type ConflictChoice = "current" | "incoming" | "both";
 
 export type ConflictPart = "marker" | "current" | "base" | "incoming";
 
-/** Whether a line is in the working tree file (a combined diff's lines all have a new side). */
-const inFile = (l: DiffLine) => l.newNo !== null && l.kind !== "meta";
+/** Whether a line is in the working tree file. */
+const inFile = (l: DiffLine) => l.newNo !== null;
 
 /** The marker's label if `text` is a marker of `char` repeated `size` times, else null. */
 const marker = (text: string, char: string, size: number): string | null => {
@@ -45,7 +45,8 @@ const marker = (text: string, char: string, size: number): string | null => {
   return t[size] === " " ? t.slice(size + 1) : null;
 };
 
-const START_RE = /^(<{7,})(?: |\r?$)/;
+/** A start marker: seven `<` by default, but the `conflict-marker-size` attribute can change it. */
+const START_RE = /^(<+)(?: |\r?$)/;
 
 const findInHunk = (hunk: DiffHunk, h: number, out: Conflict[]) => {
   const lines = hunk.lines;
@@ -120,15 +121,21 @@ export const resolvePatch = (
     const lines: DiffLine[] = [];
     let no = hunk.newStart;
     hunk.lines.forEach((l, i) => {
+      // A "\ No newline" marker stays with the line before it.
+      if (l.kind === "meta") {
+        if (lines.at(-1) && hunk.lines[i - 1] && inFile(hunk.lines[i - 1]!)) lines.push(l);
+        return;
+      }
       if (!inFile(l)) return;
       const kept = here.every((c) => keeps(c.conflict, i, c.choice));
       lines.push({ kind: kept ? "context" : "del", oldNo: no++, newNo: null, text: l.text });
     });
     const kept = lines.filter((l) => l.kind === "context").length;
+    const removed = lines.filter((l) => l.kind === "del").length;
     return {
       header: "",
       oldStart: hunk.newStart,
-      oldLines: lines.length,
+      oldLines: kept + removed,
       newStart: hunk.newStart,
       newLines: kept,
       lines,
