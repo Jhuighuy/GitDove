@@ -21,7 +21,8 @@
     "test:coverage": "vitest run --coverage",
     "dist": "electron-vite build && electron-builder --publish never",
     "package": "electron-builder --publish never",
-    "icons": "node scripts/build-icons.mjs"
+    "icons": "node scripts/build-icons.mjs",
+    "dmg:background": "node scripts/build-dmg-background.mjs"
   },
   "dependencies": {
     "@parcel/watcher": "^2.6.0",

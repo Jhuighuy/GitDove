@@ -58,6 +58,26 @@ mac:
   identity: "-"
   hardenedRuntime: false
   notarize: false
+dmg:
+  # The 640×420 background defines the Finder canvas. electron-builder combines
+  # its @2x sibling into a Retina TIFF; coordinates below stay in 1× points.
+  background: build/dmg-background.png
+  # Use the committed ICNS for the volume, independently of Icon Composer.
+  icon: build/icon.icns
+  iconSize: 112
+  iconTextSize: 14
+  window:
+    width: 640
+    height: 420
+  contents:
+    # Omitting path lets electron-builder use the app from this build.
+    - x: 176
+      y: 236
+      type: file
+    - x: 464
+      y: 236
+      type: link
+      path: /Applications
 linux:
   icon: build/icons
   category: Development

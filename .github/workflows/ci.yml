@@ -30,6 +30,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run format:check
+      - run: npm run dmg:background -- --check
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
@@ -108,7 +109,7 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
         run: |
-          if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(\.github/workflows/|build/|native/|resources/|scripts/(before-pack|after-pack|build-icons|release|sparkle|test-updates)|electron-builder\.yml|electron\.vite\.config\.ts|package(-lock)?\.json|src/main/(index|sparkle|updater)\.ts)'; then
+          if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(\.github/workflows/|build/|native/|resources/|scripts/(before-pack|after-pack|build-icons|build-dmg-background|release|sparkle|test-updates)|electron-builder\.yml|electron\.vite\.config\.ts|package(-lock)?\.json|src/main/(index|sparkle|updater)\.ts)'; then
             echo "packaging=true" >> "$GITHUB_OUTPUT"
           fi
 
