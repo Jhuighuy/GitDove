@@ -22,6 +22,7 @@ import {
   type UpdaterStatus,
   repoIdOf,
   repoLocationOf,
+  type WipLane,
   type WorkingStatus,
 } from "./domain";
 
@@ -109,6 +110,8 @@ export interface Api {
   "repo.findCommit": (repo: RepoId, version: number, hash: string) => number;
   /** Row indexes of several commits (-1 for those not in the graph), e.g. to re-index a selection. */
   "repo.findCommits": (repo: RepoId, version: number, hashes: string[]) => number[];
+  /** Where the WIP row's line runs down to HEAD's commit `head`, null when it is not in the graph. */
+  "repo.wipLane": (repo: RepoId, version: number, head: string) => WipLane | null;
   "repo.search": (repo: RepoId, query: string) => string[];
   "repo.status": (repo: RepoId) => WorkingStatus;
   "repo.commitDetails": (repo: RepoId, hash: string) => CommitDetails;
@@ -209,6 +212,7 @@ export const CANCELLABLE_METHODS = [
   "repo.graphRows",
   "repo.findCommit",
   "repo.findCommits",
+  "repo.wipLane",
   "repo.search",
   "repo.status",
   "repo.commitDetails",

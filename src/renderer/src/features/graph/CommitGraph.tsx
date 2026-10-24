@@ -33,6 +33,7 @@ import {
   useRefsByHash,
   useRepoInfo,
   useStatus,
+  useWipLane,
 } from "@/lib/queries";
 import { laneColor } from "@/lib/graph-colors";
 import { cn } from "@/lib/utils";
@@ -210,6 +211,11 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
   const firstIndex = Math.max(0, (items[0]?.index ?? 0) - offset);
   const lastIndex = Math.max(0, (items.at(-1)?.index ?? 0) - offset + 1);
   const { rows, current } = useGraphRows(repo, info, firstIndex, lastIndex);
+  // The WIP row's line runs down to HEAD, through the rows above it.
+  const wipHead = offset > 0 ? headHash : null;
+  const { data: wipData } = useWipLane(repo, info, wipHead);
+  const wip = wipHead === null ? null : (wipData ?? null);
+  const wipLaneAt = (index: number) => (wip && index <= wip.index ? wip.lane : null);
 
   // What callbacks and queued steps (below) see: the latest render's rows and graph version,
   // not those of the render that made them.
@@ -226,7 +232,7 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
   for (const item of items) {
     if (item.end <= top || item.start >= bottom) continue;
     const row = rows.get(item.index - offset);
-    if (row) widestRow = Math.max(widestRow, rowGraphWidth(row));
+    if (row) widestRow = Math.max(widestRow, rowGraphWidth(row, wipLaneAt(item.index - offset)));
   }
   const visibleWidth = Math.max(widestRow, graphWidthFor(MIN_AUTO_LANES));
   // The fitted width belongs to one graph: a new one (e.g. after hiding branches) fits again.
@@ -542,13 +548,6 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
   const onSelectWip = useCallback(() => select(repo, { kind: "wip" }), [repo, select]);
   const onRefDoubleClick = useCallback((r: Ref) => void commands.checkoutRef(repo, r), [repo]);
 
-  // The WIP row continues HEAD's lane.
-  const headRow = useMemo(() => {
-    if (offset === 0 || headHash === null) return undefined;
-    for (const r of rows.values()) if (r.hash === headHash) return r;
-    return undefined;
-  }, [rows, headHash, offset]);
-
   if (error && !info) {
     return (
       <div className="text-destructive flex h-full items-center justify-center p-8 text-sm">
@@ -569,8 +568,8 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
           id={rowId("wip")}
           top={item.start}
           changes={changes}
-          lane={headRow?.lane ?? 0}
-          color={headRow?.color ?? 0}
+          lane={wip?.lane ?? 0}
+          color={wip?.color ?? 0}
           clipped={clipped}
           selected={selection?.kind === "wip"}
           onSelect={onSelectWip}
@@ -593,7 +592,8 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
         clipped={clipped}
         isHead={row.hash === headHash}
         isStash={stashes.has(row.hash)}
-        wipAbove={offset > 0 && index === 0 && row.hash === headHash}
+        wipLane={wipLaneAt(index)}
+        wipColor={wip?.color ?? 0}
         index={index}
         selected={hashes.has(row.hash)}
         now={now}
@@ -831,7 +831,9 @@ interface CommitRowProps {
   readonly clipped: boolean;
   readonly isHead: boolean;
   readonly isStash: boolean;
-  readonly wipAbove: boolean;
+  /** The WIP line's column, if it runs through this row (see `GraphCell`), and its color. */
+  readonly wipLane: number | null;
+  readonly wipColor: number;
   readonly index: number;
   readonly selected: boolean;
   /** The time dates are relative to, in seconds. */
@@ -873,7 +875,8 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
           row={row}
           isHead={p.isHead}
           isStash={p.isStash}
-          wipAbove={p.wipAbove}
+          wipLane={p.wipLane}
+          wipColor={p.wipColor}
           refLine={hasPills}
         />
       </div>

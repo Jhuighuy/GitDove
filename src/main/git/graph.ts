@@ -1,4 +1,4 @@
-import type { GraphRow } from "@shared/domain";
+import type { GraphRow, WipLane } from "@shared/domain";
 
 export interface LogCommit {
   readonly hash: string;
@@ -144,6 +144,33 @@ export class GraphBuilder {
       edges,
       width,
     });
+  }
+
+  /**
+   * Where the work-in-progress row, drawn above the graph, runs down to HEAD's commit `head`
+   * (null when it is not in the graph): in HEAD's column unless a row above HEAD's uses it, else
+   * in the first column that none does, bending into HEAD's row.
+   */
+  wipLane(head: string): WipLane | null {
+    const index = this.index.get(head);
+    if (index === undefined) return null;
+    const { lane, color } = this.rows[index]!;
+    const used: boolean[] = [];
+    for (let i = 0; i < index; i++) {
+      const row = this.rows[i]!;
+      used[row.lane] = true;
+      const e = row.edges;
+      for (let k = 0; k < e.length; k += 5) {
+        used[e[k]!] = true;
+        used[e[k + 2]!] = true;
+      }
+    }
+    let free = lane;
+    if (used[lane]) {
+      free = 0;
+      while (used[free]) free++;
+    }
+    return { index, lane: free, color };
   }
 
   private findLane(hash: string): number {

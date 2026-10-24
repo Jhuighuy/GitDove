@@ -11,9 +11,15 @@ const ly = (y: number) => (y * ROW_HEIGHT) / 2;
 
 export const graphWidthFor = (lanes: number) => PAD * 2 + Math.max(1, lanes) * LANE_WIDTH;
 
-/** Width a row's lanes need, to tell whether a narrower column cuts them off. */
-export const rowGraphWidth = (row: GraphRow): number =>
-  graphWidthFor(Math.max(row.width, row.lane + 1));
+/**
+ * Width a row's lanes need (and the WIP line in `wipLane`, if any), to tell whether a narrower
+ * column cuts them off.
+ */
+export const rowGraphWidth = (row: GraphRow, wipLane: number | null = null): number =>
+  graphWidthFor(Math.max(row.width, row.lane + 1, (wipLane ?? -1) + 1));
+
+/** Dashes of the WIP line, a whole number of them per half row so that rows join up. */
+const WIP_DASHES = "4 3";
 
 const edgePath = (x1: number, y1: number, x2: number, y2: number) => {
   const ax = lx(x1);
@@ -29,8 +35,13 @@ interface Props {
   readonly row: GraphRow;
   readonly isHead: boolean;
   readonly isStash: boolean;
-  /** Draw a dashed line up to the WIP row above. */
-  readonly wipAbove: boolean;
+  /**
+   * The column of the dashed line from the WIP row above down to HEAD, if it runs through this
+   * row: it ends at HEAD's dot, and passes through any other row.
+   */
+  readonly wipLane?: number | null;
+  /** The WIP line's color. */
+  readonly wipColor?: number;
   /** Draw a line from the left edge to the dot, continuing the line from the row's ref pills. */
   readonly refLine?: boolean;
 }
@@ -43,7 +54,8 @@ export const GraphCell = memo(function GraphCell({
   row,
   isHead,
   isStash,
-  wipAbove,
+  wipLane = null,
+  wipColor = 0,
   refLine = false,
 }: Props) {
   const e = row.edges;
@@ -66,17 +78,17 @@ export const GraphCell = memo(function GraphCell({
 
   return (
     <svg
-      width={rowGraphWidth(row)}
+      width={rowGraphWidth(row, wipLane)}
       height={ROW_HEIGHT}
       className="block shrink-0 overflow-hidden"
       aria-hidden
     >
-      {wipAbove && (
+      {wipLane !== null && (
         <path
-          d={`M${cx} 0V${cy}`}
-          stroke={color}
+          d={isHead ? edgePath(wipLane, 0, row.lane, 1) : `M${lx(wipLane)} 0V${ROW_HEIGHT}`}
+          stroke={laneColor(wipColor)}
           strokeWidth={2}
-          strokeDasharray="3 3"
+          strokeDasharray={WIP_DASHES}
           fill="none"
         />
       )}
@@ -133,7 +145,12 @@ export const WipGraphCell = memo(function WipGraphCell({
   const c = laneColor(color);
   return (
     <svg width={graphWidthFor(lane + 1)} height={ROW_HEIGHT} className="block shrink-0" aria-hidden>
-      <path d={`M${cx} ${cy}V${ROW_HEIGHT}`} stroke={c} strokeWidth={2} strokeDasharray="3 3" />
+      <path
+        d={`M${cx} ${cy}V${ROW_HEIGHT}`}
+        stroke={c}
+        strokeWidth={2}
+        strokeDasharray={WIP_DASHES}
+      />
       <circle
         cx={cx}
         cy={cy}

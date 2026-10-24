@@ -4,6 +4,7 @@
 import type { Ref, RefsSnapshot, RepoId, RepoInfo, RepoLocation, Stash } from "@shared/domain";
 import { repoLocationOf } from "@shared/domain";
 import type { EditCommand, ResetMode } from "@shared/ipc";
+import { hashKey } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { refuseWhileBusy, runAction } from "@/lib/actions";
 import { ApiError, api } from "@/lib/api";
@@ -28,6 +29,41 @@ const commitsLabel = (hashes: readonly string[]) =>
 export type StashRef = Pick<Stash, "index"> & Partial<Pick<Stash, "hash">>;
 /** How long a discard can be undone from its toast. */
 const UNDO_MS = 15_000;
+
+/**
+ * Runs `action` on `stash` (the latest one when not given), then goes back to the graph from the
+ * stash's details or diff if the stash is gone (popped or dropped), as the refs refreshed after
+ * the action say: also when the refresh outlasts the action (a slow connection).
+ */
+const onStash = async <R>(repo: RepoId, stash: StashRef | undefined, action: () => Promise<R>) => {
+  const hash =
+    stash?.hash ?? refs(repo)?.stashes.find((s) => s.index === (stash?.index ?? 0))?.hash;
+  if (!hash) return action();
+  const leave = () => {
+    if (refs(repo)?.stashes.some((s) => s.hash === hash) === false)
+      useRepoUiStore.getState().forgetCommit(repo, hash);
+  };
+  const refsKey = hashKey(keys.refs(repo));
+  let done = false;
+  let refreshed = false;
+  const stop = queryClient.getQueryCache().subscribe((e) => {
+    if (e.query.queryHash !== refsKey || e.type !== "updated" || e.action.type !== "success")
+      return;
+    refreshed = true;
+    if (!done) return;
+    stop();
+    leave();
+  });
+  try {
+    return await action();
+  } finally {
+    done = true;
+    if (refreshed) {
+      stop();
+      leave();
+    }
+  }
+};
 const info = (repo: RepoId) => queryClient.getQueryData<RepoInfo>(keys.info(repo));
 const defaultRemote = (repo: RepoId) => {
   const remotes = refs(repo)?.remotes ?? [];
@@ -109,10 +145,11 @@ export const commands = {
   },
 
   stash: async (repo: RepoId) => {
-    await runAction(repo, "Stash", () => api("repo.stash", repo, null, true), {
+    const result = await runAction(repo, "Stash", () => api("repo.stash", repo, null, true), {
       status: "Stashing changes…",
       success: "Changes stashed",
     });
+    if (result.ok) useRepoUiStore.getState().closeWipDiff(repo);
   },
 
   // Stashes are named by index and hash: when the index no longer names that stash (one was
@@ -120,9 +157,14 @@ export const commands = {
 
   /** Pops `stash`, or the latest stash, whichever it is, when none is given. */
   pop: (repo: RepoId, stash?: StashRef) =>
-    runAction(repo, "Pop stash", () => api("repo.stashPop", repo, stash?.index ?? 0, stash?.hash), {
-      status: `Popping stash@{${stash?.index ?? 0}}…`,
-    }),
+    onStash(repo, stash, () =>
+      runAction(
+        repo,
+        "Pop stash",
+        () => api("repo.stashPop", repo, stash?.index ?? 0, stash?.hash),
+        { status: `Popping stash@{${stash?.index ?? 0}}…` },
+      ),
+    ),
 
   applyStash: (repo: RepoId, stash: StashRef) =>
     runAction(repo, "Apply stash", () => api("repo.stashApply", repo, stash.index, stash.hash), {
@@ -138,8 +180,8 @@ export const commands = {
       destructive: true,
     });
     if (ok)
-      await runAction(repo, "Delete stash", () =>
-        api("repo.stashDrop", repo, stash.index, stash.hash),
+      await onStash(repo, stash, () =>
+        runAction(repo, "Delete stash", () => api("repo.stashDrop", repo, stash.index, stash.hash)),
       );
   },
 
@@ -155,11 +197,13 @@ export const commands = {
       validate: validateRefName,
     });
     if (!r) return;
-    await runAction(
-      repo,
-      "Create branch",
-      () => api("repo.stashBranch", repo, r.value, stash.index, stash.hash),
-      { status: `Creating ${r.value} from stash@{${stash.index}}…` },
+    await onStash(repo, stash, () =>
+      runAction(
+        repo,
+        "Create branch",
+        () => api("repo.stashBranch", repo, r.value, stash.index, stash.hash),
+        { status: `Creating ${r.value} from stash@{${stash.index}}…` },
+      ),
     );
   },
 
@@ -402,9 +446,13 @@ export const commands = {
       destructive: true,
     });
     if (ok) {
-      await runAction(repo, "Discard", () => api("repo.discard", repo, paths, untracked), {
-        status: "Discarding changes…",
-      });
+      const result = await runAction(
+        repo,
+        "Discard",
+        () => api("repo.discard", repo, paths, untracked),
+        { status: "Discarding changes…" },
+      );
+      if (result.ok) useRepoUiStore.getState().closeWipDiff(repo, [...paths, ...untracked]);
     }
   },
 
@@ -418,9 +466,10 @@ export const commands = {
       destructive: true,
     });
     if (ok) {
-      await runAction(repo, "Discard all", () => api("repo.discardAll", repo), {
+      const result = await runAction(repo, "Discard all", () => api("repo.discardAll", repo), {
         status: "Discarding all changes…",
       });
+      if (result.ok) useRepoUiStore.getState().closeWipDiff(repo);
     }
   },
 

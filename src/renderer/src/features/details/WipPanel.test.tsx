@@ -349,6 +349,7 @@ it("moves staged files at once, before the status comes back", async () => {
 
 it("commits staged changes with a summary and description", async () => {
   await render();
+  act(() => useRepoUiStore.getState().openDiff(repo, { kind: "staged", path: "a" }));
   const commit = () => button("Commit Changes");
   expect(button("Commit Changes to 2 Files").disabled).toBe(true);
   await type(summary(), "  Fix the bug ");
@@ -359,9 +360,10 @@ it("commits staged changes with a summary and description", async () => {
   expect(apiCalls("repo.commit")).toEqual([
     [repo, "Fix the bug\n\nDetails here.", { amend: false }],
   ]);
-  // The draft is cleared after committing.
+  // The draft is cleared after committing, and the graph shows again instead of the diff.
   expect(summary().value).toBe("");
   expect(description().value).toBe("");
+  expect(ui()?.diff).toBeNull();
 });
 
 it("commits with the keyboard and keeps the draft when committing fails", async () => {
@@ -374,6 +376,7 @@ it("commits with the keyboard and keeps the draft when committing fails", async 
     summary().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
   expect(apiCalls("repo.commit")).toEqual([]);
+  act(() => useRepoUiStore.getState().openDiff(repo, { kind: "staged", path: "a" }));
   mocks.api.mockImplementationOnce(async () => {
     throw new Error("hook failed");
   });
@@ -388,6 +391,7 @@ it("commits with the keyboard and keeps the draft when committing fails", async 
     expect.objectContaining({ description: "hook failed" }),
   );
   expect(summary().value).toBe("Summary only");
+  expect(ui()?.diff).toEqual({ kind: "staged", path: "a" });
   await act(async () => {
     summary().dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
@@ -395,6 +399,7 @@ it("commits with the keyboard and keeps the draft when committing fails", async 
   });
   expect(apiCalls("repo.commit")).toHaveLength(2);
   expect(summary().value).toBe("");
+  expect(ui()?.diff).toBeNull();
 });
 
 it("does not commit without staged changes or a summary", async () => {

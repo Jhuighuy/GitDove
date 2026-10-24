@@ -56,6 +56,9 @@ export const keys = {
   // Rows never change once built, so a page is identified by how many of its rows exist.
   graphPage: (repo: RepoId, version: number, page: number, size: number) =>
     [...keys.graphPages(repo, version, page), size] as const,
+  // A HEAD that a graph still loading does not have yet is looked for again once it is complete.
+  wipLane: (repo: RepoId, version: number, head: string, complete: boolean) =>
+    ["repo", repo, "graph", "wip", version, head, complete] as const,
   commit: (repo: RepoId, hash: string) => ["repo", repo, "commit", hash] as const,
   compare: (repo: RepoId, base: string | null, tip: string) =>
     ["repo", repo, "compare", base, tip] as const,
@@ -97,6 +100,19 @@ export const useGraphInfo = (repo: RepoId) =>
   useQuery({
     queryKey: keys.graphInfo(repo),
     queryFn: ({ signal }) => read(signal, "repo.graphInfo", repo),
+  });
+
+/** Where the WIP row's line runs down to HEAD's commit `head` in graph `info`; null fetches nothing. */
+export const useWipLane = (repo: RepoId, info: GraphInfo | undefined, head: string | null) =>
+  useQuery({
+    queryKey: keys.wipLane(repo, info?.version ?? 0, head ?? "", info?.complete ?? false),
+    queryFn:
+      !info || head === null
+        ? skipToken
+        : ({ signal }) => read(signal, "repo.wipLane", repo, info.version, head),
+    // The lane for the same HEAD in the previous graph, while this one's loads (as its rows do).
+    placeholderData: (previous, query) =>
+      head !== null && query?.queryKey[5] === head ? previous : undefined,
   });
 
 // Commits never change and change events leave these queries alone, but a commit's file list
