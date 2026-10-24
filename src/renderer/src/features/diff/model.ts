@@ -139,7 +139,10 @@ export const buildModel = (full: FileDiff): DiffModel => {
         const d = dels[i] ?? -1;
         const a = adds[i] ?? -1;
         split.push({ type: "split", left: d, right: a });
-        if (d >= 0 && a >= 0 && lines[d]!.kind === "del" && lines[a]!.kind === "add") {
+        // A conflict marker replaces no line: its words are not compared.
+        const words = (id: number, kind: DiffLineKind) =>
+          lines[id]!.kind === kind && lines[id]!.conflict !== "marker";
+        if (d >= 0 && a >= 0 && words(d, "del") && words(a, "add")) {
           (lines[d] as { pair: number }).pair = a;
           (lines[a] as { pair: number }).pair = d;
         }
@@ -150,17 +153,6 @@ export const buildModel = (full: FileDiff): DiffModel => {
 
     hunk.lines.forEach((l, index) => {
       const id = lines.length;
-      let side: 0 | 1 = 1;
-      let sideIndex = -1;
-      if (l.kind === "del") {
-        side = 0;
-        sideIndex = sides[0].push(l.text) - 1;
-      } else if (l.kind === "add") {
-        sideIndex = sides[1].push(l.text) - 1;
-      } else if (l.kind === "context") {
-        sides[0].push(l.text);
-        sideIndex = sides[1].push(l.text) - 1;
-      }
       // Conflicts are in order: a cursor finds the one a line is in.
       while (next < conflicts.length) {
         const c = conflicts[next]!;
@@ -175,6 +167,20 @@ export const buildModel = (full: FileDiff): DiffModel => {
         split.push({ type: "conflict", conflict: next });
       }
       const conflict = block ? conflictPart(block, index) : null;
+      const side: 0 | 1 = l.kind === "del" ? 0 : 1;
+      let sideIndex = -1;
+      // Conflict markers are not code, and highlighted as code they would throw off the lines
+      // after them too (e.g. a quote in a commit subject).
+      if (conflict !== "marker") {
+        if (l.kind === "del") {
+          sideIndex = sides[0].push(l.text) - 1;
+        } else if (l.kind === "add") {
+          sideIndex = sides[1].push(l.text) - 1;
+        } else if (l.kind === "context") {
+          sides[0].push(l.text);
+          sideIndex = sides[1].push(l.text) - 1;
+        }
+      }
       lines.push({ id, hunk: h, index, ...l, pair: -1, side, sideIndex, conflict });
       unified.push({ type: "line", id });
       // A line is at most TAB_SIZE columns per character wide.

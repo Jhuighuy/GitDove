@@ -198,3 +198,19 @@ it("puts the actions of each block of conflict markers above it", () => {
     null,
   ]);
 });
+
+it("leaves conflict markers out of highlighting and word emphasis", () => {
+  const lines = [
+    add(1, "<<<<<<< HEAD"),
+    // In ours only: the line before it in the block of changes is the separator.
+    del(1, "gone"),
+    add(2, "======="),
+    add(3, "theirs"),
+    add(4, ">>>>>>> 0123abc (Don't stop)"),
+  ];
+  const m = buildModel({ ...diff({ start: [1, 1], lines }), readOnly: "conflict" });
+  expect(m.sides).toEqual([["gone"], ["theirs"]]);
+  expect(m.lines.map((l) => l.sideIndex)).toEqual([-1, 0, -1, 0, -1]);
+  // The deletion would otherwise be compared word by word with the separator.
+  expect(m.lines[1]!.pair).toBe(-1);
+});
