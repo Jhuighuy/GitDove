@@ -510,8 +510,8 @@ it("keeps the line selection when applying it fails", async () => {
 });
 
 it("offers nothing on read-only diffs, nor on the last hunk of a truncated one", async () => {
-  mocks.diffs.set("conflict.ts", diff("conflict.ts", { readOnly: "conflict" }));
-  await render({ kind: "unstaged", path: "conflict.ts" });
+  mocks.diffs.set("sub", diff("sub", { readOnly: "submodule" }));
+  await render({ kind: "unstaged", path: "sub" });
   expect(container.textContent).toContain("Read-only");
   expect(buttons().filter((b) => b?.includes("Hunk"))).toEqual([]);
   await mouse(1, "mousedown");
@@ -581,4 +581,69 @@ it("cuts very long lines short", async () => {
   });
   await render({ kind: "unstaged", path: "min.js" });
   expect(textOf(1).textContent).toBe(`${"x".repeat(10_000)} … 2,345 more characters`);
+});
+
+it("resolves blocks of conflict markers in a conflicted file", async () => {
+  const markers = [
+    ctx(1, 1, "a"),
+    add(2, "<<<<<<< HEAD"),
+    ctx(2, 3, "ours"),
+    add(4, "======="),
+    add(5, "theirs"),
+    add(6, ">>>>>>> side"),
+  ];
+  const hunk = { header: "@@@ -1,2 -1,2 +1,6 @@@", oldStart: 1, oldLines: 2, newStart: 1 };
+  mocks.diffs.set("c.txt", {
+    ...diff("c.txt", { readOnly: "conflict" }),
+    hunks: [{ ...hunk, newLines: 6, lines: markers }],
+  });
+  await render({ kind: "unstaged", path: "c.txt" });
+  expect(container.textContent).toContain("1 conflict");
+  expect(container.textContent).not.toContain("Read-only");
+  // Current lines and incoming ones are told apart, markers too.
+  expect(line(2).className).toContain("bg-success/12");
+  expect(line(4).className).toContain("bg-info/15");
+  expect(line(1).className).toContain("bg-muted");
+  expect(buttonByText("Accept Current").title).toBe("Keep HEAD");
+  // Accepting all takes more than one conflict.
+  expect(() => buttonByText("Accept All Current")).toThrow();
+  await act(async () => buttonByText("Accept Incoming").click());
+  await settle();
+  expect(mocks.patches).toEqual([
+    [
+      "diff --git a/c.txt b/c.txt\n--- a/c.txt\n+++ b/c.txt\n" +
+        "@@ -1,6 +1,2 @@\n a\n-<<<<<<< HEAD\n-ours\n-=======\n theirs\n->>>>>>> side\n",
+      { cached: false, reverse: false },
+    ],
+  ]);
+});
+
+it("offers no conflict actions outside a conflicted file's working tree diff", async () => {
+  mocks.diffs.set("c.txt", {
+    ...diff("c.txt"),
+    hunks: [
+      {
+        ...diff("c.txt").hunks[0]!,
+        lines: [add(1, "<<<<<<< HEAD"), add(2, "======="), add(3, ">>>>>>> x")],
+      },
+    ],
+  });
+  await render({ kind: "unstaged", path: "c.txt" });
+  expect(() => buttonByText("Accept Current")).toThrow();
+  expect(container.textContent).not.toContain("Mark Resolved");
+});
+
+it("does not claim a truncated conflicted diff has no conflicts left", async () => {
+  mocks.diffs.set("big.txt", diff("big.txt", { readOnly: "conflict", truncated: true }));
+  await render({ kind: "unstaged", path: "big.txt" });
+  expect(container.textContent).toContain("Conflicts not counted");
+  expect(container.textContent).not.toContain("No conflicts left");
+  expect(buttonByText("Mark Resolved").title).toBe(
+    "Stage the file as it is, conflict markers included",
+  );
+
+  mocks.diffs.set("done.txt", diff("done.txt", { readOnly: "conflict" }));
+  await render({ kind: "unstaged", path: "done.txt" });
+  expect(container.textContent).toContain("No conflicts left");
+  expect(buttonByText("Mark Resolved").title).toBe("");
 });

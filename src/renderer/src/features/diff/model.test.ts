@@ -155,3 +155,62 @@ it("handles an empty diff", () => {
   const m = buildModel(diff());
   expect(m).toMatchObject({ lines: [], unified: [], split: [], width: 0, gutter: 1 });
 });
+
+it("puts the actions of each block of conflict markers above it", () => {
+  const block = (n: number): DiffLine[] => [
+    add(n, "<<<<<<< HEAD"),
+    add(n + 1, "ours"),
+    add(n + 2, "======="),
+    add(n + 3, ">>>>>>> side"),
+  ];
+  const lines = [ctx(1, 1, "a"), ...block(2), ...block(6), ctx(2, 10, "z")];
+  const m = buildModel({ ...diff({ start: [1, 1], lines }), readOnly: "conflict" });
+  expect(m.conflicts).toHaveLength(2);
+  expect(m.unified.map((r) => (r.type === "line" ? r.id : r.type))).toEqual([
+    "hunk",
+    0,
+    "conflict",
+    1,
+    2,
+    3,
+    4,
+    "conflict",
+    5,
+    6,
+    7,
+    8,
+    9,
+  ]);
+  expect(m.split.filter((r) => r.type === "conflict")).toEqual([
+    { type: "conflict", conflict: 0 },
+    { type: "conflict", conflict: 1 },
+  ]);
+  expect(m.lines.map((l) => l.conflict)).toEqual([
+    null,
+    "marker",
+    "current",
+    "marker",
+    "marker",
+    "marker",
+    "current",
+    "marker",
+    "marker",
+    null,
+  ]);
+});
+
+it("leaves conflict markers out of highlighting and word emphasis", () => {
+  const lines = [
+    add(1, "<<<<<<< HEAD"),
+    // In ours only: the line before it in the block of changes is the separator.
+    del(1, "gone"),
+    add(2, "======="),
+    add(3, "theirs"),
+    add(4, ">>>>>>> 0123abc (Don't stop)"),
+  ];
+  const m = buildModel({ ...diff({ start: [1, 1], lines }), readOnly: "conflict" });
+  expect(m.sides).toEqual([["gone"], ["theirs"]]);
+  expect(m.lines.map((l) => l.sideIndex)).toEqual([-1, 0, -1, 0, -1]);
+  // The deletion would otherwise be compared word by word with the separator.
+  expect(m.lines[1]!.pair).toBe(-1);
+});

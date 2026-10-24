@@ -463,6 +463,42 @@ export const commands = {
     return result;
   },
 
+  /**
+   * Applies a patch that resolves conflicts in the working tree file `path`. It can be undone
+   * from its toast, which applies the patch in reverse.
+   */
+  resolveConflicts: async (repo: RepoId, label: string, patch: string, path: string) => {
+    const result = await runAction(
+      repo,
+      label,
+      () => api("repo.applyPatch", repo, patch, { cached: false, reverse: false }),
+      { invalidates: WORKING_TREE },
+    );
+    if (result.ok) {
+      toast(label, {
+        description: path,
+        duration: UNDO_MS,
+        action: {
+          label: "Undo",
+          onClick: () =>
+            void runAction(
+              repo,
+              "Undo",
+              () => api("repo.applyPatch", repo, patch, { cached: false, reverse: true }),
+              { invalidates: WORKING_TREE, success: "Conflict markers restored" },
+            ),
+        },
+      });
+    }
+    return result;
+  },
+
+  /** Stages a conflicted file as it is in the working tree. */
+  markResolved: (repo: RepoId, path: string) =>
+    runAction(repo, "Mark resolved", () => api("repo.stage", repo, [path]), {
+      invalidates: WORKING_TREE,
+    }),
+
   pushBranch: (repo: RepoId, ref: Ref) =>
     ref.isHead
       ? commands.push(repo)

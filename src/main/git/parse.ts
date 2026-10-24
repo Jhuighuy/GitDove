@@ -460,7 +460,8 @@ const isSectionOf = (lines: readonly string[], path: string): boolean => {
  * Parses the diff of a single file. Output with several sections (e.g. a staged rename below
  * the similarity threshold, which diffs as a deletion and an addition) is narrowed to the
  * section of `path`. A combined diff of a conflicted file (`diff --cc`) is shown against the
- * first parent ("ours") and is read-only, as are submodules and text that is not valid UTF-8.
+ * first parent ("ours") and is read-only, as are submodules and text that is not valid UTF-8
+ * (which takes precedence, since conflicts are resolved with patches made from the text).
  * When the output was cut short, the last, incomplete hunk is dropped.
  */
 export const parseDiff = (
@@ -600,14 +601,13 @@ export const parseDiff = (
   flush();
   if (mode === GITLINK_MODE) gitlink = true;
 
-  const readOnly =
-    combined || unmerged
+  const readOnly = decoded.lossy
+    ? "encoding"
+    : combined || unmerged
       ? "conflict"
       : gitlink
         ? "submodule"
-        : decoded.lossy
-          ? "encoding"
-          : undefined;
+        : undefined;
   return {
     path,
     oldPath,
@@ -619,6 +619,37 @@ export const parseDiff = (
     ...(mode !== undefined && (created || deleted) ? { mode } : {}),
     ...(readOnly ? { readOnly } : {}),
   };
+};
+
+/**
+ * Script that prints how many newlines the working tree file `$p` has, and whether it ends with
+ * one (1) or not (0). Nothing for a symlink or anything else that is not a regular file.
+ */
+export const FILE_END_SCRIPT = `if [ -f "$p" ] && [ ! -L "$p" ]; then
+  echo $(($(wc -l < "$p"))) $(($(tail -c 1 < "$p" | wc -l)))
+fi
+`;
+
+/**
+ * A combined diff has no "\ No newline at end of file" markers: `end`, the output of
+ * {@link FILE_END_SCRIPT}, says whether the working tree file ends without a newline, and then
+ * the marker goes after its last line if the diff shows it.
+ */
+export const markFileEnd = (diff: FileDiff, end: string): FileDiff => {
+  const m = /^(\d+) ([01])$/.exec(end.trim());
+  if (!m || m[2] === "1") return diff;
+  // Without a final newline, the last line is one past the newlines.
+  const last = Number(m[1]) + 1;
+  const hunk = diff.hunks.at(-1);
+  const i = hunk?.lines.findLastIndex((l) => l.newNo !== null) ?? -1;
+  if (!hunk || hunk.lines[i]?.newNo !== last || hunk.lines[i + 1]?.kind === "meta") return diff;
+  const lines = hunk.lines.toSpliced(i + 1, 0, {
+    kind: "meta",
+    oldNo: null,
+    newNo: null,
+    text: "No newline at end of file",
+  });
+  return { ...diff, hunks: [...diff.hunks.slice(0, -1), { ...hunk, lines }] };
 };
 
 // ---------------------------------------------------------------------------

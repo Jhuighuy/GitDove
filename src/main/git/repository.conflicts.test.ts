@@ -1,4 +1,5 @@
 /** Merges, rebases, cherry-picks and reverts that stop on conflicts, and how they end. See `repository.fixture.ts` for the setup. */
+import { findConflicts, resolvePatch } from "@shared/diff/conflicts";
 import { describe, expect, it } from "vitest";
 import { noShell, targets, useRepoFixture } from "./repository.fixture";
 
@@ -50,6 +51,79 @@ describe.skipIf(noShell).each(targets)("Repository conflicts on %s", (hostId) =>
       expect(working.hunks[0]!.oldStart).toBe(1);
       const staged = await run(t.repo.diff({ kind: "staged", path: "f.txt" }));
       expect(staged).toMatchObject({ hunks: [], readOnly: "conflict" });
+    });
+
+    it("resolves blocks of conflict markers with patches", async () => {
+      await run(t.repo.createBranch("side", "HEAD", true));
+      await sh("printf 'a\\nS1\\nc\\nd\\ne\\nf\\ng\\nh\\nS2\\n' > f.txt && git commit -qam side");
+      await run(t.repo.checkout("main"));
+      await sh("printf 'a\\nM1\\nc\\nd\\ne\\nf\\ng\\nh\\nM2\\n' > f.txt && git commit -qam main");
+      await fails(t.repo.merge("side", {}));
+      const target = { kind: "unstaged", path: "f.txt" } as const;
+      const diff = await run(t.repo.diff(target));
+      const conflicts = findConflicts(diff);
+      expect(conflicts.map((c) => [c.current, c.incoming])).toEqual([
+        ["HEAD", "side"],
+        ["HEAD", "side"],
+      ]);
+      // One block, then the other in the diff made after.
+      await run(
+        t.repo.applyPatch(resolvePatch(diff, [{ conflict: conflicts[1]!, choice: "both" }])!, {
+          cached: false,
+          reverse: false,
+        }),
+      );
+      const next = await run(t.repo.diff(target));
+      const [first] = findConflicts(next);
+      await run(
+        t.repo.applyPatch(resolvePatch(next, [{ conflict: first!, choice: "incoming" }])!, {
+          cached: false,
+          reverse: false,
+        }),
+      );
+      expect(await sh("cat f.txt")).toBe("a\nS1\nc\nd\ne\nf\ng\nh\nM2\nS2");
+      // The file stays conflicted until it is marked resolved.
+      expect((await run(t.repo.status())).conflicted.map((f) => f.path)).toEqual(["f.txt"]);
+      // A patch from an outdated diff does not apply.
+      await fails(
+        t.repo.applyPatch(resolvePatch(diff, [{ conflict: conflicts[0]!, choice: "current" }])!, {
+          cached: false,
+          reverse: false,
+        }),
+      );
+      expect(await sh("cat f.txt")).toContain("S1");
+    });
+
+    it("resolves conflicts in a file without a final newline, with any marker size", async () => {
+      const target = { kind: "unstaged", path: "f.txt" } as const;
+      const resolveFirst = async (choice: "current" | "incoming" | "both") => {
+        const diff = await run(t.repo.diff(target));
+        const [conflict] = findConflicts(diff);
+        expect(conflict).toBeDefined();
+        await run(
+          t.repo.applyPatch(resolvePatch(diff, [{ conflict: conflict!, choice }])!, {
+            cached: false,
+            reverse: false,
+          }),
+        );
+      };
+      await sh("echo 'f.txt conflict-marker-size=3' > .gitattributes && git add .gitattributes");
+      await sh("printf 'a\\nend' > f.txt && git commit -qam base");
+      await run(t.repo.createBranch("side", "HEAD", true));
+      await sh("printf 'S\\nend' > f.txt && git commit -qam side");
+      await run(t.repo.checkout("main"));
+      await sh("printf 'M\\nend' > f.txt && git commit -qam main");
+      for (const choice of ["current", "incoming", "both"] as const) {
+        await fails(t.repo.merge("side", {}));
+        expect(await sh("head -1 f.txt")).toBe("<<< HEAD");
+        await resolveFirst(choice);
+        // Still without a final newline.
+        expect(await sh("tail -c 4 f.txt | tr '\\n' /")).toBe("/end");
+        await run(t.repo.abortOperation());
+      }
+      await fails(t.repo.merge("side", {}));
+      await resolveFirst("both");
+      expect(await sh("cat f.txt; echo '|'")).toBe("M\nS\nend|");
     });
 
     it("aborts and continues a rebase", async () => {

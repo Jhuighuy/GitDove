@@ -1,4 +1,10 @@
 import type { DiffLineKind, FileDiff } from "@shared/domain";
+import {
+  type Conflict,
+  conflictPart,
+  type ConflictPart,
+  findConflicts,
+} from "@shared/diff/conflicts";
 
 /** One diff line, flattened across hunks. */
 export interface Line {
@@ -16,11 +22,15 @@ export interface Line {
   /** Index into `DiffModel.sides[side]` used for highlighting, or -1. */
   readonly side: 0 | 1;
   readonly sideIndex: number;
+  /** The part of a block of conflict markers the line is in, if any. */
+  readonly conflict: ConflictPart | null;
 }
 
 export type Row =
   | { readonly type: "hunk"; readonly hunk: number }
   | { readonly type: "line"; readonly id: number }
+  /** The actions on a block of conflict markers, above its first line. */
+  | { readonly type: "conflict"; readonly conflict: number }
   /** A split view row; -1 marks an empty cell. */
   | { readonly type: "split"; readonly left: number; readonly right: number };
 
@@ -37,6 +47,8 @@ export interface DiffModel {
   readonly lines: readonly Line[];
   /** Id of each hunk's first line. */
   readonly hunkStart: readonly number[];
+  /** Blocks of conflict markers, in a conflicted file's working tree diff. */
+  readonly conflicts: readonly Conflict[];
   readonly unified: readonly Row[];
   readonly split: readonly Row[];
   /** Old (0) and new (1) file contents covered by the hunks, for highlighting. */
@@ -99,7 +111,10 @@ export const capLines = (diff: FileDiff, max = MAX_LINES): FileDiff => {
 
 export const buildModel = (full: FileDiff): DiffModel => {
   const diff = capLines(full);
+  const conflicts = findConflicts(diff);
   const lines: Line[] = [];
+  /** The first conflict that does not end before the line being added. */
+  let next = 0;
   const hunkStart: number[] = [];
   const unified: Row[] = [];
   const split: Row[] = [];
@@ -124,7 +139,10 @@ export const buildModel = (full: FileDiff): DiffModel => {
         const d = dels[i] ?? -1;
         const a = adds[i] ?? -1;
         split.push({ type: "split", left: d, right: a });
-        if (d >= 0 && a >= 0 && lines[d]!.kind === "del" && lines[a]!.kind === "add") {
+        // A conflict marker replaces no line: its words are not compared.
+        const words = (id: number, kind: DiffLineKind) =>
+          lines[id]!.kind === kind && lines[id]!.conflict !== "marker";
+        if (d >= 0 && a >= 0 && words(d, "del") && words(a, "add")) {
           (lines[d] as { pair: number }).pair = a;
           (lines[a] as { pair: number }).pair = d;
         }
@@ -135,18 +153,35 @@ export const buildModel = (full: FileDiff): DiffModel => {
 
     hunk.lines.forEach((l, index) => {
       const id = lines.length;
-      let side: 0 | 1 = 1;
-      let sideIndex = -1;
-      if (l.kind === "del") {
-        side = 0;
-        sideIndex = sides[0].push(l.text) - 1;
-      } else if (l.kind === "add") {
-        sideIndex = sides[1].push(l.text) - 1;
-      } else if (l.kind === "context") {
-        sides[0].push(l.text);
-        sideIndex = sides[1].push(l.text) - 1;
+      // Conflicts are in order: a cursor finds the one a line is in.
+      while (next < conflicts.length) {
+        const c = conflicts[next]!;
+        if (c.hunk > h || (c.hunk === h && c.end >= index)) break;
+        next++;
       }
-      lines.push({ id, hunk: h, index, ...l, pair: -1, side, sideIndex });
+      const block = conflicts[next]?.hunk === h ? conflicts[next]! : null;
+      if (block?.start === index) {
+        // Split rows of the lines before go before the actions.
+        flushBlock();
+        unified.push({ type: "conflict", conflict: next });
+        split.push({ type: "conflict", conflict: next });
+      }
+      const conflict = block ? conflictPart(block, index) : null;
+      const side: 0 | 1 = l.kind === "del" ? 0 : 1;
+      let sideIndex = -1;
+      // Conflict markers are not code, and highlighted as code they would throw off the lines
+      // after them too (e.g. a quote in a commit subject).
+      if (conflict !== "marker") {
+        if (l.kind === "del") {
+          sideIndex = sides[0].push(l.text) - 1;
+        } else if (l.kind === "add") {
+          sideIndex = sides[1].push(l.text) - 1;
+        } else if (l.kind === "context") {
+          sides[0].push(l.text);
+          sideIndex = sides[1].push(l.text) - 1;
+        }
+      }
+      lines.push({ id, hunk: h, index, ...l, pair: -1, side, sideIndex, conflict });
       unified.push({ type: "line", id });
       // A line is at most TAB_SIZE columns per character wide.
       if (l.text.length * TAB_SIZE > width) width = Math.max(width, displayWidth(l.text));
@@ -177,6 +212,7 @@ export const buildModel = (full: FileDiff): DiffModel => {
     diff,
     lines,
     hunkStart,
+    conflicts,
     unified,
     split,
     sides,
