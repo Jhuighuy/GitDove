@@ -639,7 +639,7 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
               }}
               onWheel={scrolledByUser}
               onPointerDown={scrolledByUser}
-              className="focus-visible:ring-ring/50 relative min-h-0 flex-1 overflow-auto outline-none [contain:strict] focus-visible:ring-2 focus-visible:ring-inset"
+              className="relative min-h-0 flex-1 overflow-auto outline-none [contain:strict]"
             />
           }
         >
