@@ -337,7 +337,7 @@ it("opens no menu where there is none, rather than the last one", async () => {
   expect(anyMenuItems()).toBe(0);
   // Every section header has a menu, which shows or hides the sections.
   await fire(sectionHeader("Stashes"), "contextmenu");
-  expect(menuItems()).toEqual([]);
+  expect(menuItems()).toEqual(["Show all", "Hide all"]);
   expect(
     [...document.querySelectorAll('[role="menuitemcheckbox"]')].map((e) => e.textContent?.trim()),
   ).toContain("Stashes");
