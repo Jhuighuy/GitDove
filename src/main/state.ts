@@ -142,7 +142,7 @@ export interface WindowState {
 const rect = (v: unknown): Rect | null => {
   const r = record(v);
   const [x, y, width, height] = [r.x, r.y, r.width, r.height].map((n) =>
-    typeof n === "number" && Number.isFinite(n) ? Math.round(n) : NaN,
+    typeof n === "number" && Number.isFinite(n) ? Math.round(n) : Number.NaN,
   ) as [number, number, number, number];
   return [x, y, width, height].some(Number.isNaN) || width <= 0 || height <= 0
     ? null
