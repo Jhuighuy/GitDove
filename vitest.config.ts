@@ -17,6 +17,7 @@ export default defineConfig({
       "@": resolve(import.meta.dirname, "src/renderer/src"),
     },
   },
+  // As in the renderer build (electron.vite.config.ts): tests run the components the app ships.
   plugins: [react({ compiler: true })],
   test: {
     testTimeout: 30000,

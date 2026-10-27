@@ -29,15 +29,17 @@ const mocks = vi.hoisted(() => ({
   rowsGate: null as Promise<void> | null,
 }));
 
-/** Calls of `relativeTime`, one per commit row rendered. */
-const formatted = vi.hoisted(() => ({ count: 0 }));
-vi.mock("@/lib/format", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/format")>();
+/**
+ * Renders of `CommitRow`. The React Compiler caches what a row computes, so counting calls inside
+ * it would miss renders; every compiled render starts by asking the runtime for its cache.
+ */
+const rowRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("react/compiler-runtime", async (importOriginal) => {
+  const actual = await importOriginal<{ c: (size: number) => unknown[] }>();
   return {
-    ...actual,
-    relativeTime: (...args: Parameters<typeof actual.relativeTime>) => {
-      formatted.count++;
-      return actual.relativeTime(...args);
+    c: (size: number) => {
+      if (/\bat CommitRow\b/.test(new Error().stack?.split("\n")[2] ?? "")) rowRenders.count++;
+      return actual.c(size);
     },
   };
 });
@@ -920,15 +922,15 @@ it("renders only the rows that change", async () => {
   mocks.rows = Array.from({ length: 30 }, (_, i) => commit(i));
   mocks.info = { version: 1, count: 30, complete: true, maxLanes: 1 };
   await render();
-  formatted.count = 0;
+  rowRenders.count = 0;
   await mouse(rowOf("Commit 3"), "mousedown");
   await mouse(rowOf("Commit 5"), "mousedown");
   // Commit 3 when selected, then both when the selection moves on.
-  expect(formatted.count).toBe(3);
+  expect(rowRenders.count).toBe(3);
   // Resizing a column does not render rows either.
-  formatted.count = 0;
+  rowRenders.count = 0;
   await dragSteps(headerCells()[3]!, [90, 80]);
-  expect(formatted.count).toBe(0);
+  expect(rowRenders.count).toBe(0);
 });
 
 it("opens no menu away from the rows, rather than the last one", async () => {
