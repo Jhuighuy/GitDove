@@ -27,7 +27,7 @@ export default defineConfig({
     resolve: {
       alias: { ...shared, "@": resolve(import.meta.dirname, "src/renderer/src") },
     },
-    plugins: [react(), tailwindcss()],
+    plugins: [react({ compiler: true }), tailwindcss()],
     // ES module workers can code-split (shiki loads grammars on demand).
     worker: { format: "es" },
     // Hidden maps: written for local debugging but not referenced from the bundles, and
