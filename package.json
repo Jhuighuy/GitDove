@@ -22,7 +22,7 @@
     "dist": "electron-vite build && electron-builder --publish never",
     "package": "electron-builder --publish never",
     "icons": "node scripts/build-icons.mjs",
-    "upgrade": "npx npm-check-updates -u && npm install"
+    "upgrade": "npx npm-check-updates@23 -u && npm install"
   },
   "dependencies": {
     "@parcel/watcher": "^2.6.0",
