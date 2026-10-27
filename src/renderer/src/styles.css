@@ -12,7 +12,8 @@
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: "Inter Variable", sans-serif;
-  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  /* `--code-font` is the font chosen in the settings (see `SettingsSync`). */
+  --font-mono: var(--code-font, "JetBrains Mono Variable"), ui-monospace, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -175,6 +176,10 @@
     color-scheme: light;
     /* Native controls (checkboxes, ranges) take the accent too. */
     accent-color: var(--primary);
+  }
+  /* The `ligatures` setting (see `SettingsSync`). */
+  html[data-ligatures="off"] .font-mono {
+    font-variant-ligatures: none;
   }
   html.dark {
     color-scheme: dark;

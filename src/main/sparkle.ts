@@ -7,6 +7,8 @@ import type { UpdaterStatus } from "@shared/domain";
 const HELPER = "Contents/Frameworks/GitDove Updater.app/Contents/MacOS/GitDove Updater";
 
 export interface SparkleHandlers {
+  /** Whether Sparkle checks on startup and on its schedule (see {@link Sparkle.setAutomatic}). */
+  readonly automatic: boolean;
   readonly onStatus: (status: UpdaterStatus) => void;
   readonly onLog: (message: string) => void;
 }
@@ -22,10 +24,10 @@ export class Sparkle {
 
   constructor(
     bundle: string,
-    { onStatus, onLog }: SparkleHandlers,
+    { automatic, onStatus, onLog }: SparkleHandlers,
     executable = join(bundle, HELPER),
   ) {
-    const helper = spawn(executable, [bundle]);
+    const helper = spawn(executable, [bundle, ...(automatic ? [] : ["--manual"])]);
     this.helper = helper;
     createInterface({ input: helper.stdout }).on("line", (line) => {
       const status = parseSparkleStatus(line);
@@ -48,6 +50,11 @@ export class Sparkle {
   /** Checks for updates now; answers with `idle`, `available`, `ready` or `error`. */
   check() {
     return this.send("check");
+  }
+
+  /** Turns Sparkle's own checks (on startup and on its schedule) on or off; on checks now. */
+  setAutomatic(automatic: boolean) {
+    this.send(automatic ? "automatic" : "manual");
   }
 
   /** Installs the downloaded update: Sparkle quits GitDove, then relaunches it. */

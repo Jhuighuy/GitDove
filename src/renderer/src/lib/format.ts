@@ -1,3 +1,5 @@
+import type { DateStyle } from "@shared/settings";
+
 // The UI is English, so dates are too (mixing languages reads poorly).
 const LOCALE = "en";
 const rtf = new Intl.RelativeTimeFormat(LOCALE, { numeric: "auto" });
@@ -28,6 +30,18 @@ export const relativeTime = (seconds: number, now = Date.now() / 1000): string =
 };
 
 export const absoluteTime = (seconds: number): string => dtf.format(new Date(seconds * 1000));
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** A compact local date and time, e.g. `2026-10-27 15:04`, for lists. */
+export const compactTime = (seconds: number): string => {
+  const d = new Date(seconds * 1000);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+/** A date in a list, in the style chosen in the settings. */
+export const listTime = (seconds: number, style: DateStyle, now = Date.now() / 1000): string =>
+  style === "relative" ? relativeTime(seconds, now) : compactTime(seconds);
 
 export const shortHash = (hash: string): string => hash.slice(0, 7);
 

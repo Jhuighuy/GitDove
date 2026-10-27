@@ -2,7 +2,6 @@ import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:c
 import { isAbsolute, relative, resolve } from "node:path";
 import { type DirEntry, type RepoId, type RepoLocation, repoLocationOf } from "@shared/domain";
 import {
-  APP_THEMES,
   type ApiArgs,
   type ApiMethod,
   type ApiResult,
@@ -16,25 +15,24 @@ import {
   type RpcError,
   type RpcResult,
 } from "@shared/ipc";
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  nativeTheme,
-  shell,
-  type WebContents,
-} from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from "electron";
 import log from "electron-log/main";
 import { Cause, Context, Effect, Exit, type ManagedRuntime, Schema } from "effect";
 import { mayRunGitlab } from "@shared/avatars";
+import {
+  APP_THEMES,
+  DATE_STYLES,
+  SETTING_CHECKS,
+  type Settings,
+  SYNTAX_THEMES,
+} from "@shared/settings";
 import { isGitlab } from "./avatars";
 import { type AppError, InvalidInputError } from "./exec/errors";
 import { Hosts, LOCAL_HOST } from "./exec/hosts";
 import { shellJoin, shellQuote } from "./exec/shell";
 import type { Repository } from "./git/repository";
 import { type Owner, RepoSettings, Repos } from "./services";
-import { loadState, saveState } from "./state";
+import { loadSettings, loadState, saveState, updateSettings } from "./state";
 import { updater } from "./updater";
 
 type Services = Repos | Hosts | RepoSettings;
@@ -92,6 +90,28 @@ const State = Schema.Struct({
   activeTab: Schema.NullOr(Str),
   recent: Schema.Array(Str),
 });
+/** A setting's value, checked as `normalizeSettings` would keep it. */
+const setting = <S extends Schema.Top>(key: keyof Settings, schema: S) =>
+  Schema.optional(
+    schema.check(valid((v: S["Type"]) => SETTING_CHECKS[key](v), `Invalid setting ${key}`)),
+  );
+const themeNames = (scheme: keyof typeof SYNTAX_THEMES) =>
+  SYNTAX_THEMES[scheme].map(([name]) => name);
+const SettingsPatch = Schema.Struct({
+  theme: setting("theme", Schema.Literals(APP_THEMES)),
+  syntaxThemeLight: setting("syntaxThemeLight", Schema.Literals(themeNames("light"))),
+  syntaxThemeDark: setting("syntaxThemeDark", Schema.Literals(themeNames("dark"))),
+  codeFont: setting("codeFont", Str),
+  codeFontSize: setting("codeFontSize", Schema.Number),
+  ligatures: setting("ligatures", Bool),
+  zoom: setting("zoom", Schema.Number),
+  dates: setting("dates", Schema.Literals(DATE_STYLES)),
+  avatars: setting("avatars", Bool),
+  tabSize: setting("tabSize", Schema.Number),
+  terminal: setting("terminal", Str),
+  autoUpdate: setting("autoUpdate", Bool),
+  restoreTabs: setting("restoreTabs", Bool),
+});
 /** A graph row range of at most `max` rows. */
 const RowRange = (max: number) =>
   Schema.Tuple([Id, Index, Index, Index]).check(
@@ -121,12 +141,13 @@ const argSchemas = {
   "app.setState": argsOf(State),
   "app.version": noArgs,
   "app.edit": argsOf(Schema.Literals(EDIT_COMMANDS)),
-  "app.setTheme": argsOf(Schema.Literals(APP_THEMES)),
   "dialog.pickDirectory": noArgs,
   "shell.openTerminal": repoArgs(),
   "shell.revealInFinder": repoArgs(Schema.optional(Str)),
   "shell.openExternal": argsOf(Str),
   "web.isGitlab": argsOf(Str),
+  "settings.get": noArgs,
+  "settings.set": argsOf(SettingsPatch),
   "ssh.hosts": noArgs,
   "ssh.listDir": argsOf(SshHost, Schema.NullOr(Str)),
   "repo.open": argsOf(Location),
@@ -299,11 +320,18 @@ const cmdQuote = (s: string) => {
   return `"${s}"`;
 };
 
-/** Ways to open a terminal at a repository, in order of preference. */
-export const terminalLaunches = (loc: RepoLocation): Launch[] => {
+/**
+ * Ways to open a terminal at a repository, in order of preference. `terminal` is the one the user
+ * chose (the `terminal` setting), if any: an application on macOS, which opens local repositories
+ * (others need Terminal's scripting), and a command on Linux, run like `$TERMINAL`.
+ */
+export const terminalLaunches = (loc: RepoLocation, terminal = ""): Launch[] => {
   const remoteShell = `cd ${shellQuote(loc.path)} && exec $SHELL -l`;
   const ssh = loc.kind === "ssh" ? ["ssh", "-t", "--", loc.host, remoteShell] : [];
   if (process.platform === "darwin") {
+    if (terminal && terminal !== "Terminal" && loc.kind === "local") {
+      return [{ file: "open", args: ["-a", terminal, loc.path] }];
+    }
     const command = loc.kind === "local" ? `cd ${shellQuote(loc.path)}` : shellJoin(ssh);
     const script = `tell application "Terminal"
   activate
@@ -323,6 +351,7 @@ end tell`;
   }
   const cwd = loc.kind === "local" ? { cwd: loc.path } : undefined;
   const emulators: [string | undefined, string][] = [
+    [terminal || undefined, "-e"],
     [process.env.TERMINAL, "-e"],
     ["x-terminal-emulator", "-e"],
     ["gnome-terminal", "--"],
@@ -337,7 +366,7 @@ end tell`;
 
 const openTerminal = (repo: Repository) =>
   Effect.try({
-    try: () => terminalLaunches(repo.location),
+    try: () => terminalLaunches(repo.location, loadSettings().terminal),
     catch: (e) => new InvalidInputError({ message: (e as Error).message }),
   }).pipe(
     Effect.flatMap((launches) =>
@@ -347,7 +376,7 @@ const openTerminal = (repo: Repository) =>
             new InvalidInputError({
               message:
                 launches.length > 1
-                  ? "No terminal emulator found. Set $TERMINAL to the one to use."
+                  ? "No terminal emulator found. Choose the one to use in Settings."
                   : `Could not open a terminal: ${e.message}`,
             }),
         ),
@@ -373,11 +402,6 @@ export const handlers: Handlers = {
   "app.edit": (command) =>
     Effect.gen(function* () {
       (yield* Caller).webContents[command]();
-    }),
-  // Windows follow through `nativeTheme`'s "updated" event (see index.ts).
-  "app.setTheme": (theme) =>
-    Effect.sync(() => {
-      nativeTheme.themeSource = theme;
     }),
   "dialog.pickDirectory": () =>
     Effect.gen(function* () {
@@ -417,6 +441,11 @@ export const handlers: Handlers = {
       : Effect.fail(new InvalidInputError({ message: `Refusing to open ${url}` })),
 
   "web.isGitlab": (origin) => (isWebOrigin(origin) ? isGitlab(origin) : Effect.succeed(false)),
+
+  // Settings -------------------------------------------------------------------
+  // What a change does (themes, zoom, updates) is up to the listeners (see index.ts).
+  "settings.get": () => Effect.sync(loadSettings),
+  "settings.set": (patch) => Effect.sync(() => updateSettings(patch)),
 
   // Remote hosts ---------------------------------------------------------------
   "ssh.hosts": () =>

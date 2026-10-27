@@ -1,6 +1,7 @@
 /** Messages between the diff view and the highlighting worker. */
 
-export type ThemeKind = "light" | "dark";
+/** A shiki theme, e.g. `vitesse-dark` (one of `SYNTAX_THEMES`). */
+export type ThemeName = string;
 
 /** Lines per highlighting chunk. */
 export const CHUNK = 200;
@@ -16,7 +17,7 @@ export type HighlightRequest =
   | {
       readonly type: "highlight";
       readonly doc: number;
-      readonly theme: ThemeKind;
+      readonly theme: ThemeName;
       readonly side: 0 | 1;
       readonly chunk: number;
     }
@@ -28,7 +29,7 @@ export type HighlightResponse =
   | {
       readonly type: "tokens";
       readonly doc: number;
-      readonly theme: ThemeKind;
+      readonly theme: ThemeName;
       readonly side: 0 | 1;
       readonly chunk: number;
       /** Offsets into `tokens` per line of the chunk, plus the end. */

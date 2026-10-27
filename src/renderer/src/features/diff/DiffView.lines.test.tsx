@@ -187,8 +187,8 @@ it("shows the path, the target and lines with syntax and word highlighting", asy
   // A deletion without a counterpart has no emphasis.
   expect(line(2).querySelector("[class*=500\\/30]")).toBeNull();
   // Visible lines of both sides are requested from the highlighter.
-  expect(mocks.ensured).toContainEqual(["dark", 0, 1, 4]);
-  expect(mocks.ensured).toContainEqual(["dark", 1, 0, 3]);
+  expect(mocks.ensured).toContainEqual(["vitesse-dark", 0, 1, 4]);
+  expect(mocks.ensured).toContainEqual(["vitesse-dark", 1, 0, 3]);
   // Commits have no hunk actions.
   expect(container.textContent).not.toContain("Hunk");
 });

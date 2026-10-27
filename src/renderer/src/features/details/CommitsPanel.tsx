@@ -2,10 +2,11 @@ import type { FileChange, RepoId } from "@shared/domain";
 import { useCallback, useState } from "react";
 import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import { Spinner } from "@/components/ui/spinner";
-import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
+import { absoluteTime, listTime, shortHash } from "@/lib/format";
 import { useCompare } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { type PickedCommit, useRepoUiStore } from "@/stores/repo-ui";
+import { useSettings } from "@/stores/settings";
 import { fileTarget } from "../diff/targets";
 import { FileList, filesChanged, MoreFiles } from "./FileList";
 
@@ -21,6 +22,7 @@ export function CommitsPanel({
   commits: readonly PickedCommit[];
 }) {
   const avatarProviders = useAvatarProviders(repo);
+  const dates = useSettings((s) => s.dates);
   const select = useRepoUiStore((s) => s.select);
   const diff = useRepoUiStore((s) => s.byRepo[repo]?.diff ?? null);
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
@@ -67,7 +69,9 @@ export function CommitsPanel({
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[12px] font-medium">{row.subject}</div>
                 <div className="text-muted-foreground truncate text-[11px]">
-                  <span title={absoluteTime(row.authorTime)}>{relativeTime(row.authorTime)}</span>
+                  <span title={absoluteTime(row.authorTime)}>
+                    {listTime(row.authorTime, dates)}
+                  </span>
                   {" · "}
                   {row.authorName}
                 </div>

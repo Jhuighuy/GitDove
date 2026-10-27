@@ -3,6 +3,7 @@ import type { RepoId } from "@shared/domain";
 import { memo, useMemo, useState } from "react";
 import { hueOf, initials } from "@/lib/format";
 import { useRefs } from "@/lib/queries";
+import { useSettings } from "@/stores/settings";
 
 /**
  * Avatar URLs that failed to load, and when, so that recycled rows don't retry them at once.
@@ -41,10 +42,12 @@ interface Props {
 
 /**
  * Author avatar: colored initials, covered by the real picture (GitHub, GitLab
- * or Gravatar, resolved and cached by the main process) once it has loaded.
+ * or Gravatar, resolved and cached by the main process) once it has loaded, unless
+ * avatars are turned off in the settings.
  */
 export const Avatar = memo(function Avatar({ name, email, providers, size = 18 }: Props) {
-  const url = email.includes("@") ? avatarUrl(email, providers, AVATAR_PX) : null;
+  const online = useSettings((s) => s.avatars);
+  const url = online && email.includes("@") ? avatarUrl(email, providers, AVATAR_PX) : null;
   const [failed, setFailed] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
   const showImage = url !== null && failed !== url && !isMissing(url);

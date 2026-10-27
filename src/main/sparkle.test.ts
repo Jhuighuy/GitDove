@@ -36,12 +36,12 @@ function fakeHelper(script: string) {
   return file;
 }
 
-function start(script: string, bundle = "/Applications/GitDove.app") {
+function start(script: string, bundle = "/Applications/GitDove.app", automatic = true) {
   const statuses: UpdaterStatus[] = [];
   const logs: string[] = [];
   const sparkle = new Sparkle(
     bundle,
-    { onStatus: (s) => statuses.push(s), onLog: (m) => logs.push(m) },
+    { automatic, onStatus: (s) => statuses.push(s), onLog: (m) => logs.push(m) },
     script ? fakeHelper(script) : undefined,
   );
   return { sparkle, statuses, logs };
@@ -67,6 +67,19 @@ echo bye >&2`);
     await expect.poll(() => logs.at(-1)).toBe("bye");
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(statuses).toHaveLength(2);
+  });
+
+  it("starts the helper without automatic checks, and turns them on and off", async () => {
+    const { sparkle, logs } = start(
+      `echo "args $*" >&2; while read -r command; do echo "$command" >&2; done`,
+      "/Applications/GitDove.app",
+      false,
+    );
+    await expect.poll(() => logs).toEqual(["args /Applications/GitDove.app --manual"]);
+    sparkle.setAutomatic(true);
+    sparkle.setAutomatic(false);
+    await expect.poll(() => logs.slice(1)).toEqual(["automatic", "manual"]);
+    sparkle.close();
   });
 
   it("logs unexpected output", async () => {

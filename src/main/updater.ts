@@ -10,6 +10,8 @@ const { autoUpdater } = electronUpdater;
 let status: UpdaterStatus = { kind: "idle" };
 let listener: ((s: UpdaterStatus) => void) | null = null;
 let sparkle: Sparkle | null = null;
+/** Whether updates are checked for in the background (the `autoUpdate` setting). */
+let automatic = true;
 /** Callers of `check()` waiting for its outcome. */
 let waiting: ((s: UpdaterStatus) => void)[] = [];
 
@@ -33,18 +35,21 @@ const settle = (s: UpdaterStatus) => {
 
 /**
  * Over-the-air updates from GitHub releases: Sparkle on macOS (see `sparkle.ts`), electron-updater
- * elsewhere. Updates download in the background and install on restart or quit.
+ * elsewhere. Updates download in the background and install on restart or quit. Without automatic
+ * checks, only "Check for Updates…" looks for (and downloads) them.
  */
 export const updater = {
   status: () => status,
 
-  init(onStatus: (s: UpdaterStatus) => void) {
+  init(onStatus: (s: UpdaterStatus) => void, checkAutomatically: boolean) {
     listener = onStatus;
+    automatic = checkAutomatically;
     if (!app.isPackaged) return;
     if (process.platform === "darwin") {
       // Sparkle checks on startup and every 4 hours (`SUScheduledCheckInterval`).
       // GitDove.app/Contents/MacOS/GitDove
       sparkle = new Sparkle(dirname(dirname(dirname(app.getPath("exe")))), {
+        automatic,
         onStatus: set,
         onLog: (message) => log.warn(`updater: ${message}`),
       });
@@ -59,8 +64,21 @@ export const updater = {
     autoUpdater.on("download-progress", (p) => set({ kind: "downloading", percent: p.percent }));
     autoUpdater.on("update-downloaded", (i) => set({ kind: "ready", version: i.version }));
     autoUpdater.on("error", (e) => set({ kind: "error", message: e.message }));
-    void this.check();
-    setInterval(() => void this.check(), 4 * 60 * 60 * 1000).unref();
+    if (automatic) void this.check();
+    setInterval(
+      () => {
+        if (automatic) void this.check();
+      },
+      4 * 60 * 60 * 1000,
+    ).unref();
+  },
+
+  /** Turns background checks on or off; turning them on checks now. */
+  setAutomatic(value: boolean) {
+    if (value === automatic) return;
+    automatic = value;
+    if (sparkle) sparkle.setAutomatic(value);
+    else if (value) void this.check();
   },
 
   /** Checks for updates now; resolves with the outcome (`downloading` if already underway). */

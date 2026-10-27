@@ -31,7 +31,6 @@ const electron = vi.hoisted(() => ({
     ),
   },
   ipcMain: { handle: vi.fn(), on: vi.fn() },
-  nativeTheme: { themeSource: "system" },
   shell: {
     showItemInFolder: vi.fn(),
     openPath: vi.fn(async () => ""),
@@ -41,7 +40,12 @@ const electron = vi.hoisted(() => ({
 vi.mock("electron", () => electron);
 const log = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock("electron-log/main", () => ({ default: log }));
-const state = vi.hoisted(() => ({ loadState: vi.fn(), saveState: vi.fn() }));
+const state = vi.hoisted(() => ({
+  loadState: vi.fn(),
+  saveState: vi.fn(),
+  loadSettings: vi.fn(() => ({ terminal: "" })),
+  updateSettings: vi.fn((patch: object) => ({ terminal: "", ...patch })),
+}));
 vi.mock("./state", () => state);
 const updater = vi.hoisted(() => ({
   status: vi.fn(() => ({ kind: "idle" })),
@@ -78,6 +82,8 @@ vi.mock("node:child_process", async (importOriginal) => {
     "xfce4-terminal",
     "xterm",
     "my-term",
+    "open",
+    "chosen-term",
   ];
   return {
     ...real,
@@ -222,11 +228,14 @@ describe("app and dialog handlers", () => {
     expect(state.saveState).toHaveBeenCalledWith(next);
   });
 
-  it("sets the theme of what the main process draws", async () => {
-    await call("app.setTheme", "dark");
-    expect(electron.nativeTheme.themeSource).toBe("dark");
-    await call("app.setTheme", "system");
-    expect(electron.nativeTheme.themeSource).toBe("system");
+  it("reads and changes the settings", async () => {
+    expect(await call("settings.get")).toEqual({ terminal: "" });
+    expect(await call("settings.set", { theme: "dark", codeFontSize: 14 })).toEqual({
+      terminal: "",
+      theme: "dark",
+      codeFontSize: 14,
+    });
+    expect(state.updateSettings).toHaveBeenCalledWith({ theme: "dark", codeFontSize: 14 });
   });
 
   it("reports the version and platform", async () => {
@@ -400,6 +409,35 @@ describe("shell handlers", () => {
     );
   });
 
+  it("opens the terminal chosen in the settings", async () => {
+    state.loadSettings.mockReturnValue({ terminal: "chosen-term" });
+    try {
+      setPlatform("darwin");
+      services.repo = local();
+      await call("shell.openTerminal", services.repo.id);
+      expect(terminals.spawn).toHaveBeenLastCalledWith(
+        "open",
+        ["-a", "chosen-term", "/work/it's"],
+        detached,
+      );
+      // Only Terminal can be told to run ssh.
+      services.repo = remote();
+      await call("shell.openTerminal", services.repo.id);
+      expect(terminals.spawn.mock.lastCall![0]).toBe("osascript");
+      setPlatform("linux");
+      vi.stubEnv("TERMINAL", "my-term");
+      await call("shell.openTerminal", services.repo.id);
+      expect(terminals.spawn).toHaveBeenLastCalledWith(
+        "chosen-term",
+        ["-e", "ssh", "-t", "--", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
+        detached,
+      );
+    } finally {
+      state.loadSettings.mockReturnValue({ terminal: "" });
+      setPlatform("darwin");
+    }
+  });
+
   it("fails, instead of crashing, without a terminal emulator", async () => {
     setPlatform("linux");
     for (const t of ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm"])
@@ -408,7 +446,7 @@ describe("shell handlers", () => {
     expect(exit).toEqual(
       Exit.fail(
         new InvalidInputError({
-          message: "No terminal emulator found. Set $TERMINAL to the one to use.",
+          message: "No terminal emulator found. Choose the one to use in Settings.",
         }),
       ),
     );
@@ -634,7 +672,12 @@ describe("registerIpc", () => {
     const bad: [string, unknown][] = [
       ["app.version", "not-an-array"],
       ["app.version", [1]],
-      ["app.setTheme", ["blue"]],
+      ["settings.set", [{ theme: "blue" }]],
+      ["settings.set", [{ syntaxThemeLight: "vitesse-dark" }]],
+      ["settings.set", [{ codeFontSize: 100 }]],
+      ["settings.set", [{ zoom: 3 }]],
+      ["settings.set", [{ codeFont: "a\nb" }]],
+      ["settings.set", [null]],
       ["repo.status", []],
       ["repo.status", [42]],
       ["repo.status", ["nope"]],

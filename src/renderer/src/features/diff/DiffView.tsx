@@ -13,8 +13,9 @@ import { cn } from "@/lib/utils";
 import { BusyHint } from "@/components/busy";
 import { useBusy, writeProps } from "@/stores/busy";
 import { type DiffMode, useLayout, useRepoUiStore } from "@/stores/repo-ui";
+import { useSettings } from "@/stores/settings";
 import { commands } from "../commands";
-import type { ThemeKind } from "./highlight-protocol";
+import type { ThemeName } from "./highlight-protocol";
 import { type DocHighlighter, tokenStyle, useHighlighter } from "./highlight";
 import {
   type Conflict,
@@ -28,7 +29,8 @@ import { stepTarget, useSiblingFiles } from "./targets";
 import { buildModel, type DiffModel, isChange, type Line, MAX_TEXT, type Row } from "./model";
 import { type DiffViewId, fileKind, viewFor } from "./views";
 
-const LINE_HEIGHT = 20;
+/** A line's height for the diff font size: 20 px at the default 12 px. */
+const lineHeightFor = (fontSize: number) => Math.round((fontSize * 5) / 3);
 const HUNK_HEIGHT = 28;
 const CONFLICT_HEIGHT = 26;
 /** Rows rendered (and highlighted) beyond each edge of the view. */
@@ -86,7 +88,8 @@ export function DiffView({ repo, target }: { repo: RepoId; target: DiffTarget })
     repo,
     textual ? target : null,
   );
-  const model = useMemo(() => (data ? buildModel(data) : null), [data]);
+  const tabSize = useSettings((s) => s.tabSize);
+  const model = useMemo(() => (data ? buildModel(data, tabSize) : null), [data, tabSize]);
   const mode = useLayout((s) => s.diffMode);
   const setMode = useLayout((s) => s.setDiffMode);
   const close = () => useRepoUiStore.getState().openDiff(repo, null);
@@ -513,6 +516,8 @@ function DiffBody({
   setSelection: (s: ReadonlySet<number>) => void;
 }) {
   const rows = mode === "split" ? model.split : model.unified;
+  const fontSize = useSettings((s) => s.codeFontSize);
+  const lineHeight = lineHeightFor(fontSize);
   const scrollRef = useRef<HTMLDivElement>(null);
   // The last hunk of a truncated diff may be incomplete: it gets no actions.
   const lockedHunk = model.diff.truncated ? model.diff.hunks.length - 1 : -1;
@@ -581,7 +586,7 @@ function DiffBody({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     getItemKey,
-    estimateSize: (i) => ROW_HEIGHT[rows[i]!.type],
+    estimateSize: (i) => rowHeight(rows[i]!.type, lineHeight),
     overscan: OVERSCAN,
     rangeExtractor: (range) => {
       const indexes = defaultRangeExtractor(range);
@@ -595,7 +600,9 @@ function DiffBody({
   const items = virtualizer.getVirtualItems();
 
   const { resolvedTheme } = useTheme();
-  const theme: ThemeKind = resolvedTheme === "light" ? "light" : "dark";
+  const theme: ThemeName = useSettings((s) =>
+    resolvedTheme === "light" ? s.syntaxThemeLight : s.syntaxThemeDark,
+  );
   const hl = useHighlighter(model);
 
   // Highlight what is on screen (plus overscan), lazily; rows kept mounted off screen are not.
@@ -793,7 +800,7 @@ function DiffBody({
       <div
         ref={scrollRef}
         className={cn(
-          "min-h-0 flex-1 font-mono text-[12px] [tab-size:4] [contain:strict]",
+          "min-h-0 flex-1 font-mono [contain:strict]",
           // The other column's text is unselectable; these outrank its own `select-text`.
           "[&[data-select-side='0']_[data-side='1']_[data-text]]:select-none",
           "[&[data-select-side='1']_[data-side='0']_[data-text]]:select-none",
@@ -803,6 +810,13 @@ function DiffBody({
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
         onWheel={onWheel}
+        style={
+          {
+            fontSize,
+            tabSize: model.tabSize,
+            "--line-height": `${lineHeight}px`,
+          } as React.CSSProperties
+        }
       >
         <div
           style={{
@@ -872,7 +886,7 @@ function DiffBody({
         </div>
       </div>
       {mode === "split" && (
-        <div className="flex shrink-0 font-mono text-[12px]">
+        <div className="flex shrink-0 font-mono" style={{ fontSize }}>
           {[0, 1].map((i) => (
             <div
               key={i}
@@ -894,12 +908,8 @@ function DiffBody({
   );
 }
 
-const ROW_HEIGHT: Record<Row["type"], number> = {
-  hunk: HUNK_HEIGHT,
-  conflict: CONFLICT_HEIGHT,
-  line: LINE_HEIGHT,
-  split: LINE_HEIGHT,
-};
+const rowHeight = (type: Row["type"], lineHeight: number) =>
+  type === "hunk" ? HUNK_HEIGHT : type === "conflict" ? CONFLICT_HEIGHT : lineHeight;
 
 /** The actions above a block of conflict markers, as in VS Code. */
 function ConflictRow({
@@ -965,7 +975,7 @@ interface CellContext {
    * object, so this is what tells (memoized) cells to render again.
    */
   readonly version: number;
-  readonly theme: ThemeKind;
+  readonly theme: ThemeName;
   readonly words: (l: Line) => readonly Range[] | null;
   readonly selection: ReadonlySet<number>;
   readonly selectable: (l: Line) => boolean;
@@ -1066,7 +1076,7 @@ function UnifiedLine({
       data-row={row}
       style={style}
       className={cn(
-        "group/line absolute top-0 left-0 flex w-full items-center leading-5 whitespace-pre",
+        "group/line absolute top-0 left-0 flex w-full items-center leading-(--line-height) whitespace-pre",
         lineBg(l, selected),
         ctx.selectable(l) && "cursor-pointer",
       )}
@@ -1095,7 +1105,7 @@ function SplitCell({ id, side, ctx }: { id: number; side: 0 | 1; ctx: CellContex
       data-line={id}
       data-side={side}
       className={cn(
-        "group/line flex min-w-0 flex-1 items-center leading-5 whitespace-pre",
+        "group/line flex min-w-0 flex-1 items-center leading-(--line-height) whitespace-pre",
         lineBg(l, selected),
         ctx.selectable(l) && "cursor-pointer",
       )}

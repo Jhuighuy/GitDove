@@ -6,10 +6,10 @@
 import { createHighlighterCore, type GrammarState, type HighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import { bundledLanguages } from "shiki/langs";
-import type { HighlightRequest, HighlightResponse, ThemeKind } from "./highlight-protocol";
+import { bundledThemes } from "shiki/themes";
+import type { HighlightRequest, HighlightResponse, ThemeName } from "./highlight-protocol";
 import { CHUNK, languageFor } from "./highlight-protocol";
 
-const THEMES: Record<ThemeKind, string> = { light: "vitesse-light", dark: "vitesse-dark" };
 /** Longer lines are left plain. */
 const MAX_LINE = 1000;
 /**
@@ -24,7 +24,7 @@ const LANGUAGES: ReadonlySet<string> = new Set(Object.keys(bundledLanguages));
 let highlighter: Promise<HighlighterCore> | null = null;
 const getHighlighter = () =>
   (highlighter ??= createHighlighterCore({
-    themes: [import("shiki/themes/vitesse-light.mjs"), import("shiki/themes/vitesse-dark.mjs")],
+    themes: [],
     langs: [],
     engine: createJavaScriptRegexEngine({ forgiving: true }),
   }).catch((e: unknown) => {
@@ -51,6 +51,27 @@ const loadLanguage = (lang: string) => {
   return p;
 };
 
+/** Loads a theme once; resolves to false if it does not exist or failed to load. */
+const themes = new Map<string, Promise<boolean>>();
+const loadTheme = (theme: ThemeName) => {
+  let p = themes.get(theme);
+  if (!p) {
+    p = Object.hasOwn(bundledThemes, theme)
+      ? getHighlighter()
+          .then((hl) => hl.loadTheme(bundledThemes[theme as keyof typeof bundledThemes]))
+          .then(
+            () => true,
+            () => {
+              themes.delete(theme);
+              return false;
+            },
+          )
+      : Promise.resolve(false);
+    themes.set(theme, p);
+  }
+  return p;
+};
+
 interface Doc {
   readonly lang: string | null;
   readonly ready: Promise<boolean>;
@@ -62,7 +83,7 @@ interface Doc {
 
 interface Request {
   readonly doc: number;
-  readonly theme: ThemeKind;
+  readonly theme: ThemeName;
   readonly side: 0 | 1;
   readonly chunk: number;
 }
@@ -133,6 +154,8 @@ const step = async () => {
   try {
     // The chunk may have been highlighted meanwhile as a dependency of another.
     if (!doc || doc.states.has(key(req, req.chunk)) || !(await doc.ready)) return;
+    // An unknown theme leaves the lines plain, like an unknown language.
+    if (!(await loadTheme(req.theme))) return;
     const hl = await getHighlighter();
     if (docs.get(req.doc) !== doc) return;
     let first = req.chunk;
@@ -156,7 +179,7 @@ const step = async () => {
   }
 };
 
-const key = (r: { theme: ThemeKind; side: 0 | 1 }, chunk: number) =>
+const key = (r: { theme: ThemeName; side: 0 | 1 }, chunk: number) =>
   `${r.theme}:${r.side}:${chunk}`;
 
 const startsFresh = (doc: Doc, side: 0 | 1, chunk: number) =>
@@ -166,7 +189,7 @@ const highlightChunk = (
   hl: HighlighterCore,
   id: number,
   doc: Doc,
-  theme: ThemeKind,
+  theme: ThemeName,
   side: 0 | 1,
   chunk: number,
 ) => {
@@ -189,7 +212,7 @@ const highlightChunk = (
     try {
       tokens = hl.codeToTokensBase(lines.slice(s, e).join("\n"), {
         lang: doc.lang!,
-        theme: THEMES[theme],
+        theme,
         tokenizeMaxLineLength: MAX_LINE,
         ...(state ? { grammarState: state } : {}),
       });

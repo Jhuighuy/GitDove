@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { AvatarProvider } from "@shared/avatars";
+import type { DateStyle } from "@shared/settings";
 import { Avatar, useAvatarProviders } from "@/components/Avatar";
 import {
   ContextMenu,
@@ -25,7 +26,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Spinner } from "@/components/ui/spinner";
 import { api, isMac } from "@/lib/api";
-import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
+import { absoluteTime, listTime, shortHash } from "@/lib/format";
 import {
   useGraphInfo,
   useGraphRows,
@@ -37,6 +38,7 @@ import {
 } from "@/lib/queries";
 import { laneColor } from "@/lib/graph-colors";
 import { cn } from "@/lib/utils";
+import { useSettings } from "@/stores/settings";
 import {
   type PickedCommit,
   type Selection,
@@ -171,6 +173,7 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
   const [draft, setDraft] = useState<Partial<Record<Column, number>>>({});
   const avatarProviders = useAvatarProviders(repo);
   const now = useMinuteClock();
+  const dates = useSettings((s) => s.dates);
   const listId = useId();
   /** The element id of the WIP row ("wip") or a commit's row. */
   const rowId = (key: string) => `${listId}-${key}`;
@@ -597,6 +600,7 @@ export const CommitGraph = memo(function CommitGraph({ repo }: { repo: RepoId })
         index={index}
         selected={hashes.has(row.hash)}
         now={now}
+        dates={dates}
         onPress={onPress}
         onContextMenu={onRowContextMenu}
         onRefDoubleClick={onRefDoubleClick}
@@ -838,6 +842,7 @@ interface CommitRowProps {
   readonly selected: boolean;
   /** The time dates are relative to, in seconds. */
   readonly now: number;
+  readonly dates: DateStyle;
   readonly onPress: (row: GraphRow, index: number, e: React.MouseEvent) => void;
   readonly onContextMenu: (row: GraphRow) => void;
   readonly onRefDoubleClick: (ref: Ref) => void;
@@ -897,7 +902,7 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
         className="text-muted-foreground w-(--col-date) shrink-0 truncate px-2 text-xs tabular-nums"
         title={absoluteTime(row.authorTime)}
       >
-        {relativeTime(row.authorTime, p.now)}
+        {listTime(row.authorTime, p.dates, p.now)}
       </div>
       <div className="text-muted-foreground w-[76px] shrink-0 truncate px-2 font-mono text-[11px]">
         {shortHash(row.hash)}
