@@ -9,6 +9,7 @@ import {
   IconPackageExport,
   IconPackageImport,
   IconRefresh,
+  IconSettings,
   IconTerminal2,
 } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
@@ -20,12 +21,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { api } from "@/lib/api";
+import { api, modKey } from "@/lib/api";
 import { useRefs, useRepoInfo, useStatus } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { busyReason, useBusy } from "@/stores/busy";
 import { useLayout } from "@/stores/repo-ui";
 import { commands } from "../commands";
+import { showSettings } from "../settings/SettingsDialog";
 
 /**
  * A button with a menu beside it: two halves that meet at a seam, each with its own hover, and
@@ -257,6 +259,16 @@ export function Toolbar({ repo }: { repo: RepoId }) {
           aria-pressed={details}
         >
           <IconLayoutSidebarRight />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="text-muted-foreground"
+          onClick={showSettings}
+          title={`Settings (${modKey},)`}
+          aria-label="Settings"
+        >
+          <IconSettings />
         </Button>
       </div>
     </div>

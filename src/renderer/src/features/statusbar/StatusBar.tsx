@@ -6,20 +6,18 @@ import {
   IconDeviceLaptop,
   IconInfoCircle,
   IconServer,
-  IconSettings,
   IconX,
 } from "@tabler/icons-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import { api, modKey, useEvent } from "@/lib/api";
+import { api, useEvent } from "@/lib/api";
 import { keys, refreshRepo } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { type Busy, busyLabel, useBusy } from "@/stores/busy";
 import { APP, type Notice, useActivity, useNotice } from "@/stores/status";
 import { commands } from "../commands";
-import { showSettings } from "../settings/SettingsDialog";
 
 /**
  * The window's status bar: where the active tab's repository lives, what is happening in it
@@ -105,15 +103,6 @@ export function StatusBar({ repo }: { repo: RepoId | null }) {
             </Button>
           </span>
         )}
-        <button
-          type="button"
-          className="hover:text-foreground -mx-1 flex cursor-pointer items-center rounded p-0.5"
-          title={`Settings (${modKey},)`}
-          aria-label="Settings"
-          onClick={showSettings}
-        >
-          <IconSettings />
-        </button>
       </div>
     </footer>
   );

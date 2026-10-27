@@ -7,7 +7,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { keys, useGraphInfo } from "@/lib/queries";
 import { useBusyStore } from "@/stores/busy";
 import { APP, notify, useStatusStore } from "@/stores/status";
-import { useSettingsDialog } from "../settings/SettingsDialog";
 import { LOCAL_CANCEL_MS, StatusBar } from "./StatusBar";
 
 const mocks = vi.hoisted(() => ({
@@ -20,9 +19,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
-  isMac: true,
-  modKey: "⌘",
-  platform: "darwin",
   useEvent: (event: string, listener: (payload: never) => void) =>
     mocks.listeners.set(event, listener),
   api: async (method: string, ...args: unknown[]) => {
@@ -282,13 +278,4 @@ it("shows an update that arrives later", async () => {
     mocks.listeners.get("updater.status")!({ kind: "ready", version: "0.1.46" } as never),
   );
   expect(text()).toContain("GitDove 0.1.46 is ready");
-});
-
-it("opens the settings", async () => {
-  await render(null);
-  const gear = container.querySelector<HTMLButtonElement>('button[aria-label="Settings"]')!;
-  expect(gear.title).toBe("Settings (⌘,)");
-  await act(async () => gear.click());
-  expect(useSettingsDialog.getState().open).toBe(true);
-  useSettingsDialog.setState({ open: false });
 });
