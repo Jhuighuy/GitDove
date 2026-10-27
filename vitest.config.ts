@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { configDefaults, defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
 
 /** Tests that run real git, shells or file watchers: slow, so `npm run test:unit` skips them. */
 const integration = [
@@ -16,6 +17,7 @@ export default defineConfig({
       "@": resolve(import.meta.dirname, "src/renderer/src"),
     },
   },
+  plugins: [react({ compiler: true })],
   test: {
     testTimeout: 30000,
     // Throwaway repositories must not pick up the developer's git configuration (commit signing,
