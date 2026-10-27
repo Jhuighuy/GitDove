@@ -491,24 +491,29 @@ export function SidebarMenu({ repo, target, vis }: Props) {
     }
 
     case "section": {
+      // The checked-out branch is always shown.
+      const branches = (refs?.refs ?? []).filter((r) => !r.isHead);
       const names = (prefix: string) =>
-        (refs?.refs ?? []).filter((r) => r.name.startsWith(prefix) && !r.isHead).map((r) => r.name);
-      const groupItems = (prefix: string) => {
-        const members = names(prefix);
-        return (
-          <>
-            <Item onClick={() => vis.showGroup(members, prefix)}>Show all</Item>
-            <Item
-              onClick={() =>
-                // New local branches stay visible.
-                prefix === "refs/heads/" ? vis.hideGroup(members) : vis.hideGroup(members, prefix)
-              }
-            >
-              Hide all
-            </Item>
-          </>
-        );
-      };
+        branches.filter((r) => r.name.startsWith(prefix)).map((r) => r.name);
+      /** Shows or hides `members`; by `prefix` when given, so that the group's new members follow. */
+      const showHideItems = (members: readonly string[], prefix?: string) => (
+        <>
+          <Item disabled={members.length === 0} onClick={() => vis.showGroup(members, prefix)}>
+            Show all
+          </Item>
+          <Item disabled={members.length === 0} onClick={() => vis.hideGroup(members, prefix)}>
+            Hide all
+          </Item>
+        </>
+      );
+      // New local branches stay visible.
+      const groupItems = (prefix: string) =>
+        showHideItems(names(prefix), prefix === "refs/heads/" ? undefined : prefix);
+      // The branches checked out in worktrees: the graph shows a worktree by its branch.
+      const checkedOut = new Set(
+        (refs?.worktrees ?? []).flatMap((w) => (w.branch ? [`refs/heads/${w.branch}`] : [])),
+      );
+      const worktreeBranches = branches.filter((r) => checkedOut.has(r.name)).map((r) => r.name);
       const actions = (): ReactNode => {
         switch (target.section) {
           case "local":
@@ -607,9 +612,12 @@ export function SidebarMenu({ repo, target, vis }: Props) {
                 <WriteMenuItem repo={repo} onClick={() => void commands.pruneWorktrees(repo)}>
                   Prune stale worktrees
                 </WriteMenuItem>
+                <Sep />
+                {showHideItems(worktreeBranches)}
               </>
             );
           case "stashes":
+            return showHideItems((refs?.stashes ?? []).map((s) => stashKey(s.hash)));
           case "submodules":
             return null;
         }

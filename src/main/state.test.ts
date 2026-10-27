@@ -138,3 +138,76 @@ describe("repository settings", () => {
     expect((await load()).repoSettings("local:/a")).toEqual({ hidden: ["refs/heads/x"] });
   });
 });
+
+describe("window state", () => {
+  const none = { bounds: null, maximized: false, fullScreen: false };
+
+  it("is unset without a file, and drops malformed fields", async () => {
+    expect((await load()).loadWindowState()).toEqual(none);
+    write("window.json", { bounds: { x: 1, y: "2", width: 3, height: 4 }, maximized: "yes" });
+    expect((await load()).loadWindowState()).toEqual(none);
+    write("window.json", { bounds: { x: 1, y: 2, width: 0, height: 4 } });
+    expect((await load()).loadWindowState()).toEqual(none);
+  });
+
+  it("saves and reads back the bounds, rounded", async () => {
+    const { flushState, saveWindowState } = await load();
+    saveWindowState({
+      bounds: { x: 10.4, y: -20, width: 1000.6, height: 700 },
+      maximized: true,
+      fullScreen: false,
+    });
+    flushState();
+    expect((await load()).loadWindowState()).toEqual({
+      bounds: { x: 10, y: -20, width: 1001, height: 700 },
+      maximized: true,
+      fullScreen: false,
+    });
+  });
+
+  describe("placement", () => {
+    const min = { width: 900, height: 560 };
+    const primary = { x: 0, y: 25, width: 1440, height: 875 };
+    const right = { x: 1440, y: 0, width: 2560, height: 1440 };
+
+    it("keeps a window that fits where it was", async () => {
+      const { placeWindow } = await load();
+      const saved = { x: 1600, y: 100, width: 1200, height: 800 };
+      expect(placeWindow(saved, [primary, right], min)).toEqual(saved);
+    });
+
+    it("moves and shrinks a window into the display it overlaps most", async () => {
+      const { placeWindow } = await load();
+      expect(
+        placeWindow({ x: 1000, y: 0, width: 2000, height: 1000 }, [primary, right], min),
+      ).toEqual({ x: 1440, y: 0, width: 2000, height: 1000 });
+      expect(placeWindow({ x: -50, y: 0, width: 2000, height: 1000 }, [primary], min)).toEqual(
+        primary,
+      );
+    });
+
+    it("centers a window whose display is gone, keeping its size within the primary one", async () => {
+      const { placeWindow } = await load();
+      expect(placeWindow({ x: 3000, y: 100, width: 1200, height: 1000 }, [primary], min)).toEqual({
+        width: 1200,
+        height: 875,
+      });
+    });
+
+    it("keeps the minimum size where the display has room for it", async () => {
+      const { placeWindow } = await load();
+      expect(placeWindow({ x: 0, y: 25, width: 400, height: 300 }, [primary], min)).toEqual({
+        x: 0,
+        y: 25,
+        width: 900,
+        height: 560,
+      });
+    });
+
+    it("fits a window into a display smaller than the minimum size", async () => {
+      const { placeWindow } = await load();
+      const small = { x: 0, y: 0, width: 800, height: 500 };
+      expect(placeWindow({ x: 0, y: 0, width: 1000, height: 700 }, [small], min)).toEqual(small);
+    });
+  });
+});

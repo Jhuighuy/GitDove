@@ -138,6 +138,9 @@ it("shows the commit message, author and file stats", async () => {
   expect(container.querySelector("h2")?.textContent).toBe("Add the engine");
   expect(container.querySelector("pre")?.textContent).toBe("It computes\nBernoulli numbers.");
   expect(text()).toContain("Ada Lovelace");
+  // Hovering the name shows the email.
+  const named = [...container.querySelectorAll('[title="Ada Lovelace <ada@example.com>"]')];
+  expect(named.map((e) => e.textContent)).toContain("Ada Lovelace");
   expect(text()).toContain("authored ");
   expect(text()).not.toContain("committed by");
   expect(text()).toContain("2 files changed");
@@ -168,6 +171,7 @@ it("shows a separate committer, merge parents and singular counts", async () => 
   await render();
   expect(container.querySelector("pre")).toBeNull();
   expect(text()).toContain("committed by Bot");
+  expect(container.querySelector('span[title="Bot <bot@example.com>"]')?.textContent).toBe("Bot");
   expect(text()).toContain("parents:");
   expect(text()).toContain("1 file changed");
   await act(async () => buttonByText("bbbbbbb").click());
