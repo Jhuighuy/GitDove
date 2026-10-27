@@ -183,7 +183,8 @@ export const placeWindow = (
     undefined,
   );
   const area = best ?? workAreas[0];
-  const fit = (size: number, max: number, least: number) => Math.max(least, Math.min(size, max));
+  // At least the minimum size, unless the display is smaller still: then it fills the display.
+  const fit = (size: number, max: number, least: number) => Math.min(max, Math.max(least, size));
   const width = area ? fit(saved.width, area.width, min.width) : saved.width;
   const height = area ? fit(saved.height, area.height, min.height) : saved.height;
   if (!best) return { width, height };

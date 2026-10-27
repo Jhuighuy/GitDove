@@ -194,15 +194,20 @@ describe("window state", () => {
       });
     });
 
-    it("never goes below the minimum size", async () => {
+    it("keeps the minimum size where the display has room for it", async () => {
       const { placeWindow } = await load();
-      const small = { x: 0, y: 0, width: 800, height: 500 };
-      expect(placeWindow({ x: 0, y: 0, width: 1000, height: 700 }, [small], min)).toEqual({
+      expect(placeWindow({ x: 0, y: 25, width: 400, height: 300 }, [primary], min)).toEqual({
         x: 0,
-        y: 0,
+        y: 25,
         width: 900,
         height: 560,
       });
+    });
+
+    it("fits a window into a display smaller than the minimum size", async () => {
+      const { placeWindow } = await load();
+      const small = { x: 0, y: 0, width: 800, height: 500 };
+      expect(placeWindow({ x: 0, y: 0, width: 1000, height: 700 }, [small], min)).toEqual(small);
     });
   });
 });
