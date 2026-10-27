@@ -121,8 +121,85 @@ export const updateRepoSettings = (id: string, patch: Partial<RepoSettingsData>)
   settingsStore.set({ ...all, [id]: next });
 };
 
+// ---------------------------------------------------------------------------
+// Window
+// ---------------------------------------------------------------------------
+
+export interface Rect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface WindowState {
+  /** Where the window is when neither maximized nor full screen; null before it was saved. */
+  readonly bounds: Rect | null;
+  readonly maximized: boolean;
+  readonly fullScreen: boolean;
+}
+
+const rect = (v: unknown): Rect | null => {
+  const r = record(v);
+  const [x, y, width, height] = [r.x, r.y, r.width, r.height].map((n) =>
+    typeof n === "number" && Number.isFinite(n) ? Math.round(n) : NaN,
+  ) as [number, number, number, number];
+  return [x, y, width, height].some(Number.isNaN) || width <= 0 || height <= 0
+    ? null
+    : { x, y, width, height };
+};
+
+export const normalizeWindowState = (raw: unknown): WindowState => {
+  const r = record(raw);
+  return {
+    bounds: rect(r.bounds),
+    maximized: r.maximized === true,
+    fullScreen: r.fullScreen === true,
+  };
+};
+
+const windowStore = jsonStore("window.json", normalizeWindowState);
+
+export const loadWindowState = (): WindowState => windowStore.get();
+
+export const saveWindowState = (state: WindowState): void =>
+  windowStore.set(normalizeWindowState(state));
+
+/**
+ * Where to put a window last at `saved`, given the displays' work areas (the primary first):
+ * on the display it overlaps most, moved and shrunk to fit it, or centered on the primary one
+ * (no position) when it overlaps none, e.g. a display that was unplugged since.
+ */
+export const placeWindow = (
+  saved: Rect,
+  workAreas: readonly Rect[],
+  min: { readonly width: number; readonly height: number },
+): Partial<Rect> & Pick<Rect, "width" | "height"> => {
+  const overlap = (a: Rect) =>
+    Math.max(0, Math.min(saved.x + saved.width, a.x + a.width) - Math.max(saved.x, a.x)) *
+    Math.max(0, Math.min(saved.y + saved.height, a.y + a.height) - Math.max(saved.y, a.y));
+  const best = workAreas.reduce<Rect | undefined>(
+    (b, a) => (overlap(a) > (b ? overlap(b) : 0) ? a : b),
+    undefined,
+  );
+  const area = best ?? workAreas[0];
+  const fit = (size: number, max: number, least: number) => Math.max(least, Math.min(size, max));
+  const width = area ? fit(saved.width, area.width, min.width) : saved.width;
+  const height = area ? fit(saved.height, area.height, min.height) : saved.height;
+  if (!best) return { width, height };
+  const clamp = (pos: number, size: number, start: number, length: number) =>
+    Math.max(start, Math.min(pos, start + length - size));
+  return {
+    x: clamp(saved.x, width, best.x, best.width),
+    y: clamp(saved.y, height, best.y, best.height),
+    width,
+    height,
+  };
+};
+
 /** Writes pending changes now, e.g. before quitting. */
 export const flushState = (): void => {
   stateStore.flush();
   settingsStore.flush();
+  windowStore.flush();
 };
