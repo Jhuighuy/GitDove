@@ -19,6 +19,15 @@ let waiting: ((s: UpdaterStatus) => void)[] = [];
 const CHECK_TIMEOUT = 60 * 1000;
 
 const set = (next: UpdaterStatus) => {
+  // Checks go on while an update is ready (#49), and leave it on offer unless they find a newer
+  // version, which then downloads in its place.
+  const newer =
+    status.kind === "ready" && next.kind === "available" && next.version !== status.version;
+  if (status.kind === "ready" && next.kind !== "ready" && !newer) {
+    if (next.kind === "error") log.warn(`updater: a check failed: ${next.message}`);
+    if (next.kind !== "checking" && next.kind !== "downloading") settle(status);
+    return;
+  }
   // Renderers show whole percents; finer progress events would only be noise.
   const s: UpdaterStatus =
     next.kind === "downloading" ? { kind: "downloading", percent: Math.floor(next.percent) } : next;
@@ -84,7 +93,9 @@ export const updater = {
   /** Checks for updates now; resolves with the outcome (`downloading` if already underway). */
   check(): Promise<UpdaterStatus> {
     if (!app.isPackaged) return Promise.resolve(status);
-    if (status.kind === "ready" || (!sparkle && status.kind === "downloading"))
+    // Sparkle does not check again once an update is ready to install: it would only resume
+    // installing that one. electron-updater does, and downloads a newer one if there is.
+    if (sparkle ? status.kind === "ready" : status.kind === "downloading")
       return Promise.resolve(status);
     const outcome = new Promise<UpdaterStatus>((done) => {
       const finish = (s: UpdaterStatus) => {

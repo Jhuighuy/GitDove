@@ -222,6 +222,44 @@ describe("updater elsewhere", () => {
     expect(mocked.autoUpdater.quitAndInstall).toHaveBeenCalled();
   });
 
+  it("keeps checking while an update is ready, and keeps offering it (#49)", async () => {
+    const { updater, statuses } = await load("linux");
+    mocked.autoUpdater.emit("update-downloaded", { version: "0.1.6" });
+    mocked.autoUpdater.checkForUpdates.mockClear();
+    // The same version again: electron-updater finds its download in the cache.
+    mocked.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      mocked.autoUpdater.emit("checking-for-update");
+      mocked.autoUpdater.emit("update-available", { version: "0.1.6" });
+      mocked.autoUpdater.emit("update-downloaded", { version: "0.1.6" });
+      return {};
+    });
+    await expect(updater.check()).resolves.toEqual({ kind: "ready", version: "0.1.6" });
+    expect(mocked.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    // A failed check leaves it on offer too.
+    mocked.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      mocked.autoUpdater.emit("checking-for-update");
+      mocked.autoUpdater.emit("error", new Error("offline"));
+      return {};
+    });
+    await expect(updater.check()).resolves.toEqual({ kind: "ready", version: "0.1.6" });
+    expect(statuses).toEqual([{ kind: "ready", version: "0.1.6" }]);
+
+    // A newer version downloads in its place.
+    mocked.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      mocked.autoUpdater.emit("checking-for-update");
+      mocked.autoUpdater.emit("update-available", { version: "0.1.7" });
+      return {};
+    });
+    await expect(updater.check()).resolves.toEqual({ kind: "available", version: "0.1.7" });
+    mocked.autoUpdater.emit("download-progress", { percent: 40 });
+    mocked.autoUpdater.emit("update-downloaded", { version: "0.1.7" });
+    expect(statuses.slice(1)).toEqual([
+      { kind: "available", version: "0.1.7" },
+      { kind: "downloading", percent: 40 },
+      { kind: "ready", version: "0.1.7" },
+    ]);
+  });
+
   it("answers a check at once when electron-updater is inactive", async () => {
     const { updater } = await load("linux");
     mocked.autoUpdater.checkForUpdates.mockResolvedValueOnce(null);
