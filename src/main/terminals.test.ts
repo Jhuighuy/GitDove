@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import type { RepoLocation } from "@shared/domain";
 import { programName } from "@shared/settings";
 import { Effect, Exit } from "effect";
@@ -145,8 +145,8 @@ describe("on Windows", () => {
   });
 
   it("opens local repositories in the chosen terminal, and remote ones with start", () => {
-    const wt = join("C:\\Users\\me\\AppData\\Local", "Microsoft", "WindowsApps", "wt.exe");
-    const pwsh = join("C:\\Program Files", "PowerShell", "7", "pwsh.exe");
+    const wt = "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe";
+    const pwsh = win32.join("C:\\Program Files", "PowerShell", "7", "pwsh.exe");
     fs.present.add(wt).add(pwsh);
     expect(terminalLaunches(local, "wt").launches).toEqual([
       { file: wt, args: ["-d", "/work/it's"], options: { detached: true } },
@@ -199,7 +199,8 @@ describe("on Linux", () => {
     expect(launches[0]!.args).toEqual(ssh);
   });
 
-  it("finds terminals on PATH", () => {
+  // Windows has no executable bits to tell programs from other files by.
+  it.skipIf(platform === "win32")("finds terminals on PATH", () => {
     const dir = mkdtempSync(join(tmpdir(), "gitdove-path-"));
     fs.tmp = dir;
     try {

@@ -5,7 +5,7 @@
 import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
 import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join } from "node:path";
+import { isAbsolute, posix, win32 } from "node:path";
 import type { RepoLocation } from "@shared/domain";
 import { programName, type TerminalInfo } from "@shared/settings";
 import { Effect } from "effect";
@@ -114,9 +114,9 @@ interface Terminal {
 
 /** A macOS application in one of the usual places. */
 const macApp =
-  (bundle: string, places = ["/Applications", join(homedir(), "Applications")]) =>
+  (bundle: string, places = ["/Applications", posix.join(homedir(), "Applications")]) =>
   () =>
-    places.map((dir) => join(dir, bundle)).find((p) => existsSync(p)) ?? null;
+    places.map((dir) => posix.join(dir, bundle)).find((p) => existsSync(p)) ?? null;
 
 /** A macOS terminal that takes a working directory, or a command to run, as arguments. */
 const macCli = (
@@ -211,7 +211,7 @@ const winExe =
   (variable: string, ...parts: string[]) =>
   () => {
     const dir = process.env[variable];
-    const path = dir ? join(dir, ...parts) : null;
+    const path = dir ? win32.join(dir, ...parts) : null;
     return path && existsSync(path) ? path : null;
   };
 
@@ -257,8 +257,8 @@ const isExecutable = (path: string) => {
 
 /** A command's location on `PATH`. */
 const onPath = (command: string) => () => {
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (dir && isExecutable(join(dir, command))) return join(dir, command);
+  for (const dir of (process.env.PATH ?? "").split(posix.delimiter)) {
+    if (dir && isExecutable(posix.join(dir, command))) return posix.join(dir, command);
   }
   return null;
 };
@@ -345,7 +345,7 @@ export const checkTerminalPath = (path: string): string | null => {
 /** The `terminal` setting for a chosen path: a known terminal's id where it is installed. */
 export const terminalSetting = (path: string): string => {
   const known = knownByPath(path);
-  return known && known.locate() === path ? known.id : path;
+  return known?.locate() === path ? known.id : path;
 };
 
 /** Opening a repository with the default terminal. */

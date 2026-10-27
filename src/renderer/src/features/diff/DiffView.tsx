@@ -597,6 +597,14 @@ function DiffBody({
       return [...new Set([...indexes, ...kept])].toSorted((x, y) => x - y);
     },
   });
+  // Rows keep their measured sizes until told otherwise, whatever `estimateSize` says now: a new
+  // font size changes them all.
+  const measuredFor = useRef(lineHeight);
+  useLayoutEffect(() => {
+    if (measuredFor.current === lineHeight) return;
+    measuredFor.current = lineHeight;
+    virtualizer.measure();
+  }, [virtualizer, lineHeight]);
   const items = virtualizer.getVirtualItems();
 
   const { resolvedTheme } = useTheme();
