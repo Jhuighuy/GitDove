@@ -25,7 +25,7 @@ import {
   type WipLane,
   type WorkingStatus,
 } from "./domain";
-import type { Settings } from "./settings";
+import type { Settings, TerminalInfo } from "./settings";
 
 export type ResetMode = "soft" | "mixed" | "hard";
 
@@ -77,6 +77,17 @@ export interface Api {
   "settings.get": () => Settings;
   /** Changes some settings; every window hears of it (`settings.changed`). */
   "settings.set": (patch: Partial<Settings>) => Settings;
+  /** The terminals known here, what the default one is called, and what the chosen one is. */
+  "settings.terminals": () => {
+    defaultName: string;
+    terminals: TerminalInfo[];
+    current: { name: string; remote: boolean };
+  };
+  /**
+   * Asks the user for a terminal application with a file dialog, and makes it the `terminal`
+   * setting. Null when the dialog was cancelled.
+   */
+  "settings.pickTerminal": () => Settings | null;
 
   // Remote hosts
   "ssh.hosts": () => string[];

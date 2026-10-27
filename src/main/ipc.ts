@@ -1,4 +1,3 @@
-import { type ChildProcess, spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
 import { isAbsolute, relative, resolve } from "node:path";
 import { type DirEntry, type RepoId, type RepoLocation, repoLocationOf } from "@shared/domain";
 import {
@@ -25,14 +24,24 @@ import {
   SETTING_CHECKS,
   type Settings,
   SYNTAX_THEMES,
+  TERMINAL_IDS,
 } from "@shared/settings";
 import { isGitlab } from "./avatars";
 import { type AppError, InvalidInputError } from "./exec/errors";
 import { Hosts, LOCAL_HOST } from "./exec/hosts";
-import { shellJoin, shellQuote } from "./exec/shell";
+import { shellQuote } from "./exec/shell";
 import type { Repository } from "./git/repository";
 import { type Owner, RepoSettings, Repos } from "./services";
 import { loadSettings, loadState, saveState, updateSettings } from "./state";
+import {
+  checkTerminalPath,
+  defaultTerminalName,
+  describeTerminal,
+  knownTerminalList,
+  launch,
+  terminalLaunches,
+  terminalSetting,
+} from "./terminals";
 import { updater } from "./updater";
 
 type Services = Repos | Hosts | RepoSettings;
@@ -108,7 +117,16 @@ const SettingsPatch = Schema.Struct({
   dates: setting("dates", Schema.Literals(DATE_STYLES)),
   avatars: setting("avatars", Bool),
   tabSize: setting("tabSize", Schema.Number),
-  terminal: setting("terminal", Str),
+  // Only a known terminal: a program the user chose comes from `settings.pickTerminal`.
+  terminal: setting(
+    "terminal",
+    Str.check(
+      valid(
+        (t: string) => t === "" || (TERMINAL_IDS as readonly string[]).includes(t),
+        "Unknown terminal",
+      ),
+    ),
+  ),
   autoUpdate: setting("autoUpdate", Bool),
   restoreTabs: setting("restoreTabs", Bool),
 });
@@ -148,6 +166,8 @@ const argSchemas = {
   "web.isGitlab": argsOf(Str),
   "settings.get": noArgs,
   "settings.set": argsOf(SettingsPatch),
+  "settings.terminals": noArgs,
+  "settings.pickTerminal": noArgs,
   "ssh.hosts": noArgs,
   "ssh.listDir": argsOf(SshHost, Schema.NullOr(Str)),
   "repo.open": argsOf(Location),
@@ -286,103 +306,53 @@ const cdTo = (path: string | null) => {
 export const isWebUrl = (url: string): boolean =>
   URL.canParse(url) && ["http:", "https:"].includes(new URL(url).protocol);
 
-/** A detached program to start, e.g. a terminal emulator. */
-interface Launch {
-  readonly file: string;
-  readonly args: readonly string[];
-  readonly options?: SpawnOptions;
-}
-
-/** Starts a detached program; fails when it cannot be started (e.g. it is not installed). */
-const launch = ({ file, args, options }: Launch) =>
-  Effect.callback<void, Error>((resume) => {
-    let child: ChildProcess;
-    try {
-      child = nodeSpawn(file, args, { ...options, detached: true, stdio: "ignore" });
-    } catch (e) {
-      resume(Effect.fail(e instanceof Error ? e : new Error(String(e))));
-      return;
-    }
-    // Without an `error` listener, a missing program would crash the main process.
-    child.on("error", (e) => resume(Effect.fail(e)));
-    child.once("spawn", () => {
-      child.unref();
-      resume(Effect.void);
-    });
-  });
-
-/** An AppleScript string literal. */
-const appleScriptString = (s: string) => `"${s.replaceAll(/[\\"]/g, "\\$&")}"`;
-
-/** Quotes an argument for a `cmd.exe` command line, which has no way to escape `"` or `%`. */
-const cmdQuote = (s: string) => {
-  if (/["%\r\n]/.test(s)) throw new Error(`Cannot pass ${JSON.stringify(s)} to cmd.exe`);
-  return `"${s}"`;
-};
-
-/**
- * Ways to open a terminal at a repository, in order of preference. `terminal` is the one the user
- * chose (the `terminal` setting), if any: an application on macOS, which opens local repositories
- * (others need Terminal's scripting), and a command on Linux, run like `$TERMINAL`.
- */
-export const terminalLaunches = (loc: RepoLocation, terminal = ""): Launch[] => {
-  const remoteShell = `cd ${shellQuote(loc.path)} && exec $SHELL -l`;
-  const ssh = loc.kind === "ssh" ? ["ssh", "-t", "--", loc.host, remoteShell] : [];
-  if (process.platform === "darwin") {
-    if (terminal && terminal !== "Terminal" && loc.kind === "local") {
-      return [{ file: "open", args: ["-a", terminal, loc.path] }];
-    }
-    const command = loc.kind === "local" ? `cd ${shellQuote(loc.path)}` : shellJoin(ssh);
-    const script = `tell application "Terminal"
-  activate
-  do script ${appleScriptString(command)}
-end tell`;
-    return [{ file: "osascript", args: ["-e", script] }];
-  }
-  if (process.platform === "win32") {
-    // `start` opens a new console window; the empty argument is its title.
-    if (loc.kind === "local") {
-      return [
-        { file: "cmd.exe", args: ["/d", "/c", "start", "", "cmd.exe"], options: { cwd: loc.path } },
-      ];
-    }
-    const line = `/d /s /c "start "" ${ssh.map(cmdQuote).join(" ")}"`;
-    return [{ file: "cmd.exe", args: [line], options: { windowsVerbatimArguments: true } }];
-  }
-  const cwd = loc.kind === "local" ? { cwd: loc.path } : undefined;
-  const emulators: [string | undefined, string][] = [
-    [terminal || undefined, "-e"],
-    [process.env.TERMINAL, "-e"],
-    ["x-terminal-emulator", "-e"],
-    ["gnome-terminal", "--"],
-    ["konsole", "-e"],
-    ["xfce4-terminal", "-x"],
-    ["xterm", "-e"],
-  ];
-  return emulators.flatMap(([file, exec]) =>
-    file ? [{ file, args: loc.kind === "local" ? [] : [exec, ...ssh], options: cwd }] : [],
-  );
-};
-
-const openTerminal = (repo: Repository) =>
-  Effect.try({
-    try: () => terminalLaunches(repo.location, loadSettings().terminal),
+const openTerminal = (repo: Repository) => {
+  const chosen = loadSettings().terminal;
+  return Effect.try({
+    try: () => terminalLaunches(repo.location, chosen),
     catch: (e) => new InvalidInputError({ message: (e as Error).message }),
   }).pipe(
-    Effect.flatMap((launches) =>
+    Effect.flatMap(({ name, launches }) =>
       Effect.firstSuccessOf(launches.map(launch)).pipe(
         Effect.mapError(
           (e) =>
             new InvalidInputError({
               message:
-                launches.length > 1
+                chosen === "" && process.platform === "linux"
                   ? "No terminal emulator found. Choose the one to use in Settings."
-                  : `Could not open a terminal: ${e.message}`,
+                  : `Could not open ${name}: ${e.message}`,
             }),
         ),
       ),
     ),
   );
+};
+
+/** Asks for a terminal application with a file dialog, attached to the caller's window. */
+const pickTerminal = Effect.gen(function* () {
+  const win = BrowserWindow.fromWebContents((yield* Caller).webContents);
+  const opts: Electron.OpenDialogOptions = {
+    title: "Choose a Terminal",
+    buttonLabel: "Choose",
+    properties: ["openFile"],
+    ...(process.platform === "darwin"
+      ? { defaultPath: "/Applications", filters: [{ name: "Applications", extensions: ["app"] }] }
+      : process.platform === "win32"
+        ? {
+            defaultPath: process.env.ProgramFiles,
+            filters: [{ name: "Programs", extensions: ["exe"] }],
+          }
+        : { defaultPath: "/usr/bin" }),
+  };
+  const r = yield* Effect.promise(() =>
+    win ? dialog.showOpenDialog(win, opts) : dialog.showOpenDialog(opts),
+  );
+  const path = r.canceled ? undefined : r.filePaths[0];
+  if (!path) return null;
+  const error = checkTerminalPath(path);
+  if (error) return yield* new InvalidInputError({ message: error });
+  return updateSettings({ terminal: terminalSetting(path) });
+});
 
 /** An http(s) origin, e.g. `https://git.example.com:8443`, of a host that may run GitLab. */
 const isWebOrigin = (origin: string) => {
@@ -446,6 +416,13 @@ export const handlers: Handlers = {
   // What a change does (themes, zoom, updates) is up to the listeners (see index.ts).
   "settings.get": () => Effect.sync(loadSettings),
   "settings.set": (patch) => Effect.sync(() => updateSettings(patch)),
+  "settings.terminals": () =>
+    Effect.sync(() => ({
+      defaultName: defaultTerminalName(),
+      terminals: knownTerminalList(),
+      current: describeTerminal(loadSettings().terminal),
+    })),
+  "settings.pickTerminal": () => pickTerminal,
 
   // Remote hosts ---------------------------------------------------------------
   "ssh.hosts": () =>

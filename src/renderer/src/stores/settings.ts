@@ -8,6 +8,8 @@ interface SettingsState {
   readonly load: () => Promise<void>;
   /** Changes some settings: here at once, then in the main process and every other window. */
   readonly update: (patch: Partial<Settings>) => Promise<void>;
+  /** Asks for a terminal application with a file dialog, and makes it the terminal to use. */
+  readonly pickTerminal: () => Promise<void>;
 }
 
 let listening = false;
@@ -39,6 +41,11 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
       console.error("Could not change the settings", e);
       set({ settings: await api("settings.get").catch(() => DEFAULT_SETTINGS) });
     }
+  },
+
+  async pickTerminal() {
+    const settings = await api("settings.pickTerminal");
+    if (settings) set({ settings });
   },
 }));
 

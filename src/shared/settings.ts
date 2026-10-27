@@ -46,6 +46,47 @@ export type SyntaxTheme = (typeof SYNTAX_THEMES)[ColorScheme][number][0];
 export const DATE_STYLES = ["relative", "absolute"] as const;
 export type DateStyle = (typeof DATE_STYLES)[number];
 
+/** Terminals GitDove knows how to open, on some platform (see `src/main/terminals.ts`). */
+export const TERMINAL_IDS = [
+  // macOS
+  "terminal",
+  "iterm",
+  "ghostty",
+  "wezterm",
+  "kitty",
+  "alacritty",
+  "warp",
+  // Windows
+  "wt",
+  "pwsh",
+  "powershell",
+  "cmd",
+  "gitbash",
+  // Linux (and some of the above)
+  "x-terminal-emulator",
+  "gnome-terminal",
+  "ptyxis",
+  "konsole",
+  "xfce4-terminal",
+  "foot",
+  "xterm",
+] as const;
+
+/** A terminal the user can choose. */
+export interface TerminalInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly installed: boolean;
+}
+
+/** The name of an application or program, e.g. `Ghostty` for `/Applications/Ghostty.app`. */
+export const programName = (path: string): string =>
+  // Either separator: a Windows path is one wherever it is checked.
+  path
+    .split(/[\\/]/)
+    .at(-1)!
+    .replace(/\.(app|exe)$/i, "");
+
 export const TAB_SIZES = [2, 4, 8] as const;
 /** Interface zoom levels, as `webContents` zoom factors. */
 export const ZOOM_LEVELS = [0.8, 0.9, 1, 1.1, 1.25, 1.5] as const;
@@ -70,8 +111,8 @@ export interface Settings {
   /** One of {@link TAB_SIZES}. */
   readonly tabSize: number;
   /**
-   * Terminal to open repositories in; empty for the default. An application name on macOS
-   * (local repositories only), a command on Linux; Windows always uses `cmd.exe`.
+   * Terminal to open repositories in: empty for the default, one of {@link TERMINAL_IDS}, or the
+   * path of a program the user chose (which may only open local repositories).
    */
   readonly terminal: string;
   /** Whether updates are checked for (and downloaded) in the background. */

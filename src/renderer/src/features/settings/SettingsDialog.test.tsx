@@ -5,8 +5,28 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/stores/settings";
 
+const PICKED = "/Applications/Some Term.app";
 const mocks = vi.hoisted(() => ({
-  api: vi.fn(async (_method: string, patch?: object) => ({ ...DEFAULT_SETTINGS, ...patch })),
+  api: vi.fn(async (method: string, patch?: object): Promise<unknown> => {
+    const { DEFAULT_SETTINGS: defaults } = await import("@shared/settings");
+    const { useSettingsStore: store } = await import("@/stores/settings");
+    if (method === "settings.terminals") {
+      const picked = store.getState().settings.terminal !== "";
+      return {
+        defaultName: "Terminal",
+        terminals: [
+          { id: "terminal", name: "Terminal", installed: true },
+          { id: "iterm", name: "iTerm", installed: false },
+          { id: "ghostty", name: "Ghostty", installed: true },
+        ],
+        current: picked ? { name: "Some Term", remote: false } : { name: "Terminal", remote: true },
+      };
+    }
+    if (method === "settings.pickTerminal") {
+      return { ...defaults, terminal: "/Applications/Some Term.app" };
+    }
+    return { ...defaults, ...patch };
+  }),
   listeners: new Map<string, (payload: unknown) => void>(),
 }));
 vi.mock("@/lib/api", () => ({
@@ -75,7 +95,26 @@ it("switches between sections", async () => {
   await act(async () => button("Commits").click());
   expect(control("Dates").textContent).toContain("Relative");
   await act(async () => button("General").click());
-  expect(document.body.textContent).toContain("Remote repositories always open in Terminal");
+  expect(document.body.textContent).toContain("Reopen tabs on launch");
+});
+
+it("offers the installed terminals, and others from a file dialog", async () => {
+  await act(async () => showSettings());
+  await act(async () => button("General").click());
+  const terminal = control("Terminal");
+  expect(terminal.textContent).toContain("Default (Terminal)");
+  expect(document.body.textContent).toContain("remote ones over ssh");
+  await act(async () => terminal.click());
+  const options = () => [...document.querySelectorAll('[role="option"]')];
+  expect(options().map((o) => o.textContent)).toEqual(["Default (Terminal)", "Ghostty", "Choose…"]);
+  await act(async () => (options().at(-1) as HTMLElement).click());
+  expect(mocks.api).toHaveBeenCalledWith("settings.pickTerminal");
+  expect(useSettingsStore.getState().settings.terminal).toBe(PICKED);
+  expect(mocks.api).not.toHaveBeenCalledWith("settings.set", expect.anything());
+  expect(control("Terminal").textContent).toContain("Some Term");
+  expect(document.body.textContent).toContain(
+    "Some Term opens local repositories; remote ones open in Terminal.",
+  );
 });
 
 it("changes a setting when a box is checked", async () => {

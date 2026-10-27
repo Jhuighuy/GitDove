@@ -59,3 +59,14 @@ it("goes back to the saved settings when a change fails", async () => {
   await updateSettings({ codeFont: "x" });
   expect(s().settings).toEqual(DEFAULT_SETTINGS);
 });
+
+it("takes the settings with a terminal chosen in a file dialog", async () => {
+  mocks.api.mockResolvedValueOnce({ ...DEFAULT_SETTINGS, terminal: "/Applications/X.app" });
+  await s().pickTerminal();
+  expect(mocks.api).toHaveBeenCalledWith("settings.pickTerminal");
+  expect(s().settings.terminal).toBe("/Applications/X.app");
+  // Cancelled.
+  mocks.api.mockResolvedValueOnce(null);
+  await s().pickTerminal();
+  expect(s().settings.terminal).toBe("/Applications/X.app");
+});

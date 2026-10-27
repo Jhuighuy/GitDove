@@ -3,6 +3,7 @@ import {
   type DateStyle,
   MAX_CODE_FONT_SIZE,
   MIN_CODE_FONT_SIZE,
+  programName,
   SYNTAX_THEMES,
   type SyntaxTheme,
   TAB_SIZES,
@@ -15,7 +16,8 @@ import {
   IconPalette,
   type TablerIcon,
 } from "@tabler/icons-react";
-import { createContext, type ReactNode, useContext, useId, useState } from "react";
+import { createContext, type ReactNode, useContext, useEffect, useId, useState } from "react";
+import { toast } from "sonner";
 import { create } from "zustand";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -27,10 +29,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { isMac, platform, useEvent } from "@/lib/api";
+import type { ApiResult } from "@shared/ipc";
+import { api, isMac, platform, useEvent } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { type DiffMode, useLayout } from "@/stores/repo-ui";
-import { updateSettings, useSettings } from "@/stores/settings";
+import { updateSettings, useSettings, useSettingsStore } from "@/stores/settings";
 
 export const useSettingsDialog = create<{ readonly open: boolean }>()(() => ({ open: false }));
 
@@ -225,23 +228,70 @@ function GeneralSettings() {
       >
         <Toggle value={autoUpdate} onChange={(v) => void updateSettings({ autoUpdate: v })} />
       </Row>
-      {platform !== "win32" && (
-        <Row
-          label="Terminal"
-          description={
-            isMac
-              ? "An application, e.g. iTerm or Ghostty; empty for Terminal. Remote repositories always open in Terminal."
-              : "A terminal emulator's command, e.g. kitty; empty for $TERMINAL or the system's."
-          }
-        >
-          <TextSetting
-            value={terminal}
-            placeholder={isMac ? "Terminal" : "Default"}
-            onCommit={(v) => void updateSettings({ terminal: v })}
-          />
-        </Row>
-      )}
+      <TerminalSetting value={terminal} />
     </Section>
+  );
+}
+
+/** The value of the "Choose…" item, which asks for a terminal with a file dialog. */
+const CHOOSE = "\0choose";
+
+function TerminalSetting({ value }: { value: string }) {
+  const [list, setList] = useState<ApiResult<"settings.terminals"> | null>(null);
+  // Again for another choice: what it is called, and whether it opens remote repositories.
+  useEffect(() => {
+    let live = true;
+    api("settings.terminals").then(
+      (l) => live && setList(l),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- asked again for a new value
+  }, [value]);
+  const known = list?.terminals ?? [];
+  const defaultName = list?.defaultName ?? "";
+  const options: [string, string][] = [
+    ["", defaultName ? `Default (${defaultName})` : "Default"],
+    // The default one is listed as the default, unless it was chosen by name.
+    ...known.flatMap((t): [string, string][] =>
+      (t.installed && t.name !== defaultName) || t.id === value
+        ? [[t.id, t.installed ? t.name : `${t.name} (not installed)`]]
+        : [],
+    ),
+    // A program the user chose.
+    ...(value && !known.some((t) => t.id === value)
+      ? [[value, list?.current.name ?? programName(value)] as [string, string]]
+      : []),
+    [CHOOSE, "Choose…"],
+  ];
+  return (
+    <Row
+      label="Terminal"
+      description={
+        list?.current.remote !== false
+          ? "Opens local repositories, and remote ones over ssh."
+          : platform === "win32"
+            ? "Remote repositories open with ssh in Windows' default terminal."
+            : `${list.current.name} opens local repositories; remote ones open in ${defaultName}.`
+      }
+    >
+      <Choice<string>
+        value={value}
+        options={options}
+        onChange={(v) => {
+          if (v !== CHOOSE) void updateSettings({ terminal: v });
+          else
+            useSettingsStore
+              .getState()
+              .pickTerminal()
+              .catch((e: unknown) => {
+                toast.error("Cannot use this terminal", { description: (e as Error).message });
+              });
+        }}
+      />
+    </Row>
   );
 }
 
