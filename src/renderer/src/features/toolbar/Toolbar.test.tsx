@@ -6,7 +6,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useBusyStore } from "@/stores/busy";
 import { useLayout } from "@/stores/repo-ui";
-import { useSettingsDialog } from "../settings/SettingsDialog";
 import { Toolbar } from "./Toolbar";
 
 const mocks = vi.hoisted(() => ({
@@ -19,9 +18,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({
   ApiError: class extends Error {},
-  isMac: true,
-  modKey: "⌘",
-  platform: "darwin",
   api: async (method: string, ...args: unknown[]) => {
     mocks.api.push([method, ...args]);
     switch (method) {
@@ -244,15 +240,6 @@ it("toggles the sidebar and details panels", async () => {
   await click(sidebar);
   await click(details);
   expect(useLayout.getState()).toMatchObject({ sidebar: true, details: true });
-});
-
-it("opens the settings beside the panel switches", async () => {
-  await render();
-  const gear = container.querySelector<HTMLElement>("[aria-label='Settings']")!;
-  expect(gear.title).toBe("Settings (⌘,)");
-  await click(gear);
-  expect(useSettingsDialog.getState().open).toBe(true);
-  useSettingsDialog.setState({ open: false });
 });
 
 it("shows the running operation and disables write actions meanwhile", async () => {
