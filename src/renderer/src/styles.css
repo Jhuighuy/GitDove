@@ -4,6 +4,9 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/jetbrains-mono";
 
+/* Tests mention classes in prose (e.g. `[&…]:…`), which Tailwind would turn into broken CSS. */
+@source not "./**/*.test.{ts,tsx}";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

@@ -214,12 +214,10 @@ const notARepository = (path: string, e: CommandError): NotARepositoryError => {
 
 const probe = (host: Host, path: string): Effect.Effect<Probe, GitError | NotARepositoryError> =>
   host.sh(PROBE_SCRIPT, { cwd: path, idempotent: true }).pipe(
-    Effect.catchTag(
-      "CommandError",
-      (e): Effect.Effect<never, CommandError | NotARepositoryError> =>
-        e.exitCode !== null && e.exitCode >= 1 && e.exitCode <= 5
-          ? Effect.fail(notARepository(path, e))
-          : Effect.fail(e),
+    Effect.catchTag("CommandError", (e): Effect.Effect<never, CommandError | NotARepositoryError> =>
+      e.exitCode !== null && e.exitCode >= 1 && e.exitCode <= 5
+        ? Effect.fail(notARepository(path, e))
+        : Effect.fail(e),
     ),
     Effect.map((r) => {
       const [gitDir, commonDir, bare, top, branch, head, state, format] = text(r).split("\0");
