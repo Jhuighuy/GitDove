@@ -463,6 +463,8 @@ interface RowActions {
   doubleClick(row: Row): void;
   /** Enter: the click's action, or the double-click's for rows that only open. */
   activate(row: Row): void;
+  /** The keyboard cursor moved onto the row: shows its commit, like a click. */
+  hop(row: Row): void;
   contextMenu(row: Row): void;
 }
 
@@ -587,6 +589,10 @@ export const Sidebar = memo(function Sidebar({ repo }: { repo: RepoId }) {
     activate(row) {
       if (row.kind === "worktree" || row.kind === "submodule") handlers.doubleClick(row);
       else handlers.click(row);
+    },
+    hop(row) {
+      // Only rows with a commit: clicking the others expands or collapses them.
+      if (row.kind === "ref" || row.kind === "stash") handlers.click(row);
     },
     contextMenu(row) {
       const target = targetOf(row);
@@ -730,8 +736,9 @@ const ITEM_HEIGHT = 24;
 
 /**
  * A section's rows as a tree, rendering only those on screen. The keyboard moves a cursor over
- * the rows (the list keeps focus): Enter uses a row, Space toggles its eye, Left and Right
- * collapse and expand, and the menu key opens its context menu.
+ * the rows (the list keeps focus), selecting the commit of each branch, tag or stash it lands
+ * on: Enter uses a row, Space toggles its eye, Left and Right collapse and expand, and the menu
+ * key opens its context menu.
  */
 const RowList = memo(function RowList({
   rows,
@@ -770,6 +777,7 @@ const RowList = memo(function RowList({
     if (!row) return;
     setCursor(row.key);
     virtualizer.scrollToIndex(rows.indexOf(row), { align: "auto" });
+    if (row.key !== cursor) onAction("hop", row);
   };
   const onKeyDown = (e: React.KeyboardEvent) => {
     const row = rows[cursorIndex];
