@@ -639,7 +639,15 @@ function DiffBody({
     };
   }, [model]);
 
-  const ctx: CellContext = { model, hl, theme, words, selection, selectable };
+  const ctx: CellContext = {
+    model,
+    hl,
+    version: hl?.version ?? 0,
+    theme,
+    words,
+    selection,
+    selectable,
+  };
   const dragRef = useRef<Drag>(null);
   /** The last click that selected a line from its text, and what it replaced. */
   const lastClick = useRef<{ id: number; selection: ReadonlySet<number>; drag: Drag } | null>(null);
@@ -952,6 +960,11 @@ const CONFLICT_STYLE: Record<ConflictPart, { line: string; button: string }> = {
 interface CellContext {
   readonly model: DiffModel;
   readonly hl: DocHighlighter | null;
+  /**
+   * The highlighter's version: the cells read its tokens, which change while it stays the same
+   * object, so this is what tells (memoized) cells to render again.
+   */
+  readonly version: number;
   readonly theme: ThemeKind;
   readonly words: (l: Line) => readonly Range[] | null;
   readonly selection: ReadonlySet<number>;
@@ -1008,6 +1021,9 @@ function Sign({ l, selected, selectable }: { l: Line; selected: boolean; selecta
 }
 
 function Text({ l, ctx }: { l: Line; ctx: CellContext }) {
+  // The highlighter's tokens are a cache that fills in while it stays the same object, so its
+  // calls must not be memoized; `ctx.version` changing renders this again.
+  "use no memo";
   if (l.kind === "meta") return <span className="text-muted-foreground italic">{l.text}</span>;
   const tokens = ctx.hl?.tokens(ctx.theme, l.side, l.sideIndex) ?? null;
   const emph = ctx.words(l);

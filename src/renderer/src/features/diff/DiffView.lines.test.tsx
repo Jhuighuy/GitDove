@@ -13,7 +13,13 @@ const mocks = vi.hoisted(() => ({
   ensured: [] as unknown[][],
   diffs: new Map<string, FileDiff | Error | Promise<FileDiff>>(),
   applyError: null as Error | null,
-  highlight: true,
+  /** "late": the tokens arrive after the first render, as from the real highlighter. */
+  highlight: true as boolean | "late",
+  late: {
+    ready: false,
+    version: 0,
+    listeners: new Set<() => void>(),
+  },
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -32,18 +38,31 @@ vi.mock("@/lib/api", () => ({
     throw new Error(`unexpected ${method}`);
   },
 }));
-// A highlighter that marks the first four characters of every line as one token.
-vi.mock("./highlight", () => ({
-  useHighlighter: () =>
-    mocks.highlight
-      ? {
-          ensure: (...args: unknown[]) => void mocks.ensured.push(args),
-          tokens: (_theme: string, _side: number, index: number) =>
-            index < 0 ? null : Uint32Array.from([4, 1]),
-        }
-      : null,
-  tokenStyle: (i: number) => ({ color: `rgb(${i}, 0, 0)` }),
-}));
+// A highlighter that marks the first four characters of every line as one token. Like the real
+// one, it stays the same object while its tokens arrive.
+vi.mock("./highlight", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const { late } = mocks;
+  const hl = {
+    get version() {
+      return late.version;
+    },
+    ensure: (...args: unknown[]) => void mocks.ensured.push(args),
+    tokens: (_theme: string, _side: number, index: number) =>
+      index < 0 || (mocks.highlight === "late" && !late.ready) ? null : Uint32Array.from([4, 1]),
+  };
+  const subscribe = (l: () => void) => {
+    late.listeners.add(l);
+    return () => void late.listeners.delete(l);
+  };
+  return {
+    useHighlighter: () => {
+      useSyncExternalStore(subscribe, () => late.version);
+      return mocks.highlight ? hl : null;
+    },
+    tokenStyle: (i: number) => ({ color: `rgb(${i}, 0, 0)` }),
+  };
+});
 
 const ctx = (oldNo: number, newNo: number, text: string): DiffLine => ({
   kind: "context",
@@ -97,6 +116,7 @@ beforeEach(() => {
   mocks.patches = [];
   mocks.ensured = [];
   mocks.highlight = true;
+  mocks.late.ready = false;
   mocks.applyError = null;
   mocks.diffs = new Map([["src/a.ts", diff("src/a.ts")]]);
   useLayout.setState({ diffMode: "unified", diffViews: {} });
@@ -171,6 +191,19 @@ it("shows the path, the target and lines with syntax and word highlighting", asy
   expect(mocks.ensured).toContainEqual(["dark", 1, 0, 3]);
   // Commits have no hunk actions.
   expect(container.textContent).not.toContain("Hunk");
+});
+
+it("shows syntax tokens that arrive after the lines", async () => {
+  mocks.highlight = "late";
+  await render({ kind: "commit", hash: "0123456789abcdef", path: "src/a.ts" });
+  const styled = () => line(0).querySelector<HTMLElement>("span[style]:not([class*=text-right])");
+  expect(styled()).toBeNull();
+  await act(async () => {
+    mocks.late.ready = true;
+    mocks.late.version++;
+    for (const l of mocks.late.listeners) l();
+  });
+  expect(styled()?.style.color).toBe("rgb(1, 0, 0)");
 });
 
 it("stages and discards hunks of unstaged changes", async () => {
