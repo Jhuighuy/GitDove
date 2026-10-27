@@ -5,9 +5,11 @@ import { TextContextMenu } from "@/components/TextContextMenu";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useRepoEvents } from "@/lib/queries";
+import { useSettingsStore } from "@/stores/settings";
 import { useTabs } from "@/stores/tabs";
 import { DialogHost } from "./features/dialogs/dialogs";
 import { OpenRepoPage, RemoteRepoDialog, useOpenCommands } from "./features/open/OpenRepo";
+import { SettingsDialog } from "./features/settings/SettingsDialog";
 import { RepoView } from "./features/RepoView";
 import { TabBar } from "./features/tabs/TabBar";
 import { StatusBar } from "./features/statusbar/StatusBar";
@@ -16,11 +18,13 @@ export function App() {
   const { tabs, active, loaded, load } = useTabs(
     useShallow((s) => ({ tabs: s.tabs, active: s.active, loaded: s.loaded, load: s.load })),
   );
+  const settingsLoaded = useSettingsStore((s) => s.loaded);
   useRepoEvents();
   useOpenCommands();
 
   useEffect(() => {
     void load();
+    void useSettingsStore.getState().load();
   }, [load]);
 
   // A tab is mounted when first shown, so that restoring many tabs opens (and connects to)
@@ -30,7 +34,7 @@ export function App() {
     setShown(new Set([...shown].filter((k) => tabs.some((t) => t.key === k))).add(active));
   }
 
-  if (!loaded) {
+  if (!loaded || !settingsLoaded) {
     return (
       <div className="flex h-screen items-center justify-center">
         <Spinner />
@@ -60,6 +64,7 @@ export function App() {
       <StatusBar repo={tabs.find((t) => t.key === active)?.repo ?? null} />
       <DialogHost />
       <RemoteRepoDialog />
+      <SettingsDialog />
       <TextContextMenu />
     </div>
   );

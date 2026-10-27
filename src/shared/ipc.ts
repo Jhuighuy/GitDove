@@ -25,15 +25,13 @@ import {
   type WipLane,
   type WorkingStatus,
 } from "./domain";
+import type { Settings, TerminalInfo } from "./settings";
 
 export type ResetMode = "soft" | "mixed" | "hard";
 
 /** Editing commands of the focused text field or selection, as in the Edit menu. */
 export const EDIT_COMMANDS = ["undo", "redo", "cut", "copy", "paste", "selectAll"] as const;
 export type EditCommand = (typeof EDIT_COMMANDS)[number];
-
-export const APP_THEMES = ["light", "dark", "system"] as const;
-export type AppTheme = (typeof APP_THEMES)[number];
 
 /** Most rows `repo.graphRows` returns at once. */
 export const MAX_GRAPH_ROWS = 4096;
@@ -68,17 +66,28 @@ export interface Api {
   "app.version": () => { version: string; platform: string };
   /** Runs an Edit menu command in the focused window, e.g. from a text field's context menu. */
   "app.edit": (command: EditCommand) => void;
-  /**
-   * The app's theme, for what the main process draws: window backgrounds, title bar buttons,
-   * native menus and dialogs. They follow the system until this is called.
-   */
-  "app.setTheme": (theme: AppTheme) => void;
   "dialog.pickDirectory": () => string | null;
   "shell.openTerminal": (repo: RepoId) => void;
   "shell.revealInFinder": (repo: RepoId, path?: string) => void;
   "shell.openExternal": (url: string) => void;
   /** Whether a web origin (`https://host:port`) runs GitLab; self-hosted ones have any name. */
   "web.isGitlab": (origin: string) => boolean;
+
+  // Settings
+  "settings.get": () => Settings;
+  /** Changes some settings; every window hears of it (`settings.changed`). */
+  "settings.set": (patch: Partial<Settings>) => Settings;
+  /** The terminals known here, what the default one is called, and what the chosen one is. */
+  "settings.terminals": () => {
+    defaultName: string;
+    terminals: TerminalInfo[];
+    current: { name: string; remote: boolean };
+  };
+  /**
+   * Asks the user for a terminal application with a file dialog, and makes it the `terminal`
+   * setting. Null when the dialog was cancelled.
+   */
+  "settings.pickTerminal": () => Settings | null;
 
   // Remote hosts
   "ssh.hosts": () => string[];
@@ -242,12 +251,14 @@ export interface Events {
   "repo.changed": { repo: RepoId; scopes: RepoChangeScope[] };
   "repo.graphProgress": { repo: RepoId; info: GraphInfo };
   "updater.status": UpdaterStatus;
+  "settings.changed": Settings;
   "menu.command": { command: MenuCommand };
 }
 
 export type MenuCommand =
   | "open-repo"
   | "open-remote-repo"
+  | "open-settings"
   | "close-tab"
   | "next-tab"
   | "prev-tab"

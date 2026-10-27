@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { DEFAULT_SETTINGS } from "@shared/settings";
+import { useSettingsStore } from "@/stores/settings";
 import { Avatar, MISSING_RETRY_MS, useAvatarProviders } from "./Avatar";
 
 const mocks = vi.hoisted(() => ({ remotes: [] as { fetchUrl: string }[] }));
@@ -141,4 +143,15 @@ it("has no providers without remotes", async () => {
     ),
   );
   expect(providers.current).toEqual([]);
+});
+
+it("shows only initials while author pictures are turned off", () => {
+  useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, avatars: false } });
+  try {
+    render(<Avatar name="Ada Lovelace" email="ada@example.com" providers={["github"]} />);
+    expect(img()).toBeNull();
+    expect(avatar().textContent).toBe("AL");
+  } finally {
+    useSettingsStore.setState({ settings: DEFAULT_SETTINGS });
+  }
 });

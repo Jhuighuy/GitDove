@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { type EventName, type Events, IPC_EVENT, type MenuCommand } from "@shared/ipc";
+import { stepZoom } from "@shared/settings";
 import {
   app,
   BrowserWindow,
@@ -24,11 +25,16 @@ import { isWebUrl, registerIpc } from "./ipc";
 import { LoggerLive, Notifier, RepoSettings, ReposLive } from "./services";
 import {
   flushState,
+  loadSettings,
+  loadState,
   loadWindowState,
+  onSettingsChange,
   placeWindow,
   repoSettings,
+  saveState,
   saveWindowState,
   updateRepoSettings,
+  updateSettings,
 } from "./state";
 import { checkForUpdatesMenuItem, updater } from "./updater";
 
@@ -107,6 +113,16 @@ const restrictPermissions = () => {
 
 const command = (c: MenuCommand) => () => broadcast("menu.command", { command: c });
 
+const settingsMenuItem = (): MenuItemConstructorOptions => ({
+  label: isMac ? "Settings…" : "Settings",
+  accelerator: "CmdOrCtrl+,",
+  click: command("open-settings"),
+});
+
+/** Zooms every window, and remembers it (see `applyZoom`). */
+const zoomBy = (steps: number) => () =>
+  void updateSettings({ zoom: steps === 0 ? 1 : stepZoom(loadSettings().zoom, steps) });
+
 const buildMenu = () => {
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
@@ -116,6 +132,8 @@ const buildMenu = () => {
             submenu: [
               { role: "about" as const },
               checkForUpdatesMenuItem(),
+              { type: "separator" as const },
+              settingsMenuItem(),
               { type: "separator" as const },
               { role: "services" as const },
               { type: "separator" as const },
@@ -139,7 +157,14 @@ const buildMenu = () => {
         },
         { type: "separator" },
         { label: "Close Tab", accelerator: "CmdOrCtrl+W", click: command("close-tab") },
-        ...(isMac ? [] : [{ type: "separator" as const }, { role: "quit" as const }]),
+        ...(isMac
+          ? []
+          : [
+              { type: "separator" as const },
+              settingsMenuItem(),
+              { type: "separator" as const },
+              { role: "quit" as const },
+            ]),
       ],
     },
     { role: "editMenu" },
@@ -157,9 +182,10 @@ const buildMenu = () => {
         { label: "Next Tab", accelerator: "Ctrl+Tab", click: command("next-tab") },
         { label: "Previous Tab", accelerator: "Ctrl+Shift+Tab", click: command("prev-tab") },
         { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
+        // Not the zoom roles: the zoom is a setting, which applies to every window and is kept.
+        { label: "Actual Size", accelerator: "CmdOrCtrl+0", click: zoomBy(0) },
+        { label: "Zoom In", accelerator: "CmdOrCtrl+=", click: zoomBy(1) },
+        { label: "Zoom Out", accelerator: "CmdOrCtrl+-", click: zoomBy(-1) },
         { type: "separator" },
         { role: "togglefullscreen" },
         ...(app.isPackaged
@@ -214,10 +240,7 @@ const buildMenu = () => {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 };
 
-/**
- * Window colors before the renderer paints, and of the title bar buttons: the app's theme once
- * the renderer set it (`app.setTheme`), the system's until then.
- */
+/** Window colors before the renderer paints, and of the title bar buttons, in the app's theme. */
 const chrome = () =>
   nativeTheme.shouldUseDarkColors
     ? { background: "#0c0a09", symbols: "#a6a09b" }
@@ -270,6 +293,7 @@ const createWindow = () => {
       ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 13 } }
       : { titleBarStyle: "hidden" as const, titleBarOverlay: titleBarOverlay() }),
     webPreferences: {
+      zoomFactor: loadSettings().zoom,
       preload: join(import.meta.dirname, "../preload/index.cjs"),
       sandbox: true,
       contextIsolation: true,
@@ -300,6 +324,8 @@ const createWindow = () => {
       else win.webContents.reload();
     });
   });
+  // Ctrl+wheel or a pinch: zoom by a step, as the menu does.
+  win.webContents.on("zoom-changed", (_e, direction) => zoomBy(direction === "in" ? 1 : -1)());
   win.on("focus", () => activity.setFocused(true));
   win.on("blur", () =>
     activity.setFocused(
@@ -341,15 +367,29 @@ const main = async () => {
   await app.whenReady();
   // Packaged builds use the bundle icon; in development show ours instead of Electron's.
   if (isMac && !app.isPackaged) app.dock?.setIcon(dockIcon);
+  const settings = loadSettings();
+  nativeTheme.themeSource = settings.theme;
+  if (!settings.restoreTabs) saveState({ ...loadState(), tabs: [], activeTab: null });
   // The login shell may take a while: spawns wait for it, the window does not.
   Effect.runSync(loadEnvironment);
   ({ releaseRenderer } = registerIpc(runtime));
   restrictPermissions();
-  handleAvatarProtocol();
+  handleAvatarProtocol(() => loadSettings().avatars);
   buildMenu();
   createWindow();
   started = true;
-  updater.init((s) => broadcast("updater.status", s));
+  updater.init((s) => broadcast("updater.status", s), settings.autoUpdate);
+  onSettingsChange((next, prev) => {
+    // Windows follow through `nativeTheme`'s "updated" event, below.
+    nativeTheme.themeSource = next.theme;
+    if (next.zoom !== prev.zoom) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.setZoomFactor(next.zoom);
+      }
+    }
+    if (next.autoUpdate !== prev.autoUpdate) updater.setAutomatic(next.autoUpdate);
+    broadcast("settings.changed", next);
+  });
   // Back from sleep or a locked screen: remote repositories may have changed meanwhile.
   powerMonitor.on("resume", activity.wake);
   powerMonitor.on("unlock-screen", activity.wake);
@@ -359,7 +399,7 @@ const main = async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-  // The system's theme changed, or the app's (`app.setTheme`).
+  // The system's theme changed, or the app's (the `theme` setting).
   nativeTheme.on("updated", () => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue;

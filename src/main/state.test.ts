@@ -139,6 +139,30 @@ describe("repository settings", () => {
   });
 });
 
+describe("app settings", () => {
+  it("keeps what is valid of a settings file", async () => {
+    write("settings.json", { theme: "dark", zoom: 7 });
+    const { loadSettings } = await load();
+    expect(loadSettings()).toMatchObject({ theme: "dark", zoom: 1 });
+  });
+
+  it("persists changes and tells the listeners about real ones", async () => {
+    const { flushState, loadSettings, onSettingsChange, updateSettings } = await load();
+    const changes: [string, string][] = [];
+    const stop = onSettingsChange((next, prev) => changes.push([prev.theme, next.theme]));
+    expect(updateSettings({ theme: "light" }).theme).toBe("light");
+    updateSettings({ theme: "light" });
+    updateSettings({ codeFontSize: 99 });
+    expect(changes).toEqual([["system", "light"]]);
+    stop();
+    updateSettings({ theme: "dark" });
+    expect(changes).toHaveLength(1);
+    flushState();
+    expect(read("settings.json")).toMatchObject({ theme: "dark", codeFontSize: 12 });
+    expect((await load()).loadSettings()).toEqual(loadSettings());
+  });
+});
+
 describe("window state", () => {
   const none = { bounds: null, maximized: false, fullScreen: false };
 

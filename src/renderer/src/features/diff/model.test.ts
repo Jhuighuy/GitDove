@@ -214,3 +214,11 @@ it("leaves conflict markers out of highlighting and word emphasis", () => {
   // The deletion would otherwise be compared word by word with the separator.
   expect(m.lines[1]!.pair).toBe(-1);
 });
+
+it("expands tabs to the chosen width", () => {
+  expect(displayWidth("\tx", 2)).toBe(3);
+  expect(displayWidth("abc\tx", 8)).toBe(9);
+  const m = buildModel(diff({ start: [1, 1], lines: [add(1, "\t\tx")] }), 8);
+  expect(m.width).toBe(17);
+  expect(m.tabSize).toBe(8);
+});

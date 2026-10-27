@@ -5,7 +5,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { DEFAULT_SETTINGS } from "@shared/settings";
 import { useLayout, useRepoUiStore } from "@/stores/repo-ui";
+import { useSettingsStore } from "@/stores/settings";
 import { DiffView } from "./DiffView";
 
 const mocks = vi.hoisted(() => ({
@@ -187,8 +189,8 @@ it("shows the path, the target and lines with syntax and word highlighting", asy
   // A deletion without a counterpart has no emphasis.
   expect(line(2).querySelector("[class*=500\\/30]")).toBeNull();
   // Visible lines of both sides are requested from the highlighter.
-  expect(mocks.ensured).toContainEqual(["dark", 0, 1, 4]);
-  expect(mocks.ensured).toContainEqual(["dark", 1, 0, 3]);
+  expect(mocks.ensured).toContainEqual(["vitesse-dark", 0, 1, 4]);
+  expect(mocks.ensured).toContainEqual(["vitesse-dark", 1, 0, 3]);
   // Commits have no hunk actions.
   expect(container.textContent).not.toContain("Hunk");
 });
@@ -204,6 +206,19 @@ it("shows syntax tokens that arrive after the lines", async () => {
     for (const l of mocks.late.listeners) l();
   });
   expect(styled()?.style.color).toBe("rgb(1, 0, 0)");
+});
+
+it("sizes the lines anew when the font size changes", async () => {
+  await render({ kind: "commit", hash: "0123456789abcdef", path: "src/a.ts" });
+  expect(line(0).style.height).toBe("20px");
+  await act(async () =>
+    useSettingsStore.setState((s) => ({ settings: { ...s.settings, codeFontSize: 15 } })),
+  );
+  expect(line(0).style.height).toBe("25px");
+  // Lines below a line move down with it.
+  expect(line(1).style.transform).toBe(`translateY(${28 + 25}px)`);
+  await act(async () => useSettingsStore.setState({ settings: DEFAULT_SETTINGS }));
+  expect(line(0).style.height).toBe("20px");
 });
 
 it("stages and discards hunks of unstaged changes", async () => {

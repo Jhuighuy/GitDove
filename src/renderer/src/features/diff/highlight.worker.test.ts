@@ -37,8 +37,8 @@ beforeAll(async () => {
   await import("./highlight.worker");
   const { bundledLanguages } = await import("shiki/langs");
   await Promise.all([
-    import("shiki/themes/github-light.mjs"),
-    import("shiki/themes/github-dark.mjs"),
+    import("shiki/themes/vitesse-light.mjs"),
+    import("shiki/themes/vitesse-dark.mjs"),
     ...(["typescript", "javascript", "c", "python"] as const).map((l) => bundledLanguages[l]()),
   ]);
   // The first tokenization compiles the grammar's patterns; on a loaded machine that can pass
@@ -54,7 +54,7 @@ beforeAll(async () => {
     sides: [[], ["const a = 1; // b", "let s = `x${1}`;"]],
     resets: [[0], [0]],
   });
-  send({ type: "highlight", doc: 0, theme: "light", side: 1, chunk: 0 });
+  send({ type: "highlight", doc: 0, theme: "vitesse-light", side: 1, chunk: 0 });
   await done;
   send({ type: "close", doc: 0 });
   onPost = null;
@@ -80,7 +80,7 @@ const open = (
   send({ type: "open", doc, path, sides, resets });
   return doc;
 };
-const highlight = (doc: number, side: 0 | 1, chunk: number, theme: "dark" | "light" = "dark") =>
+const highlight = (doc: number, side: 0 | 1, chunk: number, theme = "vitesse-dark") =>
   send({ type: "highlight", doc, theme, side, chunk });
 
 const tokensOf = (doc: number) =>
@@ -117,7 +117,7 @@ it("highlights a chunk of lines and sends new styles along", async () => {
   highlight(doc, 1, 0);
   await waitFor(() => expect(tokensOf(doc)).toHaveLength(1));
   const msg = tokensOf(doc)[0]!;
-  expect(msg).toMatchObject({ theme: "dark", side: 1, chunk: 0 });
+  expect(msg).toMatchObject({ theme: "vitesse-dark", side: 1, chunk: 0 });
   expect(msg.starts).toHaveLength(lines.length + 1);
   // Typed arrays are transferred, not copied.
   expect(transfers[0]).toEqual([msg.starts.buffer, msg.tokens.buffer]);
@@ -135,11 +135,20 @@ it("highlights a chunk of lines and sends new styles along", async () => {
   expect(lineTokens(msg, styles, "", 2)).toEqual([]);
 
   // The same document in another theme reuses known styles and sends only new ones.
-  highlight(doc, 1, 0, "light");
+  highlight(doc, 1, 0, "vitesse-light");
   await waitFor(() => expect(tokensOf(doc)).toHaveLength(2));
   const light = tokensOf(doc)[1]!;
-  expect(light.theme).toBe("light");
+  expect(light.theme).toBe("vitesse-light");
   expect(light.paletteBase).toBe(warmed + msg.palette!.length);
+  send({ type: "close", doc });
+});
+
+it("highlights in any bundled theme, and leaves lines plain in an unknown one", async () => {
+  const doc = open("src/a.ts", [[], ["const a = 1;"]]);
+  highlight(doc, 1, 0, "nope");
+  highlight(doc, 1, 0, "dracula");
+  await waitFor(() => expect(tokensOf(doc)).toHaveLength(1));
+  expect(tokensOf(doc)[0]!.theme).toBe("dracula");
   send({ type: "close", doc });
 });
 

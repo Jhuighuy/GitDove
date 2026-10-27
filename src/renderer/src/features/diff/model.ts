@@ -39,6 +39,7 @@ export const MAX_LINES = 1_000_000;
 /** Lines are shown up to this many characters. */
 export const MAX_TEXT = 10_000;
 /** Columns a tab advances to a multiple of; the view sets the same `tab-size`. */
+/** Columns between tab stops, unless the settings say otherwise. */
 export const TAB_SIZE = 4;
 
 export interface DiffModel {
@@ -57,6 +58,8 @@ export interface DiffModel {
   readonly resets: readonly [number[], number[]];
   /** Widest line, in columns (`ch`), up to about `MAX_TEXT`. */
   readonly width: number;
+  /** Columns between tab stops that `width` assumes. */
+  readonly tabSize: number;
   /** Widest line number, in digits. */
   readonly gutter: number;
 }
@@ -79,12 +82,12 @@ const columns = (cp: number) =>
       : 1;
 
 /** Width of a line's shown text, in columns, expanding tabs. */
-export const displayWidth = (text: string): number => {
+export const displayWidth = (text: string, tabSize = TAB_SIZE): number => {
   let width = 0;
   const end = Math.min(text.length, MAX_TEXT);
   for (let i = 0; i < end; i++) {
     const c = text.charCodeAt(i);
-    if (c === 9) width += TAB_SIZE - (width % TAB_SIZE);
+    if (c === 9) width += tabSize - (width % tabSize);
     else if (c < 0x300) width++;
     else {
       const cp = text.codePointAt(i)!;
@@ -109,7 +112,7 @@ export const capLines = (diff: FileDiff, max = MAX_LINES): FileDiff => {
   return cut ? { ...diff, hunks, truncated: true } : diff;
 };
 
-export const buildModel = (full: FileDiff): DiffModel => {
+export const buildModel = (full: FileDiff, tabSize = TAB_SIZE): DiffModel => {
   const diff = capLines(full);
   const conflicts = findConflicts(diff);
   const lines: Line[] = [];
@@ -183,8 +186,8 @@ export const buildModel = (full: FileDiff): DiffModel => {
       }
       lines.push({ id, hunk: h, index, ...l, pair: -1, side, sideIndex, conflict });
       unified.push({ type: "line", id });
-      // A line is at most TAB_SIZE columns per character wide.
-      if (l.text.length * TAB_SIZE > width) width = Math.max(width, displayWidth(l.text));
+      // A line is at most `tabSize` columns per character wide.
+      if (l.text.length * tabSize > width) width = Math.max(width, displayWidth(l.text, tabSize));
 
       if (l.kind === "context") {
         flushBlock();
@@ -218,6 +221,7 @@ export const buildModel = (full: FileDiff): DiffModel => {
     sides,
     resets,
     width,
+    tabSize,
     gutter: String(maxNo).length,
   };
 };

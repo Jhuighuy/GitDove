@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { HighlightRequest, HighlightResponse, ThemeKind } from "./highlight-protocol";
+import type { HighlightRequest, HighlightResponse, ThemeName } from "./highlight-protocol";
 import { CHUNK } from "./highlight-protocol";
 import type { DiffModel } from "./model";
 
@@ -150,7 +150,7 @@ export class DocHighlighter {
       send({
         type: "highlight",
         doc: this.id,
-        theme: theme as ThemeKind,
+        theme: theme as ThemeName,
         side: Number(side) as 0 | 1,
         chunk: Number(chunk),
       });
@@ -170,7 +170,7 @@ export class DocHighlighter {
   }
 
   /** Tokens of a line as (end column, style) pairs, or null if not highlighted yet. */
-  tokens(theme: ThemeKind, side: 0 | 1, index: number): Uint32Array | null {
+  tokens(theme: ThemeName, side: 0 | 1, index: number): Uint32Array | null {
     if (index < 0) return null;
     const c = this.chunks.get(`${theme}:${side}:${Math.floor(index / CHUNK)}`);
     if (!c) return this.fallback?.get(`${theme}\n${this.model.sides[side][index]}`) ?? null;
@@ -179,7 +179,7 @@ export class DocHighlighter {
   }
 
   /** Requests highlighting of side lines `[from, to]`. */
-  ensure(theme: ThemeKind, side: 0 | 1, from: number, to: number) {
+  ensure(theme: ThemeName, side: 0 | 1, from: number, to: number) {
     if (!this.id || this.plain || from < 0 || to < from) return;
     for (let c = Math.floor(from / CHUNK); c <= Math.floor(to / CHUNK); c++) {
       const key = `${theme}:${side}:${c}`;

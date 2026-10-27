@@ -13,11 +13,13 @@ const electron = vi.hoisted(() => ({
 const sparkle = vi.hoisted(() => ({
   instance: null as null | {
     bundle: string;
+    automatic: boolean;
     onStatus: (s: UpdaterStatus) => void;
     onLog: (message: string) => void;
   },
   check: vi.fn(),
   install: vi.fn(),
+  setAutomatic: vi.fn(),
   close: vi.fn(),
 }));
 type AutoUpdater = EventEmitter & { checkForUpdates: Mock; quitAndInstall: Mock };
@@ -42,12 +44,17 @@ vi.mock("./sparkle", () => ({
   Sparkle: class {
     constructor(
       bundle: string,
-      handlers: { onStatus: (s: UpdaterStatus) => void; onLog: (message: string) => void },
+      handlers: {
+        automatic: boolean;
+        onStatus: (s: UpdaterStatus) => void;
+        onLog: (message: string) => void;
+      },
     ) {
       sparkle.instance = { bundle, ...handlers };
     }
     check = sparkle.check;
     install = sparkle.install;
+    setAutomatic = sparkle.setAutomatic;
     close = sparkle.close;
   },
 }));
@@ -56,12 +63,12 @@ const platform = process.platform;
 const setPlatform = (value: string) => Object.defineProperty(process, "platform", { value });
 
 /** A fresh `updater` module: it keeps its state at module level. */
-async function load(on: string) {
+async function load(on: string, automatic = true) {
   setPlatform(on);
   vi.resetModules();
   const module = await import("./updater");
   const statuses: UpdaterStatus[] = [];
-  module.updater.init((s) => statuses.push(s));
+  module.updater.init((s) => statuses.push(s), automatic);
   return { ...module, statuses };
 }
 
@@ -75,6 +82,7 @@ describe("updater on macOS", () => {
   it("runs Sparkle for the app bundle and relays its statuses", async () => {
     const { updater, statuses } = await load("darwin");
     expect(sparkle.instance?.bundle).toBe("/Applications/GitDove.app");
+    expect(sparkle.instance?.automatic).toBe(true);
     sparkle.instance?.onStatus({ kind: "ready", version: "0.1.6" });
     expect(statuses).toEqual([{ kind: "ready", version: "0.1.6" }]);
     expect(updater.status()).toEqual({ kind: "ready", version: "0.1.6" });
@@ -178,9 +186,28 @@ describe("updater on macOS", () => {
       .poll(() => electron.dialog.showMessageBox.mock.calls.at(0)?.at(0))
       .toMatchObject({ message: "Downloading GitDove 0.1.6" });
   });
+
+  it("passes the automatic checks setting to Sparkle", async () => {
+    const { updater } = await load("darwin", false);
+    expect(sparkle.instance?.automatic).toBe(false);
+    updater.setAutomatic(false);
+    expect(sparkle.setAutomatic).not.toHaveBeenCalled();
+    updater.setAutomatic(true);
+    expect(sparkle.setAutomatic).toHaveBeenCalledWith(true);
+  });
 });
 
 describe("updater elsewhere", () => {
+  it("checks on startup only with automatic checks, and when they are turned on", async () => {
+    const { updater } = await load("linux", false);
+    expect(mocked.autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    updater.setAutomatic(true);
+    expect(mocked.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    mocked.autoUpdater.checkForUpdates.mockClear();
+    await load("linux");
+    expect(mocked.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
   it("checks through electron-updater", async () => {
     const { updater, checkForUpdatesFromMenu } = await load("linux");
     await expect(updater.check()).resolves.toEqual({ kind: "idle" });
@@ -193,6 +220,44 @@ describe("updater elsewhere", () => {
     expect(updater.status()).toEqual({ kind: "ready", version: "0.1.6" });
     updater.install();
     expect(mocked.autoUpdater.quitAndInstall).toHaveBeenCalled();
+  });
+
+  it("keeps checking while an update is ready, and keeps offering it (#49)", async () => {
+    const { updater, statuses } = await load("linux");
+    mocked.autoUpdater.emit("update-downloaded", { version: "0.1.6" });
+    mocked.autoUpdater.checkForUpdates.mockClear();
+    // The same version again: electron-updater finds its download in the cache.
+    mocked.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      mocked.autoUpdater.emit("checking-for-update");
+      mocked.autoUpdater.emit("update-available", { version: "0.1.6" });
+      mocked.autoUpdater.emit("update-downloaded", { version: "0.1.6" });
+      return {};
+    });
+    await expect(updater.check()).resolves.toEqual({ kind: "ready", version: "0.1.6" });
+    expect(mocked.autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    // A failed check leaves it on offer too.
+    mocked.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      mocked.autoUpdater.emit("checking-for-update");
+      mocked.autoUpdater.emit("error", new Error("offline"));
+      return {};
+    });
+    await expect(updater.check()).resolves.toEqual({ kind: "ready", version: "0.1.6" });
+    expect(statuses).toEqual([{ kind: "ready", version: "0.1.6" }]);
+
+    // A newer version downloads in its place.
+    mocked.autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      mocked.autoUpdater.emit("checking-for-update");
+      mocked.autoUpdater.emit("update-available", { version: "0.1.7" });
+      return {};
+    });
+    await expect(updater.check()).resolves.toEqual({ kind: "available", version: "0.1.7" });
+    mocked.autoUpdater.emit("download-progress", { percent: 40 });
+    mocked.autoUpdater.emit("update-downloaded", { version: "0.1.7" });
+    expect(statuses.slice(1)).toEqual([
+      { kind: "available", version: "0.1.7" },
+      { kind: "downloading", percent: 40 },
+      { kind: "ready", version: "0.1.7" },
+    ]);
   });
 
   it("answers a check at once when electron-updater is inactive", async () => {

@@ -10,6 +10,8 @@ const { autoUpdater } = electronUpdater;
 let status: UpdaterStatus = { kind: "idle" };
 let listener: ((s: UpdaterStatus) => void) | null = null;
 let sparkle: Sparkle | null = null;
+/** Whether updates are checked for in the background (the `autoUpdate` setting). */
+let automatic = true;
 /** Callers of `check()` waiting for its outcome. */
 let waiting: ((s: UpdaterStatus) => void)[] = [];
 
@@ -17,6 +19,16 @@ let waiting: ((s: UpdaterStatus) => void)[] = [];
 const CHECK_TIMEOUT = 60 * 1000;
 
 const set = (next: UpdaterStatus) => {
+  // Checks go on while an update is ready (#49), and leave it on offer unless they find a newer
+  // version, which then downloads in its place: electron-updater deletes the update it has as soon
+  // as it starts downloading another, so the older one cannot be installed any more.
+  const newer =
+    status.kind === "ready" && next.kind === "available" && next.version !== status.version;
+  if (status.kind === "ready" && next.kind !== "ready" && !newer) {
+    if (next.kind === "error") log.warn(`updater: a check failed: ${next.message}`);
+    if (next.kind !== "checking" && next.kind !== "downloading") settle(status);
+    return;
+  }
   // Renderers show whole percents; finer progress events would only be noise.
   const s: UpdaterStatus =
     next.kind === "downloading" ? { kind: "downloading", percent: Math.floor(next.percent) } : next;
@@ -33,18 +45,21 @@ const settle = (s: UpdaterStatus) => {
 
 /**
  * Over-the-air updates from GitHub releases: Sparkle on macOS (see `sparkle.ts`), electron-updater
- * elsewhere. Updates download in the background and install on restart or quit.
+ * elsewhere. Updates download in the background and install on restart or quit. Without automatic
+ * checks, only "Check for Updates…" looks for (and downloads) them.
  */
 export const updater = {
   status: () => status,
 
-  init(onStatus: (s: UpdaterStatus) => void) {
+  init(onStatus: (s: UpdaterStatus) => void, checkAutomatically: boolean) {
     listener = onStatus;
+    automatic = checkAutomatically;
     if (!app.isPackaged) return;
     if (process.platform === "darwin") {
       // Sparkle checks on startup and every 4 hours (`SUScheduledCheckInterval`).
       // GitDove.app/Contents/MacOS/GitDove
       sparkle = new Sparkle(dirname(dirname(dirname(app.getPath("exe")))), {
+        automatic,
         onStatus: set,
         onLog: (message) => log.warn(`updater: ${message}`),
       });
@@ -59,14 +74,29 @@ export const updater = {
     autoUpdater.on("download-progress", (p) => set({ kind: "downloading", percent: p.percent }));
     autoUpdater.on("update-downloaded", (i) => set({ kind: "ready", version: i.version }));
     autoUpdater.on("error", (e) => set({ kind: "error", message: e.message }));
-    void this.check();
-    setInterval(() => void this.check(), 4 * 60 * 60 * 1000).unref();
+    if (automatic) void this.check();
+    setInterval(
+      () => {
+        if (automatic) void this.check();
+      },
+      4 * 60 * 60 * 1000,
+    ).unref();
+  },
+
+  /** Turns background checks on or off; turning them on checks now. */
+  setAutomatic(value: boolean) {
+    if (value === automatic) return;
+    automatic = value;
+    if (sparkle) sparkle.setAutomatic(value);
+    else if (value) void this.check();
   },
 
   /** Checks for updates now; resolves with the outcome (`downloading` if already underway). */
   check(): Promise<UpdaterStatus> {
     if (!app.isPackaged) return Promise.resolve(status);
-    if (status.kind === "ready" || (!sparkle && status.kind === "downloading"))
+    // Sparkle does not check again once an update is ready to install: it would only resume
+    // installing that one. electron-updater does, and downloads a newer one if there is.
+    if (sparkle ? status.kind === "ready" : status.kind === "downloading")
       return Promise.resolve(status);
     const outcome = new Promise<UpdaterStatus>((done) => {
       const finish = (s: UpdaterStatus) => {

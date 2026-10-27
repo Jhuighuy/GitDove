@@ -4,11 +4,13 @@
 // with the path of the GitDove bundle and talks to it over JSON lines:
 //
 //   stdout  {"kind": "checking" | "idle" | "available" | "downloading" | "ready" | "error", ...}
-//   stdin   "check"    check for updates now
-//           "install"  install the downloaded update now: Sparkle quits and relaunches GitDove
+//   stdin   "check"      check for updates now
+//           "install"    install the downloaded update now: Sparkle quits and relaunches GitDove
+//           "automatic"  check on Sparkle's schedule (and now) from now on
+//           "manual"     check only when asked to
 //
-// Sparkle checks on startup and on its schedule (`SUScheduledCheckInterval`), downloads updates
-// silently, and installs a downloaded update when GitDove quits. GitDove closes stdin when it
+// Sparkle checks on startup and on its schedule (`SUScheduledCheckInterval`), unless started with
+// `--manual`, downloads updates silently, and installs a downloaded update when GitDove quits. GitDove closes stdin when it
 // quits; the helper then exits and Sparkle's installer finishes on its own.
 
 import AppKit
@@ -38,17 +40,23 @@ final class Updater: NSObject, SPUUpdaterDelegate, SPUUserDriver {
   private var receivedLength: UInt64 = 0
   private var percent = -1.0
 
-  init(app: Bundle) throws {
+  init(app: Bundle, automatic: Bool) throws {
     super.init()
     sparkle = SPUUpdater(hostBundle: app, applicationBundle: app, userDriver: self, delegate: self)
+    // Kept in GitDove's defaults; set on every start, as GitDove's setting may have changed.
+    sparkle.automaticallyChecksForUpdates = automatic
     try sparkle.start()
-    check()
+    if automatic { check() }
   }
 
   func run(_ command: String) {
     switch command {
     case "check": check()
     case "install": install()
+    case "automatic":
+      sparkle.automaticallyChecksForUpdates = true
+      check()
+    case "manual": sparkle.automaticallyChecksForUpdates = false
     default: emit(Event(kind: "error", message: "Unknown updater command: \(command)"))
     }
   }
@@ -198,14 +206,17 @@ final class Updater: NSObject, SPUUpdaterDelegate, SPUUserDriver {
 @MainActor
 enum Main {
   static func main() {
-    guard CommandLine.arguments.count == 2, let app = Bundle(path: CommandLine.arguments[1]) else {
-      FileHandle.standardError.write(Data("usage: GitDove Updater <GitDove.app>\n".utf8))
+    let args = CommandLine.arguments
+    guard args.count == 2 || (args.count == 3 && args[2] == "--manual"),
+      let app = Bundle(path: args[1])
+    else {
+      FileHandle.standardError.write(Data("usage: GitDove Updater <GitDove.app> [--manual]\n".utf8))
       exit(64)
     }
     NSApplication.shared.setActivationPolicy(.prohibited)
     let updater: Updater
     do {
-      updater = try Updater(app: app)
+      updater = try Updater(app: app, automatic: args.count == 2)
     } catch {
       emit(Event(kind: "error", message: error.localizedDescription))
       exit(1)

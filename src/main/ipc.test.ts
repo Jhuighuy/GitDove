@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { RepoLocation } from "@shared/domain";
 import { IPC_CANCEL, IPC_INVOKE, type RpcResult } from "@shared/ipc";
 import type { WebContents } from "electron";
@@ -31,7 +31,6 @@ const electron = vi.hoisted(() => ({
     ),
   },
   ipcMain: { handle: vi.fn(), on: vi.fn() },
-  nativeTheme: { themeSource: "system" },
   shell: {
     showItemInFolder: vi.fn(),
     openPath: vi.fn(async () => ""),
@@ -41,7 +40,12 @@ const electron = vi.hoisted(() => ({
 vi.mock("electron", () => electron);
 const log = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock("electron-log/main", () => ({ default: log }));
-const state = vi.hoisted(() => ({ loadState: vi.fn(), saveState: vi.fn() }));
+const state = vi.hoisted(() => ({
+  loadState: vi.fn(),
+  saveState: vi.fn(),
+  loadSettings: vi.fn(() => ({ terminal: "" })),
+  updateSettings: vi.fn((patch: object) => ({ terminal: "", ...patch })),
+}));
 vi.mock("./state", () => state);
 const updater = vi.hoisted(() => ({
   status: vi.fn(() => ({ kind: "idle" })),
@@ -55,14 +59,31 @@ vi.mock("./avatars", () => avatars);
 const terminals = vi.hoisted(() => ({
   /** Programs that are "not installed". */
   missing: new Set<string>(),
-  spawn: vi.fn((file: string, ..._args: unknown[]) => {
-    const child = Object.assign(new EventEmitter(), { unref: terminals.unref });
-    const fail = terminals.missing.has(file);
-    setImmediate(() =>
-      fail
-        ? child.emit("error", Object.assign(new Error(`spawn ${file} ENOENT`), { code: "ENOENT" }))
-        : child.emit("spawn"),
-    );
+  /** Programs that are installed but cannot be started. */
+  denied: new Set<string>(),
+  /** Programs that fail, with this error output (for those that are waited for). */
+  failing: new Map<string, string>(),
+  spawn: vi.fn((file: string, _args: unknown, options: { stdio?: unknown }) => {
+    const stderr = new EventEmitter();
+    const child = Object.assign(new EventEmitter(), { unref: terminals.unref, stderr });
+    const fail = terminals.missing.has(file)
+      ? "ENOENT"
+      : terminals.denied.has(file)
+        ? "EACCES"
+        : null;
+    setImmediate(() => {
+      if (fail) {
+        child.emit("error", Object.assign(new Error(`spawn ${file} ${fail}`), { code: fail }));
+        return;
+      }
+      child.emit("spawn");
+      // Waited for: exits at once.
+      if (Array.isArray(options.stdio)) {
+        const error = terminals.failing.get(file);
+        if (error) stderr.emit("data", Buffer.from(`${error}\n`));
+        child.emit("close", error ? 1 : 0);
+      }
+    });
     return child;
   }),
   unref: vi.fn(),
@@ -74,16 +95,19 @@ vi.mock("node:child_process", async (importOriginal) => {
     "cmd.exe",
     "x-terminal-emulator",
     "gnome-terminal",
+    "ptyxis",
     "konsole",
     "xfce4-terminal",
     "xterm",
     "my-term",
+    "open",
+    "ghostty",
   ];
   return {
     ...real,
     spawn: (file: string, ...rest: unknown[]) =>
       launchers.includes(file)
-        ? terminals.spawn(file, ...rest)
+        ? terminals.spawn(file, rest[0], rest[1] as { stdio?: unknown })
         : (real.spawn as (...a: unknown[]) => unknown)(file, ...rest),
   };
 });
@@ -201,6 +225,8 @@ beforeEach(() => {
   services.hidden.clear();
   services.owners.length = 0;
   terminals.missing.clear();
+  terminals.denied.clear();
+  terminals.failing.clear();
   vi.stubEnv("TERMINAL", "");
 });
 afterEach(() => {
@@ -222,11 +248,14 @@ describe("app and dialog handlers", () => {
     expect(state.saveState).toHaveBeenCalledWith(next);
   });
 
-  it("sets the theme of what the main process draws", async () => {
-    await call("app.setTheme", "dark");
-    expect(electron.nativeTheme.themeSource).toBe("dark");
-    await call("app.setTheme", "system");
-    expect(electron.nativeTheme.themeSource).toBe("system");
+  it("reads and changes the settings", async () => {
+    expect(await call("settings.get")).toEqual({ terminal: "" });
+    expect(await call("settings.set", { theme: "dark", codeFontSize: 14 })).toEqual({
+      terminal: "",
+      theme: "dark",
+      codeFontSize: 14,
+    });
+    expect(state.updateSettings).toHaveBeenCalledWith({ theme: "dark", codeFontSize: 14 });
   });
 
   it("reports the version and platform", async () => {
@@ -330,6 +359,7 @@ describe("shell handlers", () => {
   const local = () => fakeRepo({ kind: "local", path: "/work/it's" });
   const remote = () => fakeRepo({ kind: "ssh", host: "fedora", path: "/srv/my repo" });
   const detached = { detached: true, stdio: "ignore" };
+  const waited = { stdio: ["ignore", "ignore", "pipe"] };
 
   it("opens Terminal.app on macOS", async () => {
     setPlatform("darwin");
@@ -339,9 +369,9 @@ describe("shell handlers", () => {
       "osascript",
       [
         "-e",
-        `tell application "Terminal"\n  activate\n  do script "cd '/work/it'\\\\''s'"\nend tell`,
+        `tell application id "com.apple.Terminal"\n  activate\n  do script "cd '/work/it'\\\\''s'"\nend tell`,
       ],
-      detached,
+      waited,
     );
     services.repo = remote();
     await call("shell.openTerminal", services.repo.id);
@@ -349,18 +379,33 @@ describe("shell handlers", () => {
     expect(script).toContain(
       `do script "ssh -t -- fedora 'cd '\\\\''/srv/my repo'\\\\'' && exec $SHELL -l'"`,
     );
-    expect(terminals.unref).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports what a scripted terminal answered", async () => {
+    setPlatform("darwin");
+    terminals.failing.set(
+      "osascript",
+      "execution error: Not authorized to send Apple events (-1743)",
+    );
+    expect(await callExit("shell.openTerminal", services.repo.id)).toEqual(
+      Exit.fail(
+        new InvalidInputError({
+          message:
+            "Could not open Terminal: execution error: Not authorized to send Apple events (-1743)",
+        }),
+      ),
+    );
   });
 
   it("opens cmd on Windows", async () => {
     setPlatform("win32");
     services.repo = local();
     await call("shell.openTerminal", services.repo.id);
-    expect(terminals.spawn).toHaveBeenLastCalledWith(
-      "cmd.exe",
-      ["/d", "/c", "start", "", "cmd.exe"],
-      { cwd: "/work/it's", ...detached },
-    );
+    expect(terminals.spawn).toHaveBeenLastCalledWith("cmd.exe", [`/d /s /c "start "" "cmd.exe""`], {
+      cwd: "/work/it's",
+      windowsVerbatimArguments: true,
+      ...detached,
+    });
     services.repo = remote();
     await call("shell.openTerminal", services.repo.id);
     expect(terminals.spawn).toHaveBeenLastCalledWith(
@@ -400,22 +445,110 @@ describe("shell handlers", () => {
     );
   });
 
+  it("opens the terminal chosen in the settings", async () => {
+    try {
+      // A program the user picked: it opens local repositories, Terminal opens remote ones.
+      state.loadSettings.mockReturnValue({ terminal: "/Applications/Some Term.app" });
+      setPlatform("darwin");
+      services.repo = local();
+      await call("shell.openTerminal", services.repo.id);
+      expect(terminals.spawn).toHaveBeenLastCalledWith(
+        "open",
+        ["-a", "/Applications/Some Term.app", "/work/it's"],
+        waited,
+      );
+      services.repo = remote();
+      await call("shell.openTerminal", services.repo.id);
+      expect(terminals.spawn.mock.lastCall![0]).toBe("osascript");
+      // A known one runs ssh itself.
+      state.loadSettings.mockReturnValue({ terminal: "ghostty" });
+      setPlatform("linux");
+      await call("shell.openTerminal", services.repo.id);
+      expect(terminals.spawn).toHaveBeenLastCalledWith(
+        "ghostty",
+        ["-e", "ssh", "-t", "--", "fedora", "cd '/srv/my repo' && exec $SHELL -l"],
+        detached,
+      );
+      terminals.missing.add("ghostty");
+      expect(await callExit("shell.openTerminal", services.repo.id)).toEqual(
+        Exit.fail(
+          new InvalidInputError({ message: "Could not open Ghostty: spawn ghostty ENOENT" }),
+        ),
+      );
+    } finally {
+      state.loadSettings.mockReturnValue({ terminal: "" });
+      setPlatform("darwin");
+    }
+  });
+
+  it("lists the terminals to choose from", async () => {
+    setPlatform("linux");
+    const { defaultName, terminals: list } = (await call("settings.terminals")) as {
+      defaultName: string;
+      terminals: unknown[];
+    };
+    expect(defaultName).toBe("$TERMINAL or the system's");
+    expect(list).toContainEqual({ id: "ptyxis", name: "Ptyxis", installed: expect.any(Boolean) });
+  });
+
+  it("makes a terminal chosen in a file dialog the setting", async () => {
+    setPlatform("darwin");
+    const dir = mkdtempSync(join(tmpdir(), "gitdove-term-"));
+    try {
+      const app = join(dir, "Some Term.app");
+      mkdirSync(app);
+      electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [app] });
+      expect(await call("settings.pickTerminal")).toEqual({ terminal: app });
+      expect(state.updateSettings).toHaveBeenLastCalledWith({ terminal: app });
+      expect(electron.dialog.showOpenDialog.mock.lastCall![0]).toMatchObject({
+        filters: [{ name: "Applications", extensions: ["app"] }],
+      });
+
+      electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
+      expect(await call("settings.pickTerminal")).toBeNull();
+      electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [dir] });
+      expect(await callExit("settings.pickTerminal")).toEqual(
+        Exit.fail(new InvalidInputError({ message: `${basename(dir)} is not an application` })),
+      );
+      expect(state.updateSettings).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fails, instead of crashing, without a terminal emulator", async () => {
     setPlatform("linux");
-    for (const t of ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm"])
+    for (const t of [
+      "x-terminal-emulator",
+      "gnome-terminal",
+      "ptyxis",
+      "konsole",
+      "xfce4-terminal",
+      "xterm",
+    ])
       terminals.missing.add(t);
     const exit = await callExit("shell.openTerminal", services.repo.id);
     expect(exit).toEqual(
       Exit.fail(
         new InvalidInputError({
-          message: "No terminal emulator found. Set $TERMINAL to the one to use.",
+          message: "No terminal emulator found. Choose the one to use in Settings.",
+        }),
+      ),
+    );
+    // One that is there but would not start is no missing terminal.
+    terminals.missing.delete("gnome-terminal");
+    terminals.denied.add("gnome-terminal");
+    expect(await callExit("shell.openTerminal", services.repo.id)).toEqual(
+      Exit.fail(
+        new InvalidInputError({
+          message: "Could not open a terminal: spawn gnome-terminal EACCES",
         }),
       ),
     );
     setPlatform("darwin");
     terminals.missing.add("osascript");
     expect(JSON.stringify(await callExit("shell.openTerminal", services.repo.id))).toContain(
-      "Could not open a terminal: spawn osascript ENOENT",
+      "Could not open Terminal: spawn osascript ENOENT",
     );
   });
 });
@@ -634,7 +767,14 @@ describe("registerIpc", () => {
     const bad: [string, unknown][] = [
       ["app.version", "not-an-array"],
       ["app.version", [1]],
-      ["app.setTheme", ["blue"]],
+      ["settings.set", [{ theme: "blue" }]],
+      ["settings.set", [{ syntaxThemeLight: "vitesse-dark" }]],
+      ["settings.set", [{ codeFontSize: 100 }]],
+      ["settings.set", [{ zoom: 3 }]],
+      ["settings.set", [{ codeFont: "a\nb" }]],
+      // A program to run comes from the file dialog only.
+      ["settings.set", [{ terminal: "/bin/sh" }]],
+      ["settings.set", [null]],
       ["repo.status", []],
       ["repo.status", [42]],
       ["repo.status", ["nope"]],

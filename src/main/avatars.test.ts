@@ -54,11 +54,14 @@ const GITHUB_DEFAULT =
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 const gravatar = (email: string) => `https://www.gravatar.com/avatar/${sha256(email)}?d=404&s=`;
 
+/** Whether the `avatars` setting is on. */
+let enabled = true;
+
 /** A fresh module: it keeps probes and in-flight lookups at module level. */
 const load = async () => {
   vi.resetModules();
   const m = await import("./avatars");
-  m.handleAvatarProtocol();
+  m.handleAvatarProtocol(() => enabled);
   return m;
 };
 
@@ -102,6 +105,23 @@ describe("avatar protocol", () => {
     const res = await electron.handler!({ url: `${AVATAR_SCHEME}://avatar/?e=nope&s=64` });
     expect(res.status).toBe(400);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("serves nothing, and asks no one, while avatars are turned off", async () => {
+    await load();
+    serve({ "https://www.gravatar.com/": png("g") });
+    enabled = false;
+    try {
+      expect(await request("a@x.org")).toEqual({
+        status: 204,
+        type: null,
+        cache: "no-store",
+        body: null,
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      enabled = true;
+    }
   });
 
   it("serves images with their type and a cache header", async () => {

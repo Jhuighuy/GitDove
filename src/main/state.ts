@@ -2,6 +2,7 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AppState } from "@shared/domain";
 import { isRepoId } from "@shared/ipc";
+import { normalizeSettings as normalizeAppSettings, type Settings } from "@shared/settings";
 import { app } from "electron";
 import log from "electron-log/main";
 
@@ -122,6 +123,31 @@ export const updateRepoSettings = (id: string, patch: Partial<RepoSettingsData>)
 };
 
 // ---------------------------------------------------------------------------
+// App settings
+// ---------------------------------------------------------------------------
+
+const appSettingsStore = jsonStore("settings.json", normalizeAppSettings);
+const settingsListeners = new Set<(next: Settings, prev: Settings) => void>();
+
+export const loadSettings = (): Settings => appSettingsStore.get();
+
+/** Changes some settings, and tells the listeners if anything changed. */
+export const updateSettings = (patch: Partial<Settings>): Settings => {
+  const prev = appSettingsStore.get();
+  const next = normalizeAppSettings({ ...prev, ...patch });
+  if (JSON.stringify(next) === JSON.stringify(prev)) return prev;
+  appSettingsStore.set(next);
+  for (const listener of settingsListeners) listener(next, prev);
+  return next;
+};
+
+/** Calls `listener` after each change of the settings; returns a function that stops it. */
+export const onSettingsChange = (listener: (next: Settings, prev: Settings) => void) => {
+  settingsListeners.add(listener);
+  return () => void settingsListeners.delete(listener);
+};
+
+// ---------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------
 
@@ -202,5 +228,6 @@ export const placeWindow = (
 export const flushState = (): void => {
   stateStore.flush();
   settingsStore.flush();
+  appSettingsStore.flush();
   windowStore.flush();
 };

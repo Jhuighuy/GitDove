@@ -2,10 +2,12 @@ import { expect, it } from "vitest";
 import {
   absoluteTime,
   basename,
+  compactTime,
   dirname,
   formatBytes,
   hueOf,
   initials,
+  listTime,
   relativeTime,
   shortHash,
 } from "./format";
@@ -94,4 +96,11 @@ it("formats byte counts", () => {
   expect(formatBytes(2.5 * 1024 ** 3)).toBe("2.5 GB");
   // GB is the largest unit.
   expect(formatBytes(5000 * 1024 ** 3)).toBe("5000 GB");
+});
+
+it("formats list dates in the chosen style", () => {
+  const t = new Date(2026, 9, 7, 9, 5).getTime() / 1000;
+  expect(compactTime(t)).toBe("2026-10-07 09:05");
+  expect(listTime(t, "absolute")).toBe("2026-10-07 09:05");
+  expect(listTime(t, "relative", t + 3 * 24 * 3600)).toBe("3 days ago");
 });

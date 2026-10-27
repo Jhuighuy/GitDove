@@ -429,10 +429,13 @@ export const registerAvatarScheme = () =>
     { scheme: AVATAR_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } },
   ]);
 
-export const handleAvatarProtocol = () =>
+/** Serves avatars while `enabled()` holds (the `avatars` setting); none at all otherwise. */
+export const handleAvatarProtocol = (enabled: () => boolean) =>
   protocol.handle(AVATAR_SCHEME, async (request) => {
     const req = parseAvatarUrl(request.url);
     if (!req) return new Response(null, { status: 400 });
+    if (!enabled())
+      return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
     const img = await lookup(req);
     // Not a 404, which Chromium logs for every image; an empty body fails to load all the same.
     if (!img) {
