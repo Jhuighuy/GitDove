@@ -45,6 +45,9 @@ export const listTime = (seconds: number, style: DateStyle, now = Date.now() / 1
 
 export const shortHash = (hash: string): string => hash.slice(0, 7);
 
+/** "Name <email>", as git writes a person: the hover text of an author or committer. */
+export const nameAndEmail = (name: string, email: string): string => `${name} <${email}>`;
+
 const graphemes = new Intl.Segmenter();
 
 /**

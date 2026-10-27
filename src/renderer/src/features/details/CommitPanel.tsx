@@ -2,7 +2,7 @@ import type { FileChange, RepoId } from "@shared/domain";
 import { IconCopy } from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import { Spinner } from "@/components/ui/spinner";
-import { absoluteTime, relativeTime, shortHash } from "@/lib/format";
+import { absoluteTime, nameAndEmail, relativeTime, shortHash } from "@/lib/format";
 import { useCommitDetails, useRefs } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { useRepoUiStore } from "@/stores/repo-ui";
@@ -117,7 +117,12 @@ export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
             size={28}
           />
           <div className="min-w-0 text-xs">
-            <div className="truncate font-medium">{data.author.name}</div>
+            <div
+              className="truncate font-medium"
+              title={nameAndEmail(data.author.name, data.author.email)}
+            >
+              {data.author.name}
+            </div>
             <div className="text-muted-foreground" title={absoluteTime(data.author.time)}>
               authored {relativeTime(data.author.time)} · {absoluteTime(data.author.time)}
             </div>
@@ -125,7 +130,11 @@ export function CommitPanel({ repo, hash }: { repo: RepoId; hash: string }) {
         </div>
         {!sameCommitter && (
           <div className="text-muted-foreground mt-1.5 text-[11px]">
-            committed by {data.committer.name} {relativeTime(data.committer.time)}
+            committed by{" "}
+            <span title={nameAndEmail(data.committer.name, data.committer.email)}>
+              {data.committer.name}
+            </span>{" "}
+            {relativeTime(data.committer.time)}
           </div>
         )}
       </div>

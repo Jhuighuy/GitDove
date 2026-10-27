@@ -8,6 +8,7 @@ import {
   type MenuItemConstructorOptions,
   nativeTheme,
   powerMonitor,
+  screen,
   session,
   shell,
 } from "electron";
@@ -26,9 +27,12 @@ import {
   flushState,
   loadSettings,
   loadState,
+  loadWindowState,
   onSettingsChange,
+  placeWindow,
   repoSettings,
   saveState,
+  saveWindowState,
   updateRepoSettings,
   updateSettings,
 } from "./state";
@@ -250,12 +254,36 @@ let releaseRenderer: ((sender: Electron.WebContents) => Promise<void>) | null = 
 const MAX_CRASHES = 3;
 const CRASH_WINDOW_MS = 60_000;
 
+const DEFAULT_SIZE = { width: 1440, height: 900 };
+const MIN_SIZE = { width: 900, height: 560 };
+
+/** Saves where the window is, to open the next one there (see `createWindow`). */
+const trackWindowState = (win: BrowserWindow) => {
+  const save = () => {
+    // A minimized window keeps the state it had before.
+    if (win.isDestroyed() || win.isMinimized()) return;
+    saveWindowState({
+      bounds: win.getNormalBounds(),
+      maximized: win.isMaximized(),
+      fullScreen: win.isFullScreen(),
+    });
+  };
+  win.on("resize", save);
+  win.on("move", save);
+  win.on("maximize", save);
+  win.on("unmaximize", save);
+  win.on("enter-full-screen", save);
+  win.on("leave-full-screen", save);
+  win.on("close", save);
+};
+
 const createWindow = () => {
+  const saved = loadWindowState();
+  const workAreas = [screen.getPrimaryDisplay(), ...screen.getAllDisplays()].map((d) => d.workArea);
   const win = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 900,
-    minHeight: 560,
+    ...(saved.bounds ? placeWindow(saved.bounds, workAreas, MIN_SIZE) : DEFAULT_SIZE),
+    minWidth: MIN_SIZE.width,
+    minHeight: MIN_SIZE.height,
     show: false,
     backgroundColor: chrome().background,
     title: "GitDove",
@@ -275,7 +303,12 @@ const createWindow = () => {
     },
   });
 
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => {
+    if (saved.maximized) win.maximize();
+    win.show();
+    if (saved.fullScreen) win.setFullScreen(true);
+    trackWindowState(win);
+  });
   // A crashed renderer: its repositories are released (its tabs open them again), then the
   // window loads again, unless it keeps crashing.
   const crashes: number[] = [];
@@ -404,6 +437,9 @@ app.on("will-quit", (e) => {
   e.preventDefault();
   updater.dispose();
   flushState();
+  // The renderer's own layout (panel sizes, sections) lives in its local storage; the forced
+  // exit below must not lose a pending write.
+  session.defaultSession.flushStorageData();
   setTimeout(() => {
     log.warn("Cleanup on quit timed out");
     exit();

@@ -1,7 +1,7 @@
 import { type AvatarProvider, avatarUrl, providersForRemotes } from "@shared/avatars";
 import type { RepoId } from "@shared/domain";
 import { memo, useMemo, useState } from "react";
-import { hueOf, initials } from "@/lib/format";
+import { hueOf, initials, nameAndEmail } from "@/lib/format";
 import { useRefs } from "@/lib/queries";
 import { useSettings } from "@/stores/settings";
 
@@ -61,7 +61,7 @@ export const Avatar = memo(function Avatar({ name, email, providers, size = 18 }
         backgroundColor: `oklch(0.55 0.12 ${hueOf(email || name)})`,
         fontSize: size * 0.42,
       }}
-      title={`${name} <${email}>`}
+      title={nameAndEmail(name, email)}
     >
       {(url === null || loaded !== url) && initials(name)}
       {showImage && (

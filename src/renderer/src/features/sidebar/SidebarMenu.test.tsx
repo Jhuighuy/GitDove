@@ -392,6 +392,22 @@ it("hides and shows whole sections", async () => {
   expect(mocks.setHidden.at(-1)).toEqual(["refs/remotes/", "refs/tags/"]);
   await menu(header("Remote"), "Show all");
   expect(mocks.setHidden.at(-1)).toEqual(["refs/tags/"]);
+  await menu(header("Stashes"), "Hide all");
+  expect(mocks.setHidden.at(-1)).toEqual(["refs/tags/", stashKey("stash-hash")]);
+  await menu(header("Stashes"), "Show all");
+  expect(mocks.setHidden.at(-1)).toEqual(["refs/tags/"]);
+  // Worktrees hide by their branches, without the checked-out one.
+  await menu(header("Worktrees"), "Hide all");
+  expect(mocks.setHidden.at(-1)).toEqual(["refs/tags/", "refs/heads/feature"]);
+  await menu(header("Worktrees"), "Show all");
+  expect(mocks.setHidden.at(-1)).toEqual(["refs/tags/"]);
+});
+
+it("does not offer to hide what a section does not have", async () => {
+  await render({ ...base, stashes: [] });
+  await fire(header("Stashes"), "contextmenu");
+  for (const label of ["Show all", "Hide all"])
+    expect(item(label).hasAttribute("data-disabled")).toBe(true);
 });
 
 it("shows and hides sidebar sections", async () => {

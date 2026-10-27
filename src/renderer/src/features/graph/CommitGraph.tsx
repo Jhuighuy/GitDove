@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Spinner } from "@/components/ui/spinner";
 import { api, isMac } from "@/lib/api";
-import { absoluteTime, listTime, shortHash } from "@/lib/format";
+import { absoluteTime, listTime, nameAndEmail, shortHash } from "@/lib/format";
 import {
   useGraphInfo,
   useGraphRows,
@@ -896,7 +896,12 @@ const CommitRow = memo(function CommitRow(p: CommitRowProps) {
       </div>
       <div className="flex w-(--col-author) shrink-0 items-center gap-1.5 overflow-hidden px-2">
         <Avatar name={row.authorName} email={row.authorEmail} providers={p.avatarProviders} />
-        <span className="text-muted-foreground truncate text-xs">{row.authorName}</span>
+        <span
+          className="text-muted-foreground truncate text-xs"
+          title={nameAndEmail(row.authorName, row.authorEmail)}
+        >
+          {row.authorName}
+        </span>
       </div>
       <div
         className="text-muted-foreground w-(--col-date) shrink-0 truncate px-2 text-xs tabular-nums"

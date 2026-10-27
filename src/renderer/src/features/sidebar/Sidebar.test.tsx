@@ -337,7 +337,7 @@ it("opens no menu where there is none, rather than the last one", async () => {
   expect(anyMenuItems()).toBe(0);
   // Every section header has a menu, which shows or hides the sections.
   await fire(sectionHeader("Stashes"), "contextmenu");
-  expect(menuItems()).toEqual([]);
+  expect(menuItems()).toEqual(["Show all", "Hide all"]);
   expect(
     [...document.querySelectorAll('[role="menuitemcheckbox"]')].map((e) => e.textContent?.trim()),
   ).toContain("Stashes");
@@ -400,21 +400,28 @@ it("works from the keyboard", async () => {
   await press("ArrowDown");
   expect(cursor()?.title).toBe("release/");
   expect(cursor()?.getAttribute("aria-expanded")).toBe("true");
+  // A folder has no commit to show.
+  expect(mocks.commands).toEqual([]);
   // Left collapses a folder, Right expands it.
   await press("ArrowLeft");
   expect(has("release/2023.0")).toBe(false);
   expect(cursor()?.getAttribute("aria-expanded")).toBe("false");
   await press("ArrowRight");
   expect(has("release/2023.0")).toBe(true);
-  // Enter reveals a branch, Space toggles its eye.
+  // Moving onto a branch reveals it, and so does Enter; Space toggles its eye.
   await press("ArrowDown");
   expect(cursor()?.title).toBe("release/2023.0");
-  await press("Enter");
   expect(mocks.commands).toEqual(["selectCommit"]);
+  await press("Enter");
+  expect(mocks.commands).toEqual(["selectCommit", "selectCommit"]);
   await press(" ");
   expect(mocks.setHidden.at(-1)).toEqual(["refs/heads/release/2023.0"]);
   await press("End");
   expect(cursor()?.title).toBe("user/my-branch");
+  expect(mocks.commands).toHaveLength(3);
+  // Staying on the last row reveals nothing again.
+  await press("ArrowDown");
+  expect(mocks.commands).toHaveLength(3);
   // The eyes are named, and out of the tab order.
   const eyeButton = row("user/my-branch").querySelector("button")!;
   expect(eyeButton.getAttribute("aria-label")).toBe("Hide from graph: user/my-branch");
