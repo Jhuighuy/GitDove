@@ -59,15 +59,21 @@ vi.mock("./avatars", () => avatars);
 const terminals = vi.hoisted(() => ({
   /** Programs that are "not installed". */
   missing: new Set<string>(),
+  /** Programs that are installed but cannot be started. */
+  denied: new Set<string>(),
   /** Programs that fail, with this error output (for those that are waited for). */
   failing: new Map<string, string>(),
   spawn: vi.fn((file: string, _args: unknown, options: { stdio?: unknown }) => {
     const stderr = new EventEmitter();
     const child = Object.assign(new EventEmitter(), { unref: terminals.unref, stderr });
-    const fail = terminals.missing.has(file);
+    const fail = terminals.missing.has(file)
+      ? "ENOENT"
+      : terminals.denied.has(file)
+        ? "EACCES"
+        : null;
     setImmediate(() => {
       if (fail) {
-        child.emit("error", Object.assign(new Error(`spawn ${file} ENOENT`), { code: "ENOENT" }));
+        child.emit("error", Object.assign(new Error(`spawn ${file} ${fail}`), { code: fail }));
         return;
       }
       child.emit("spawn");
@@ -219,6 +225,7 @@ beforeEach(() => {
   services.hidden.clear();
   services.owners.length = 0;
   terminals.missing.clear();
+  terminals.denied.clear();
   terminals.failing.clear();
   vi.stubEnv("TERMINAL", "");
 });
@@ -525,6 +532,16 @@ describe("shell handlers", () => {
       Exit.fail(
         new InvalidInputError({
           message: "No terminal emulator found. Choose the one to use in Settings.",
+        }),
+      ),
+    );
+    // One that is there but would not start is no missing terminal.
+    terminals.missing.delete("gnome-terminal");
+    terminals.denied.add("gnome-terminal");
+    expect(await callExit("shell.openTerminal", services.repo.id)).toEqual(
+      Exit.fail(
+        new InvalidInputError({
+          message: "Could not open a terminal: spawn gnome-terminal EACCES",
         }),
       ),
     );

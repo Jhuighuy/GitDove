@@ -312,19 +312,26 @@ const openTerminal = (repo: Repository) => {
     try: () => terminalLaunches(repo.location, chosen),
     catch: (e) => new InvalidInputError({ message: (e as Error).message }),
   }).pipe(
-    Effect.flatMap(({ name, launches }) =>
-      Effect.firstSuccessOf(launches.map(launch)).pipe(
-        Effect.mapError(
-          (e) =>
-            new InvalidInputError({
-              message:
-                chosen === "" && process.platform === "linux"
-                  ? "No terminal emulator found. Choose the one to use in Settings."
-                  : `Could not open ${name}: ${e.message}`,
-            }),
+    Effect.flatMap(({ name, launches }) => {
+      const errors: Error[] = [];
+      return Effect.firstSuccessOf(
+        launches.map((l) =>
+          launch(l).pipe(Effect.tapError((e) => Effect.sync(() => errors.push(e)))),
         ),
-      ),
-    ),
+      ).pipe(
+        Effect.mapError((last) => {
+          // One that is installed but would not start says more than those that are not.
+          const failed = errors.find((e) => (e as NodeJS.ErrnoException).code !== "ENOENT");
+          const tried = chosen === "" && process.platform === "linux";
+          return new InvalidInputError({
+            message:
+              tried && !failed
+                ? "No terminal emulator found. Choose the one to use in Settings."
+                : `Could not open ${tried ? "a terminal" : name}: ${(failed ?? last).message}`,
+          });
+        }),
+      );
+    }),
   );
 };
 

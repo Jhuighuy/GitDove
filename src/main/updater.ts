@@ -20,7 +20,8 @@ const CHECK_TIMEOUT = 60 * 1000;
 
 const set = (next: UpdaterStatus) => {
   // Checks go on while an update is ready (#49), and leave it on offer unless they find a newer
-  // version, which then downloads in its place.
+  // version, which then downloads in its place: electron-updater deletes the update it has as soon
+  // as it starts downloading another, so the older one cannot be installed any more.
   const newer =
     status.kind === "ready" && next.kind === "available" && next.version !== status.version;
   if (status.kind === "ready" && next.kind !== "ready" && !newer) {
